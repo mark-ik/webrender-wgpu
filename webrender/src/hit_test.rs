@@ -282,6 +282,7 @@ pub struct HitTester {
     #[ignore_malloc_size_of = "Arc"]
     scene: Arc<HitTestingScene>,
     spatial_nodes: FastHashMap<SpatialNodeIndex, HitTestSpatialNode>,
+    pipeline_root_nodes: FastHashMap<PipelineId, SpatialNodeIndex>,
 }
 
 impl HitTester {
@@ -289,6 +290,7 @@ impl HitTester {
         HitTester {
             scene: Arc::new(HitTestingScene::new(&HitTestingSceneStats::empty())),
             spatial_nodes: FastHashMap::default(),
+            pipeline_root_nodes: FastHashMap::default(),
         }
     }
 
@@ -299,6 +301,7 @@ impl HitTester {
         let mut hit_tester = HitTester {
             scene,
             spatial_nodes: FastHashMap::default(),
+            pipeline_root_nodes: FastHashMap::default(),
         };
         hit_tester.read_spatial_tree(spatial_tree);
         hit_tester
@@ -311,7 +314,13 @@ impl HitTester {
         self.spatial_nodes.clear();
         self.spatial_nodes.reserve(spatial_tree.spatial_node_count());
 
+        self.pipeline_root_nodes.clear();
+
         spatial_tree.visit_nodes(|index, node| {
+            // If we haven't already seen a node for this pipeline, record this one as the root
+            // node.
+            self.pipeline_root_nodes.entry(node.pipeline_id).or_insert(index);
+
             //TODO: avoid inverting more than necessary:
             //  - if the coordinate system is non-invertible, no need to try any of these concrete transforms
             //  - if there are other places where inversion is needed, let's not repeat the step
@@ -334,6 +343,8 @@ impl HitTester {
 
         let mut current_spatial_node_index = SpatialNodeIndex::INVALID;
         let mut point_in_layer = None;
+        let mut current_root_spatial_node_index = SpatialNodeIndex::INVALID;
+        let mut point_in_viewport = None;
 
         // For each hit test primitive
         for item in self.scene.items.iter().rev() {
@@ -394,11 +405,30 @@ impl HitTester {
                 continue;
             }
 
-            result.items.push(HitTestResultItem {
-                pipeline: pipeline_id,
-                tag: item.tag,
-                animation_id: item.animation_id,
-            });
+            // We need to calculate the position of the test point relative to the origin of
+            // the pipeline of the hit item. If we cannot get a transformed point, we are
+            // in a situation with an uninvertible transformation so we should just skip this
+            // result.
+            let root_spatial_node_index = self.pipeline_root_nodes[&pipeline_id];
+            if root_spatial_node_index != current_root_spatial_node_index {
+                let root_node = &self.spatial_nodes[&root_spatial_node_index];
+                point_in_viewport = root_node
+                    .world_viewport_transform
+                    .inverse()
+                    .and_then(|inverted| inverted.transform_point2d(test.point))
+                    .map(|pt| pt - scroll_node.external_scroll_offset);
+
+                current_root_spatial_node_index = root_spatial_node_index;
+            }
+
+            if let Some(point_in_viewport) = point_in_viewport {
+                result.items.push(HitTestResultItem {
+                    pipeline: pipeline_id,
+                    tag: item.tag,
+                    animation_id: item.animation_id,
+                    point_in_viewport,
+                });
+            }
         }
 
         result.items.dedup();
