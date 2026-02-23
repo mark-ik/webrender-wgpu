@@ -393,7 +393,7 @@ pub fn prepare_repeatable_quad(
         frame_state.current_dirty_region().visibility_spatial_node,
         prim_spatial_node_index,
         frame_context.spatial_tree,
-    );
+    ).intersection_unchecked(&clip_chain.local_clip_rect);
 
     let stride = stretch_size + tile_spacing;
     let repetitions = crate::image_tiling::repetitions(&local_rect, &visible_rect, stride);
@@ -809,9 +809,6 @@ fn prepare_nine_patch(
     // Render the primtive as a nine-patch decomposed in device space.
     // Nine-patch segments that need it are drawn in a render task and then composited into the
     // destination picture.
-    // The coordinates are provided to the shaders:
-    //  - in layout space for the render task,
-    //  - in device space for the instances that draw into the destination picture.
 
     let mut device_prim_rect: DeviceRect = local_to_device.map_rect(&local_rect);
     let mut device_clip_rect: DeviceRect = local_to_device
@@ -820,7 +817,9 @@ fn prepare_nine_patch(
 
     let rounded_edges = !aa_flags;
     device_prim_rect = rounded_edges.select(device_prim_rect.round(), device_prim_rect);
-    device_clip_rect = rounded_edges.select(device_clip_rect.round(), device_clip_rect);
+    device_clip_rect = rounded_edges
+        .select(device_clip_rect.round(), device_clip_rect)
+        .intersection_unchecked(&device_prim_rect);
     let clipped_surface_rect = rounded_edges
         .select(device_clip_rect, *clipped_surface_rect)
         .to_i32();
