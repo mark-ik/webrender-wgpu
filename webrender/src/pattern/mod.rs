@@ -95,19 +95,6 @@ pub trait PatternBuilder {
         ctx: &PatternBuilderContext,
         state: &mut PatternBuilderState,
     ) -> Pattern;
-
-    fn get_base_color(
-        &self,
-        _ctx: &PatternBuilderContext,
-    ) -> ColorF;
-
-    fn use_shared_pattern(
-        &self,
-    ) -> bool;
-
-    fn can_use_nine_patch(&self) -> bool {
-        true
-    }
 }
 
 #[cfg_attr(feature = "capture", derive(Serialize))]

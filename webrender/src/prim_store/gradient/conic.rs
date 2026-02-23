@@ -9,7 +9,7 @@
 //! Conic gradients are rendered via cached render tasks and composited with the image brush.
 
 use euclid::vec2;
-use api::{ColorF, ExtendMode, GradientStop, PremultipliedColorF};
+use api::{ExtendMode, GradientStop, PremultipliedColorF};
 use api::units::*;
 use crate::gpu_types::ImageBrushPrimitiveData;
 use crate::pattern::gradient::{conic_gradient_pattern};
@@ -130,19 +130,6 @@ impl PatternBuilder for ConicGradientTemplate {
             &self.stops,
             state.frame_gpu_data,
         )
-    }
-
-    fn get_base_color(
-        &self,
-        _ctx: &PatternBuilderContext,
-    ) -> ColorF {
-        ColorF::WHITE
-    }
-
-    fn use_shared_pattern(
-        &self,
-    ) -> bool {
-        true
     }
 }
 

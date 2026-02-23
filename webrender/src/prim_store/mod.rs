@@ -581,23 +581,6 @@ impl PatternBuilder for PrimitiveTemplate {
             }
         }
     }
-
-    fn get_base_color(
-        &self,
-        ctx: &PatternBuilderContext,
-    ) -> ColorF {
-        match self.kind {
-            PrimitiveTemplateKind::Rectangle { ref color, .. } => {
-                ctx.scene_properties.resolve_color(color)
-            }
-        }
-    }
-
-    fn use_shared_pattern(
-        &self,
-    ) -> bool {
-        true
-    }
 }
 
 impl ops::Deref for PrimitiveTemplate {
