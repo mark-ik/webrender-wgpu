@@ -105,7 +105,22 @@ vec4 pattern_fragment(vec4 color) {
 }
 
 #if defined(SWGL_DRAW_SPAN)
-// TODO!
+void swgl_drawSpanRGBA8() {
+    if (!swgl_isTextureRGBA8(sColor0)) {
+        return;
+    }
+
+    if (v_spacing_threshold.x < 1.0 || v_spacing_threshold.y < 1.0) {
+        // TODO: SWGL's repeating span shaders don't support spacing.
+        return;
+    }
+
+    if (v_color != vec4(1.0)) {
+        swgl_commitTextureRepeatColorRGBA8(sColor0, v_uv, v_repetitions, v_uv_bounds, v_uv_sample_bounds, v_color);
+    } else {
+        swgl_commitTextureRepeatRGBA8(sColor0, v_uv, v_repetitions, v_uv_bounds, v_uv_sample_bounds);
+    }
+}
 #endif
 
 #endif
