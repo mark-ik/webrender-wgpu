@@ -105,7 +105,7 @@ use crate::gpu_types::{BoxShadowStretchMode};
 use crate::intern;
 use crate::internal_types::{FastHashMap, FastHashSet, LayoutPrimitiveInfo};
 use crate::prim_store::{VisibleMaskImageTile};
-use crate::prim_store::{PointKey, SizeKey, RectangleKey, PolygonKey};
+use crate::prim_store::{PointKey, SizeKey, RectKey, PolygonKey};
 use crate::render_task_cache::to_cache_size;
 use crate::render_task::RenderTask;
 use crate::render_task_graph::RenderTaskGraphBuilder;
@@ -1695,10 +1695,10 @@ impl Default for ClipStore {
 #[cfg_attr(feature = "capture", derive(Serialize))]
 #[cfg_attr(feature = "replay", derive(Deserialize))]
 pub enum ClipItemKeyKind {
-    Rectangle(RectangleKey, ClipMode),
-    RoundedRectangle(RectangleKey, BorderRadiusAu, ClipMode),
-    ImageMask(RectangleKey, ImageKey, Option<PolygonDataHandle>),
-    BoxShadow(PointKey, SizeKey, BorderRadiusAu, RectangleKey, Au, BoxShadowClipMode),
+    Rectangle(RectKey, ClipMode),
+    RoundedRectangle(RectKey, BorderRadiusAu, ClipMode),
+    ImageMask(RectKey, ImageKey, Option<PolygonDataHandle>),
+    BoxShadow(PointKey, SizeKey, BorderRadiusAu, RectKey, Au, BoxShadowClipMode),
 }
 
 impl ClipItemKeyKind {

@@ -43,7 +43,7 @@ use api::{IframeDisplayItem, ImageKey, ImageRendering, ItemRange, ColorDepth, Qu
 use api::{LineOrientation, LineStyle, NinePatchBorderSource, PipelineId, MixBlendMode, StackingContextFlags};
 use api::{PropertyBinding, ReferenceFrameKind, ScrollFrameDescriptor};
 use api::{APZScrollGeneration, HasScrollLinkedEffect, Shadow, SpatialId, StickyFrameDescriptor, ImageMask, ItemTag};
-use api::{ClipMode, PrimitiveKeyKind, TransformStyle, YuvColorSpace, ColorRange, YuvData, TempFilterData};
+use api::{ClipMode, TransformStyle, YuvColorSpace, ColorRange, YuvData, TempFilterData};
 use api::{ReferenceTransformBinding, Rotation, FillRule, SpatialTreeItem, ReferenceFrameDescriptor};
 use api::{FilterOpGraphPictureBufferId, SVGFE_GRAPH_MAX};
 use api::channel::{unbounded_channel, Receiver, Sender};
@@ -69,6 +69,7 @@ use crate::prim_store::{PrimitiveInstance, PrimitiveStoreStats};
 use crate::prim_store::{PrimitiveInstanceKind, NinePatchDescriptor, PrimitiveStore};
 use crate::prim_store::{InternablePrimitive, PictureIndex};
 use crate::prim_store::PolygonKey;
+use crate::prim_store::rectangle::RectanglePrim;
 use crate::prim_store::backdrop::{BackdropCapture, BackdropRender};
 use crate::prim_store::borders::{ImageBorder, NormalBorderPrim};
 use crate::prim_store::gradient::{
@@ -1569,7 +1570,7 @@ impl<'a> SceneBuilder<'a> {
                     clip_node_id,
                     &layout,
                     Vec::new(),
-                    PrimitiveKeyKind::Rectangle {
+                    RectanglePrim {
                         color: info.color.into(),
                     },
                 );
@@ -1768,7 +1769,7 @@ impl<'a> SceneBuilder<'a> {
                                 .. layout
                             },
                             Vec::new(),
-                            PrimitiveKeyKind::Rectangle { color: PropertyBinding::Value(color) },
+                            RectanglePrim { color: PropertyBinding::Value(color) },
                         );
                     }
                 );
@@ -4703,7 +4704,7 @@ pub enum ShadowItem {
     Image(PendingPrimitive<Image>),
     LineDecoration(PendingPrimitive<LineDecoration>),
     NormalBorder(PendingPrimitive<NormalBorderPrim>),
-    Primitive(PendingPrimitive<PrimitiveKeyKind>),
+    Primitive(PendingPrimitive<RectanglePrim>),
     TextRun(PendingPrimitive<TextRun>),
 }
 
@@ -4725,8 +4726,8 @@ impl From<PendingPrimitive<NormalBorderPrim>> for ShadowItem {
     }
 }
 
-impl From<PendingPrimitive<PrimitiveKeyKind>> for ShadowItem {
-    fn from(container: PendingPrimitive<PrimitiveKeyKind>) -> Self {
+impl From<PendingPrimitive<RectanglePrim>> for ShadowItem {
+    fn from(container: PendingPrimitive<RectanglePrim>) -> Self {
         ShadowItem::Primitive(container)
     }
 }

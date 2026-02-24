@@ -618,10 +618,7 @@ fn prepare_interned_prim_for_render(
                     &mut scratch.segments,
                     &mut scratch.segment_instances,
                     |request| {
-                        prim_data.kind.write_prim_gpu_blocks(
-                            request,
-                            frame_context.scene_properties,
-                        );
+                        request.push_one(frame_context.scene_properties.resolve_color(&prim_data.kind.color).premultiplied());
                     }
                 );
             } else {
