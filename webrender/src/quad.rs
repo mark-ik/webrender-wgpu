@@ -18,7 +18,7 @@ use crate::gpu_types::{PrimitiveInstanceData, QuadHeader, QuadInstance, QuadPrim
 use crate::intern::DataStore;
 use crate::internal_types::TextureSource;
 use crate::pattern::{Pattern, PatternBuilder, PatternBuilderContext, PatternBuilderState, PatternKind, PatternShaderInput};
-use crate::prim_store::{PrimitiveInstanceIndex, PrimitiveScratchBuffer};
+use crate::prim_store::{NinePatchDescriptor, PrimitiveInstanceIndex, PrimitiveScratchBuffer};
 use crate::render_task::{RenderTask, RenderTaskAddress, RenderTaskKind};
 use crate::render_task_cache::{RenderTaskCacheKey, RenderTaskCacheKeyKind, RenderTaskParent};
 use crate::render_task_graph::{RenderTaskGraph, RenderTaskGraphBuilder, RenderTaskId, SubTaskRange};
@@ -393,6 +393,147 @@ pub fn prepare_repeatable_quad(
             scratch,
         );
     }
+}
+
+pub fn prepare_border_image_nine_patch(
+    nine_patch: &NinePatchDescriptor,
+    pattern_builder: &dyn PatternBuilder,
+    local_rect: &LayoutRect,
+    stretch_size: LayoutSize,
+    aligned_aa_edges: EdgeMask,
+    transfomed_aa_edges: EdgeMask,
+    prim_instance_index: PrimitiveInstanceIndex,
+    prim_spatial_node_index: SpatialNodeIndex,
+    clip_chain: &ClipChainInstance,
+    device_pixel_scale: DevicePixelScale,
+
+    frame_context: &FrameBuildingContext,
+    pic_context: &PictureContext,
+    targets: &[CommandBufferIndex],
+    interned_clips: &DataStore<ClipIntern>,
+
+    frame_state: &mut FrameBuildingState,
+    scratch: &mut PrimitiveScratchBuffer,
+) {
+    let pattern_ctx = PatternBuilderContext {
+        scene_properties: frame_context.scene_properties,
+        spatial_tree: frame_context.spatial_tree,
+        fb_config: frame_context.fb_config,
+    };
+
+    let pattern = pattern_builder.build(
+        None,
+        LayoutVector2D::zero(),
+        &pattern_ctx,
+        &mut PatternBuilderState {
+            frame_gpu_data: frame_state.frame_gpu_data,
+            transforms: frame_state.transforms,
+        },
+    );
+
+    // TODO: It would be worth hoisting this out of prepare_quad and
+    // prepare_repeatable_quad.
+    let map_prim_to_raster = pattern_ctx.spatial_tree.get_relative_transform(
+        prim_spatial_node_index,
+        pic_context.raster_spatial_node_index,
+    );
+
+    let prim_is_scale_offset = map_prim_to_raster.is_2d_scale_translation();
+
+    let strategy = get_prim_render_strategy(
+        prim_spatial_node_index,
+        clip_chain,
+        frame_state.clip_store,
+        interned_clips,
+        prim_is_scale_offset,
+        pattern_ctx.spatial_tree,
+    );
+
+    // The indirect transform drives the resolution at which each segment is going
+    // going to be rasterized in intermediate render tasks.
+    let scales = map_prim_to_raster.scale_factors();
+    let base_indirect_transform = ScaleOffset::from_scale(scales.into()).then_scale(device_pixel_scale.0);
+
+    nine_patch.for_each_segment(local_rect, &mut|dst_rect, src_rect, side, _repeat_h, _repeat_v| {
+        // First find the sub-rect of the source pattern that this segment is using.
+        let min_x = local_rect.min.x + stretch_size.width * src_rect.uv0.x;
+        let min_y = local_rect.min.y + stretch_size.height * src_rect.uv0.y;
+        let max_x = local_rect.min.x + stretch_size.width * src_rect.uv1.x;
+        let max_y = local_rect.min.y + stretch_size.height * src_rect.uv1.y;
+        let pattern_rect = LayoutRect {
+            min: point2(min_x, min_y),
+            max: point2(max_x, max_y),
+        };
+
+        // Rasterize the source pattern into a render task.
+
+        // We could get away without the intermediate task in some cases, for example
+        // if the segment does not repeat the pattern. However this is fiddly due to
+        // how the nine-patch's source slicing distorts the local space of the pattern.
+        // Always using an intermediate render task lets us easily handle the additional
+        // stretching effect on the image instead of introducing an additional transform
+        // for the pattern's coordinate space. On the other hand it means that we have
+        // to handle large source patterns and potentially down-scale them.
+
+        // Down-scale until the pattern's fits into 2048 pixels on each axis.
+        let mut indirect_transform = base_indirect_transform;
+        let mut w = stretch_size.width * indirect_transform.scale.x;
+        let mut h = stretch_size.height * indirect_transform.scale.y;
+        while w > 2048.0 {
+            indirect_transform.scale.x *= 0.5;
+            w *= 0.5;
+        }
+        while h > 2048.0 {
+            indirect_transform.scale.y *= 0.5;
+            h *= 0.5;
+        }
+
+        let surface_rect = indirect_transform.map_rect(&pattern_rect);
+        let Some(task_id) = prepare_indirect_pattern(
+            prim_spatial_node_index,
+            pic_context.raster_spatial_node_index,
+            &pattern_rect,
+            &pattern_rect,
+            &surface_rect,
+            Some(&indirect_transform),
+            DevicePixelScale::identity(),
+            GpuTransformId::IDENTITY,
+            &pattern,
+            QuadFlags::empty(),
+            EdgeMask::empty(),
+            &None,
+            None,
+            &pattern_ctx,
+            interned_clips,
+            frame_state,
+        ) else {
+            return;
+        };
+
+        let img_pattern = Pattern::texture(task_id, pattern.is_opaque);
+
+        prepare_quad_impl(
+            strategy,
+            &img_pattern,
+            &dst_rect,
+            aligned_aa_edges & side,
+            transfomed_aa_edges & side,
+            prim_instance_index,
+            &None,
+            prim_spatial_node_index,
+            clip_chain,
+            device_pixel_scale,
+
+            &map_prim_to_raster,
+            &pattern_ctx,
+            pic_context,
+            targets,
+            interned_clips,
+
+            frame_state,
+            scratch,
+        )
+    });
 }
 
 fn prepare_quad_impl(

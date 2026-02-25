@@ -117,4 +117,14 @@ impl Pattern {
             is_opaque: color.a >= 1.0,
         }
     }
+
+    pub fn texture(src_task: RenderTaskId, is_opaque: bool) -> Self {
+        Pattern {
+            kind: PatternKind::ColorOrTexture,
+            shader_input: PatternShaderInput::default(),
+            texture_input: PatternTextureInput::new(src_task),
+            base_color: ColorF::WHITE,
+            is_opaque,
+        }
+    }
 }

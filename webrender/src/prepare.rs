@@ -241,22 +241,13 @@ fn prepare_prim_for_render(
     let prim_instance = &mut prim_instances[prim_instance_index];
 
     if !is_passthrough {
-        // Bug 1888349: Some primitives have brush segments that aren't handled by
-        // the quad infrastructure yet.
         let disable_quad_path = match &prim_instance.kind {
-            PrimitiveInstanceKind::Rectangle { .. } => false,
-            PrimitiveInstanceKind::LinearGradient { data_handle, .. } => {
-                let prim_data = &data_stores.linear_grad[*data_handle];
-                !prim_data.brush_segments.is_empty()
-                    || !frame_context.fb_config.precise_linear_gradients
-            }
-            PrimitiveInstanceKind::RadialGradient { data_handle, .. } => {
-                let prim_data = &data_stores.radial_grad[*data_handle];
-                !prim_data.brush_segments.is_empty()
-            }
-            PrimitiveInstanceKind::ConicGradient { data_handle, .. } => {
-                let prim_data = &data_stores.conic_grad[*data_handle];
-                !prim_data.brush_segments.is_empty()
+            PrimitiveInstanceKind::Rectangle { .. }
+            | PrimitiveInstanceKind::RadialGradient { .. }
+            | PrimitiveInstanceKind::ConicGradient { .. }
+            => false,
+            PrimitiveInstanceKind::LinearGradient { .. } => {
+                !frame_context.fb_config.precise_linear_gradients
             }
             _ => true,
         };
@@ -704,6 +695,28 @@ fn prepare_interned_prim_for_render(
             profile_scope!("LinearGradient");
             let prim_data = &mut data_stores.linear_grad[*data_handle];
             if !*use_legacy_path {
+                if let Some(nine_patch) = &prim_data.border_nine_patch {
+                    quad::prepare_border_image_nine_patch(
+                        &*nine_patch,
+                        prim_data,
+                        &prim_data.common.prim_rect,
+                        prim_data.stretch_size,
+                        prim_data.common.aligned_aa_edges,
+                        prim_data.common.transformed_aa_edges,
+                        prim_instance_index,
+                        prim_spatial_node_index,
+                        &prim_instance.vis.clip_chain,
+                        device_pixel_scale,
+                        frame_context,
+                        pic_context,
+                        targets,
+                        &data_stores.clip,
+                        frame_state,
+                        scratch,
+                    );
+                    return;
+                }
+
                 // For SWGL, evaluating the gradient is faster than reading from the texture cache.
                 let mut should_cache = !frame_context.fb_config.is_software
                     && frame_state.resource_cache.texture_cache.allocated_color_bytes() < 10_000_000;
@@ -848,6 +861,28 @@ fn prepare_interned_prim_for_render(
             let prim_data = &mut data_stores.radial_grad[*data_handle];
 
             if !*use_legacy_path {
+                if let Some(nine_patch) = &prim_data.border_nine_patch {
+                    quad::prepare_border_image_nine_patch(
+                        &*nine_patch,
+                        prim_data,
+                        &prim_data.common.prim_rect,
+                        prim_data.stretch_size,
+                        prim_data.common.aligned_aa_edges,
+                        prim_data.common.transformed_aa_edges,
+                        prim_instance_index,
+                        prim_spatial_node_index,
+                        &prim_instance.vis.clip_chain,
+                        device_pixel_scale,
+                        frame_context,
+                        pic_context,
+                        targets,
+                        &data_stores.clip,
+                        frame_state,
+                        scratch,
+                    );
+                    return;
+                }
+
                 quad::prepare_repeatable_quad(
                     prim_data,
                     &prim_data.common.prim_rect,
@@ -903,6 +938,28 @@ fn prepare_interned_prim_for_render(
             let prim_data = &mut data_stores.conic_grad[*data_handle];
 
             if !*use_legacy_path {
+                if let Some(nine_patch) = &prim_data.border_nine_patch {
+                    quad::prepare_border_image_nine_patch(
+                        &*nine_patch,
+                        prim_data,
+                        &prim_data.common.prim_rect,
+                        prim_data.stretch_size,
+                        prim_data.common.aligned_aa_edges,
+                        prim_data.common.transformed_aa_edges,
+                        prim_instance_index,
+                        prim_spatial_node_index,
+                        &prim_instance.vis.clip_chain,
+                        device_pixel_scale,
+                        frame_context,
+                        pic_context,
+                        targets,
+                        &data_stores.clip,
+                        frame_state,
+                        scratch,
+                    );
+                    return;
+                }
+
                 // Conic gradients are quite slow with SWGL, so we want to cache
                 // them as much as we can, even large ones.
                 // TODO: get_surface_rect is not always cheap. We should reorganize
