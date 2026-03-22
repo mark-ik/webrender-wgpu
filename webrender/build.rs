@@ -312,6 +312,16 @@ fn write_optimized_shader_file(
 }
 
 fn main() -> Result<(), std::io::Error> {
+    // Enforce that exactly one rendering backend is selected.
+    let gl_backend = std::env::var("CARGO_FEATURE_GL_BACKEND").is_ok();
+    let wgpu_backend = std::env::var("CARGO_FEATURE_WGPU_BACKEND").is_ok();
+    if gl_backend && wgpu_backend {
+        panic!("gl_backend and wgpu_backend are mutually exclusive; enable exactly one");
+    }
+    if !gl_backend && !wgpu_backend {
+        panic!("exactly one of gl_backend or wgpu_backend must be enabled");
+    }
+
     let out_dir = env::var("OUT_DIR").unwrap_or("out".to_owned());
 
     let shaders_file_path = Path::new(&out_dir).join("shaders.rs");
@@ -345,9 +355,16 @@ fn main() -> Result<(), std::io::Error> {
     writeln!(shader_file, "}}\n")?;
     writeln!(shader_file, "lazy_static! {{")?;
 
-    write_unoptimized_shaders(glsl_files, &mut shader_file)?;
-    writeln!(shader_file, "")?;
-    write_optimized_shaders(&res_dir, &mut shader_file, &out_dir)?;
+    if gl_backend {
+        write_unoptimized_shaders(glsl_files, &mut shader_file)?;
+        writeln!(shader_file, "")?;
+        write_optimized_shaders(&res_dir, &mut shader_file, &out_dir)?;
+    } else {
+        // wgpu_backend: emit empty maps so shader_source still compiles.
+        // WGSL shader generation will be added here in Stage 3.
+        writeln!(shader_file, "  pub static ref UNOPTIMIZED_SHADERS: HashMap<&'static str, SourceWithDigest> = HashMap::new();")?;
+        writeln!(shader_file, "  pub static ref OPTIMIZED_SHADERS: HashMap<(ShaderVersion, &'static str), OptimizedSourceWithDigest> = HashMap::new();")?;
+    }
     writeln!(shader_file, "}}")?;
 
     Ok(())

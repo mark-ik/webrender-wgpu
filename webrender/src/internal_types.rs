@@ -6,15 +6,23 @@ use api::{ColorF, DocumentId, ExternalImageId, PrimitiveFlags, Parameter, Render
 use api::{ImageFormat, NotificationRequest, Shadow, FilterOpGraphPictureBufferId, FilterOpGraphPictureReference, FilterOpGraphNode, FilterOp, ImageBufferKind};
 use api::FramePublishId;
 use api::units::*;
-use crate::render_api::DebugCommand;
-use crate::composite::NativeSurfaceOperation;
 use crate::device::TextureFilter;
+#[cfg(feature = "gl_backend")]
+use crate::render_api::DebugCommand;
+#[cfg(feature = "gl_backend")]
+use crate::composite::NativeSurfaceOperation;
+#[cfg(feature = "gl_backend")]
 use crate::renderer::{FullFrameStats, PipelineInfo};
+#[cfg(feature = "gl_backend")]
 use crate::gpu_cache::GpuCacheUpdateList;
+#[cfg(feature = "gl_backend")]
 use crate::frame_builder::Frame;
 use crate::profiler::TransactionProfile;
+#[cfg(feature = "gl_backend")]
 use crate::spatial_tree::SpatialNodeIndex;
+#[cfg(feature = "gl_backend")]
 use crate::prim_store::PrimitiveInstanceIndex;
+#[cfg(feature = "gl_backend")]
 use crate::filterdata::FilterDataHandle;
 use fxhash::FxHasher;
 use plane_split::BspSplitter;
@@ -176,6 +184,7 @@ impl FrameStamp {
 }
 
 /// Custom field embedded inside the Polygon struct of the plane-split crate.
+#[cfg(feature = "gl_backend")]
 #[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "capture", derive(Serialize))]
 pub struct PlaneSplitAnchor {
@@ -183,6 +192,7 @@ pub struct PlaneSplitAnchor {
     pub instance_index: PrimitiveInstanceIndex,
 }
 
+#[cfg(feature = "gl_backend")]
 impl PlaneSplitAnchor {
     pub fn new(
         spatial_node_index: SpatialNodeIndex,
@@ -195,6 +205,7 @@ impl PlaneSplitAnchor {
     }
 }
 
+#[cfg(feature = "gl_backend")]
 impl Default for PlaneSplitAnchor {
     fn default() -> Self {
         PlaneSplitAnchor {
@@ -205,6 +216,7 @@ impl Default for PlaneSplitAnchor {
 }
 
 /// A concrete plane splitter type used in WebRender.
+#[cfg(feature = "gl_backend")]
 pub type PlaneSplitter = BspSplitter<PlaneSplitAnchor>;
 
 /// An index into the scene's list of plane splitters
@@ -410,6 +422,7 @@ pub enum FilterGraphOp {
     /// replaced by an interned handle, this is made in wrap_prim_with_filters.
     /// Aside from the interned handle, creates_pixels indicates if the transfer
     /// parameters will probably fill the entire subregion with non-zero alpha.
+    #[cfg(feature = "gl_backend")]
     SVGFEComponentTransferInterned{handle: FilterDataHandle, creates_pixels: bool},
     /// composite 2 images with chosen composite mode with parameters for that
     /// mode
@@ -683,6 +696,7 @@ impl FilterGraphOp {
             FilterGraphOp::SVGFEBlendSoftLight => "SVGFEBlendSoftLight",
             FilterGraphOp::SVGFEColorMatrix{..} => "SVGFEColorMatrix",
             FilterGraphOp::SVGFEComponentTransfer => "SVGFEComponentTransfer",
+            #[cfg(feature = "gl_backend")]
             FilterGraphOp::SVGFEComponentTransferInterned{..} => "SVGFEComponentTransferInterned",
             FilterGraphOp::SVGFECompositeArithmetic{..} => "SVGFECompositeArithmetic",
             FilterGraphOp::SVGFECompositeATop => "SVGFECompositeATop",
@@ -1078,12 +1092,7 @@ impl TextureSource {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "capture", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
-pub struct RenderTargetInfo {
-    pub has_depth: bool,
-}
+pub use crate::device::RenderTargetInfo;
 
 #[derive(Debug)]
 pub enum TextureUpdateSource {
@@ -1319,6 +1328,7 @@ impl TextureUpdateList {
 
 /// A list of updates built by the render backend that should be applied
 /// by the renderer thread.
+#[cfg(feature = "gl_backend")]
 pub struct ResourceUpdateList {
     /// List of OS native surface create / destroy operations to apply.
     pub native_surface_updates: Vec<NativeSurfaceOperation>,
@@ -1327,6 +1337,7 @@ pub struct ResourceUpdateList {
     pub texture_updates: TextureUpdateList,
 }
 
+#[cfg(feature = "gl_backend")]
 impl ResourceUpdateList {
     /// Returns true if this update list has no effect.
     pub fn is_nop(&self) -> bool {
@@ -1335,6 +1346,7 @@ impl ResourceUpdateList {
 }
 
 /// Wraps a frame_builder::Frame, but conceptually could hold more information
+#[cfg(feature = "gl_backend")]
 pub struct RenderedDocument {
     pub frame: Frame,
     pub profile: TransactionProfile,
@@ -1342,6 +1354,7 @@ pub struct RenderedDocument {
     pub frame_stats: Option<FullFrameStats>
 }
 
+#[cfg(feature = "gl_backend")]
 pub enum DebugOutput {
     #[cfg(feature = "capture")]
     SaveCapture(CaptureConfig, Vec<ExternalCaptureImage>),
@@ -1349,6 +1362,7 @@ pub enum DebugOutput {
     LoadCapture(CaptureConfig, Vec<PlainExternalImage>),
 }
 
+#[cfg(feature = "gl_backend")]
 #[allow(dead_code)]
 pub enum ResultMsg {
     DebugCommand(DebugCommand),
