@@ -22,7 +22,6 @@ use crate::gpu_types::PrimitiveInstanceData;
 use crate::internal_types::{FastHashMap, FastHashSet, FrameId};
 use crate::picture;
 use crate::profiler::{self, Profiler, TransactionProfile};
-use crate::device::query::GpuProfiler;
 use crate::render_backend::RenderBackend;
 use crate::resource_cache::ResourceCache;
 use crate::scene_builder_thread::{SceneBuilderThread, SceneBuilderThreadChannels, LowPrioritySceneBuilderThread};
@@ -772,7 +771,7 @@ fn create_webrender_instance_with_device(
 
     info!("using {:?}", debug_method);
 
-    let gpu_profiler = GpuProfiler::new(Rc::clone(device.rc_gl()), debug_method);
+    let gpu_profiler = device.create_gpu_profiler(debug_method);
     #[cfg(feature = "capture")]
     let read_fbo = device.create_fbo();
 

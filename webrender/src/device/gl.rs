@@ -9,7 +9,7 @@ use api::{CrashAnnotator, CrashAnnotation, CrashAnnotatorGuard};
 use api::units::*;
 use euclid::default::Transform3D;
 use gleam::gl;
-use crate::device::query::GpuDebugMethod;
+use crate::device::query::{GpuDebugMethod, GpuProfiler};
 use crate::render_api::MemoryReport;
 use crate::internal_types::{FastHashMap, RenderTargetInfo, Swizzle, SwizzleSettings};
 use crate::util::round_up_to_multiple;
@@ -1973,10 +1973,6 @@ impl Device {
         &*self.gl
     }
 
-    pub fn rc_gl(&self) -> &Rc<dyn gl::Gl> {
-        &self.gl
-    }
-
     pub fn gl_type(&self) -> gl::GlType {
         self.capabilities.gl_type
     }
@@ -2051,6 +2047,10 @@ impl Device {
             warn!("asking to enable_gpu_markers but no supporting extension was found");
             GpuDebugMethod::None
         }
+    }
+
+    pub fn create_gpu_profiler(&self, debug_method: GpuDebugMethod) -> GpuProfiler {
+        GpuProfiler::new(Rc::clone(&self.gl), debug_method)
     }
 
     pub fn start_tiling_qcom(&self, rect: DeviceIntRect, preserve_mask: gl::GLuint) {
