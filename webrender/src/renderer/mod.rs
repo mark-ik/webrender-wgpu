@@ -47,6 +47,7 @@ use api::units::*;
 use api::channel::{Sender, Receiver};
 pub use api::DebugFlags;
 use core::time::Duration;
+use std::path::Path;
 
 use crate::pattern::PatternKind;
 use crate::render_api::{DebugCommand, ApiMsg, MemoryReport};
@@ -533,6 +534,55 @@ fn create_dummy_cache_texture<D: GpuDevice<Texture = Texture>>(device: &mut D) -
     );
     device.upload_texture_immediate(&dummy_cache_texture, &[0xff, 0xff, 0xff, 0xff]);
     dummy_cache_texture
+}
+
+fn create_gpu_buffer_texture<T: Texel>(
+    device: &mut Device,
+    buffer: &GpuBuffer<T>,
+) -> Option<Texture> {
+    if buffer.is_empty() {
+        None
+    } else {
+        let gpu_buffer_texture = device.create_texture(
+            ImageBufferKind::Texture2D,
+            buffer.format,
+            buffer.size.width,
+            buffer.size.height,
+            TextureFilter::Nearest,
+            None,
+        );
+        device.upload_texture_immediate(&gpu_buffer_texture, &buffer.data);
+        Some(gpu_buffer_texture)
+    }
+}
+
+fn load_capture_texture<D: GpuDevice<Texture = Texture>>(
+    device: &mut D,
+    root: &Path,
+    plain: &PlainTexture,
+    target: ImageBufferKind,
+    rt_info: Option<RenderTargetInfo>,
+) -> (Texture, Vec<u8>) {
+    use std::fs::File;
+    use std::io::Read;
+
+    let mut texels = Vec::new();
+    File::open(root.join(&plain.data))
+        .expect(&format!("Unable to open texture at {}", plain.data))
+        .read_to_end(&mut texels)
+        .unwrap();
+
+    let texture = device.create_texture(
+        target,
+        plain.format,
+        plain.size.width,
+        plain.size.height,
+        plain.filter,
+        rt_info,
+    );
+    device.upload_texture_immediate(&texture, &texels);
+
+    (texture, texels)
 }
 
 impl TextureResolver {
@@ -5179,31 +5229,15 @@ impl Renderer {
         buffer: &GpuBuffer<T>,
         sampler: TextureSampler,
     ) -> Option<Texture> {
-        if buffer.is_empty() {
-            None
-        } else {
-            let gpu_buffer_texture = self.device.create_texture(
-                ImageBufferKind::Texture2D,
-                buffer.format,
-                buffer.size.width,
-                buffer.size.height,
-                TextureFilter::Nearest,
-                None,
-            );
-
+        create_gpu_buffer_texture(&mut self.device, buffer).map(|gpu_buffer_texture| {
             self.device.bind_texture(
                 sampler,
                 &gpu_buffer_texture,
                 Swizzle::default(),
             );
 
-            self.device.upload_texture_immediate(
-                &gpu_buffer_texture,
-                &buffer.data,
-            );
-
-            Some(gpu_buffer_texture)
-        }
+            gpu_buffer_texture
+        })
     }
 
     fn draw_frame(
@@ -6329,28 +6363,8 @@ impl Renderer {
         rt_info: Option<RenderTargetInfo>,
         root: &PathBuf,
         device: &mut Device
-    ) -> (Texture, Vec<u8>)
-    {
-        use std::fs::File;
-        use std::io::Read;
-
-        let mut texels = Vec::new();
-        File::open(root.join(&plain.data))
-            .expect(&format!("Unable to open texture at {}", plain.data))
-            .read_to_end(&mut texels)
-            .unwrap();
-
-        let texture = device.create_texture(
-            target,
-            plain.format,
-            plain.size.width,
-            plain.size.height,
-            plain.filter,
-            rt_info,
-        );
-        device.upload_texture_immediate(&texture, &texels);
-
-        (texture, texels)
+    ) -> (Texture, Vec<u8>) {
+        load_capture_texture(device, root, plain, target, rt_info)
     }
 
     #[cfg(feature = "capture")]
