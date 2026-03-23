@@ -361,6 +361,125 @@ impl WgpuDevice {
         drop(mapped);
         staging.unmap();
     }
+
+    pub fn pipeline_count(&self) -> usize {
+        self.pipelines.len()
+    }
+
+    pub fn render_debug_color_quad(&self, target: &WgpuTexture, color: [u8; 4]) {
+        let target_view = target
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        let projection = ortho(target.width as f32, target.height as f32);
+        let mut transform_data = Vec::with_capacity(64);
+        for f in &projection {
+            transform_data.extend_from_slice(&f.to_le_bytes());
+        }
+        let transform_buf = self.create_uniform_buffer("debug_color transform", &transform_data);
+
+        let mut tex_size_data = Vec::with_capacity(8);
+        tex_size_data.extend_from_slice(&(target.width as f32).to_le_bytes());
+        tex_size_data.extend_from_slice(&(target.height as f32).to_le_bytes());
+        let tex_size_buf = self.create_uniform_buffer("debug_color texture size", &tex_size_data);
+        let mali_buf =
+            self.create_uniform_buffer("debug_color mali workaround", &0u32.to_le_bytes());
+        let (bg0, bg1) = self.create_bind_groups(&transform_buf, &tex_size_buf, &mali_buf);
+
+        #[repr(C)]
+        #[derive(Copy, Clone)]
+        struct Vert {
+            pos: [f32; 2],
+            color: [u8; 4],
+        }
+
+        let verts = [
+            Vert {
+                pos: [0.0, 0.0],
+                color,
+            },
+            Vert {
+                pos: [target.width as f32, 0.0],
+                color,
+            },
+            Vert {
+                pos: [0.0, target.height as f32],
+                color,
+            },
+            Vert {
+                pos: [target.width as f32, target.height as f32],
+                color,
+            },
+        ];
+        let vert_bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(
+                verts.as_ptr() as *const u8,
+                std::mem::size_of_val(&verts),
+            )
+        };
+        let vb = self.create_vertex_buffer("debug_color verts", vert_bytes);
+
+        let indices: [u16; 6] = [0, 1, 2, 2, 1, 3];
+        let idx_bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(
+                indices.as_ptr() as *const u8,
+                std::mem::size_of_val(&indices),
+            )
+        };
+        let ib = self.create_index_buffer("debug_color indices", idx_bytes);
+
+        let pipeline = &self.pipelines[&("debug_color", "")].pipeline;
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("debug_color render"),
+            });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("debug_color pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &bg0, &[]);
+            pass.set_bind_group(1, &bg1, &[]);
+            pass.set_vertex_buffer(0, vb.slice(..));
+            pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint16);
+            pass.draw_indexed(0..6, 0, 0..1);
+        }
+        self.queue.submit([encoder.finish()]);
+    }
+}
+
+fn ortho(w: f32, h: f32) -> [f32; 16] {
+    [
+        2.0 / w,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        -2.0 / h,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        -1.0,
+        0.0,
+        -1.0,
+        1.0,
+        0.0,
+        1.0,
+    ]
 }
 
 fn tex_entry(binding: u32, view: &wgpu::TextureView) -> wgpu::BindGroupEntry<'_> {
@@ -792,33 +911,12 @@ mod tests {
     fn create_all_shader_pipelines() {
         let Some(dev) = try_device() else { return };
         assert_eq!(
-            dev.pipelines.len(),
+            dev.pipeline_count(),
             WGSL_SHADERS.len(),
             "Expected {} shader pipelines, got {}",
             WGSL_SHADERS.len(),
-            dev.pipelines.len()
+            dev.pipeline_count()
         );
-    }
-
-    fn ortho(w: f32, h: f32) -> [f32; 16] {
-        [
-            2.0 / w,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            -2.0 / h,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            -1.0,
-            0.0,
-            -1.0,
-            1.0,
-            0.0,
-            1.0,
-        ]
     }
 
     #[test]
@@ -834,95 +932,7 @@ mod tests {
             TextureFilter::Nearest,
             Some(RenderTargetInfo { has_depth: false }),
         );
-        let rt_view = rt.texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let projection = ortho(size as f32, size as f32);
-        let mut transform_data = Vec::with_capacity(64);
-        for f in &projection {
-            transform_data.extend_from_slice(&f.to_le_bytes());
-        }
-        let transform_buf = dev.create_uniform_buffer("test transform", &transform_data);
-        let mut tex_size_data = Vec::with_capacity(8);
-        tex_size_data.extend_from_slice(&(size as f32).to_le_bytes());
-        tex_size_data.extend_from_slice(&(size as f32).to_le_bytes());
-        let tex_size_buf = dev.create_uniform_buffer("test texture size", &tex_size_data);
-        let mali_buf = dev.create_uniform_buffer("test mali workaround", &0u32.to_le_bytes());
-        let (bg0, bg1) = dev.create_bind_groups(&transform_buf, &tex_size_buf, &mali_buf);
-
-        #[repr(C)]
-        #[derive(Copy, Clone)]
-        struct Vert {
-            pos: [f32; 2],
-            color: [u8; 4],
-        }
-
-        let red = [255u8, 0, 0, 255];
-        let verts = [
-            Vert {
-                pos: [0.0, 0.0],
-                color: red,
-            },
-            Vert {
-                pos: [size as f32, 0.0],
-                color: red,
-            },
-            Vert {
-                pos: [0.0, size as f32],
-                color: red,
-            },
-            Vert {
-                pos: [size as f32, size as f32],
-                color: red,
-            },
-        ];
-        let vert_bytes: &[u8] = unsafe {
-            std::slice::from_raw_parts(
-                verts.as_ptr() as *const u8,
-                std::mem::size_of_val(&verts),
-            )
-        };
-        let vb = dev.create_vertex_buffer("test verts", vert_bytes);
-
-        let indices: [u16; 6] = [0, 1, 2, 2, 1, 3];
-        let idx_bytes: &[u8] = unsafe {
-            std::slice::from_raw_parts(
-                indices.as_ptr() as *const u8,
-                std::mem::size_of_val(&indices),
-            )
-        };
-        let ib = dev.create_index_buffer("test indices", idx_bytes);
-
-        let pipeline = &dev.pipelines[&("debug_color", "")].pipeline;
-
-        let mut encoder = dev
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("test render"),
-            });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("test pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &rt_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, &bg0, &[]);
-            pass.set_bind_group(1, &bg1, &[]);
-            pass.set_vertex_buffer(0, vb.slice(..));
-            pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint16);
-            pass.draw_indexed(0..6, 0, 0..1);
-        }
-        dev.queue.submit([encoder.finish()]);
+        dev.render_debug_color_quad(&rt, [255, 0, 0, 255]);
 
         let mut pixels = vec![0u8; (size * size * 4) as usize];
         dev.read_texture_pixels(&rt, &mut pixels);
