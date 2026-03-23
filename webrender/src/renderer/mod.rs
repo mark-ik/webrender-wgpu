@@ -536,8 +536,8 @@ fn create_dummy_cache_texture<D: GpuDevice<Texture = Texture>>(device: &mut D) -
     dummy_cache_texture
 }
 
-fn create_gpu_buffer_texture<T: Texel>(
-    device: &mut Device,
+fn create_gpu_buffer_texture<D: GpuDevice<Texture = Texture>, T: Texel>(
+    device: &mut D,
     buffer: &GpuBuffer<T>,
 ) -> Option<Texture> {
     if buffer.is_empty() {
