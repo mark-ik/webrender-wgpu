@@ -24,6 +24,10 @@ fn create_debug_font_texture<D: GpuDevice<Texture = Texture>>(device: &mut D) ->
     font_texture
 }
 
+fn draw_indexed_debug_triangles<D: GpuDevice>(device: &mut D, index_count: usize) {
+    device.draw_triangles_u32(0, index_count as i32);
+}
+
 #[derive(Debug, Copy, Clone)]
 enum DebugSampler {
     Font,
@@ -344,7 +348,7 @@ impl DebugRenderer {
                     &self.tri_vertices,
                     VertexUsageHint::Dynamic,
                 );
-                device.draw_triangles_u32(0, self.tri_indices.len() as i32);
+                draw_indexed_debug_triangles(device, self.tri_indices.len());
             }
 
             // Lines
@@ -372,7 +376,7 @@ impl DebugRenderer {
                     &self.font_vertices,
                     VertexUsageHint::Dynamic,
                 );
-                device.draw_triangles_u32(0, self.font_indices.len() as i32);
+                draw_indexed_debug_triangles(device, self.font_indices.len());
             }
         }
 
