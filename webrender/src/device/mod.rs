@@ -7,3 +7,8 @@ pub mod query_gl;
 
 pub use self::gl::*;
 pub use self::query_gl as query;
+
+#[cfg(feature = "wgpu_backend")]
+mod wgpu_device;
+#[cfg(feature = "wgpu_backend")]
+pub use self::wgpu_device::WgpuDevice;

@@ -343,11 +343,29 @@ fn main() -> Result<(), std::io::Error> {
     writeln!(shader_file, "    pub frag_source: &'static str,")?;
     writeln!(shader_file, "    pub digest: &'static str,")?;
     writeln!(shader_file, "}}\n")?;
+    writeln!(shader_file, "pub struct WgslShaderSource {{")?;
+    writeln!(shader_file, "    pub vert_source: &'static str,")?;
+    writeln!(shader_file, "    pub frag_source: &'static str,")?;
+    writeln!(shader_file, "}}\n")?;
+
     writeln!(shader_file, "lazy_static! {{")?;
 
     write_unoptimized_shaders(glsl_files, &mut shader_file)?;
     writeln!(shader_file, "")?;
     write_optimized_shaders(&res_dir, &mut shader_file, &out_dir)?;
+
+    #[cfg(feature = "wgpu_backend")]
+    webrender_build::wgsl::write_wgsl_shaders(&res_dir, &out_dir, &mut shader_file)?;
+
+    #[cfg(not(feature = "wgpu_backend"))]
+    {
+        // Emit an empty WGSL_SHADERS map so shader_source.rs compiles
+        // regardless of backend.
+        writeln!(shader_file, "  pub static ref WGSL_SHADERS: HashMap<(&'static str, &'static str), WgslShaderSource> = {{")?;
+        writeln!(shader_file, "    HashMap::new()")?;
+        writeln!(shader_file, "  }};")?;
+    }
+
     writeln!(shader_file, "}}")?;
 
     Ok(())
