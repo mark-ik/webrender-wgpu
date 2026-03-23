@@ -1000,8 +1000,8 @@ impl Renderer {
     pub fn get_graphics_api_info(&self) -> GraphicsApiInfo {
         GraphicsApiInfo {
             kind: GraphicsApi::OpenGL,
-            version: self.device.gl().get_string(gl::VERSION),
-            renderer: self.device.gl().get_string(gl::RENDERER),
+            version: self.device.version_string().to_string(),
+            renderer: self.device.renderer_name().to_string(),
         }
     }
 
@@ -2168,7 +2168,7 @@ impl Renderer {
     }
 
     fn check_gl_errors(&mut self) {
-        let err = self.device.gl().get_error();
+        let err = self.device.get_error();
         if err == gl::OUT_OF_MEMORY {
             self.renderer_errors.push(RendererError::OutOfMemory);
         }
@@ -2874,13 +2874,7 @@ impl Renderer {
             self.device.bind_draw_target(draw_target);
 
             if self.device.get_capabilities().supports_qcom_tiled_rendering {
-                self.device.gl().start_tiling_qcom(
-                    target.dirty_rect.min.x.max(0) as _,
-                    target.dirty_rect.min.y.max(0) as _,
-                    target.dirty_rect.width() as _,
-                    target.dirty_rect.height() as _,
-                    0,
-                );
+                self.device.start_tiling_qcom(target.dirty_rect, 0);
             }
 
             self.device.enable_depth_write();
@@ -2984,7 +2978,7 @@ impl Renderer {
 
         self.device.invalidate_depth_target();
         if self.device.get_capabilities().supports_qcom_tiled_rendering {
-            self.device.gl().end_tiling_qcom(gl::COLOR_BUFFER_BIT0_QCOM);
+            self.device.end_tiling_qcom(gl::COLOR_BUFFER_BIT0_QCOM);
         }
     }
 
@@ -3097,7 +3091,7 @@ impl Renderer {
                         }
                         BlendMode::Advanced(mode) => {
                             if self.enable_advanced_blend_barriers {
-                                self.device.gl().blend_barrier_khr();
+                                self.device.blend_barrier_advanced();
                             }
                             self.device.set_blend_mode_advanced(mode);
                         }
@@ -4474,13 +4468,7 @@ impl Renderer {
                 None => gl::COLOR_BUFFER_BIT0_QCOM,
             };
             if let Some(used_rect) = target.used_rect {
-                self.device.gl().start_tiling_qcom(
-                    used_rect.min.x.max(0) as _,
-                    used_rect.min.y.max(0) as _,
-                    used_rect.width() as _,
-                    used_rect.height() as _,
-                    preserve_mask,
-                );
+                self.device.start_tiling_qcom(used_rect, preserve_mask);
             }
         }
 
@@ -4801,7 +4789,7 @@ impl Renderer {
             self.device.invalidate_depth_target();
         }
         if self.device.get_capabilities().supports_qcom_tiled_rendering {
-            self.device.gl().end_tiling_qcom(gl::COLOR_BUFFER_BIT0_QCOM);
+            self.device.end_tiling_qcom(gl::COLOR_BUFFER_BIT0_QCOM);
         }
 
         if let Some(sampler) = sampler_query {

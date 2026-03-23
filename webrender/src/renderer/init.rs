@@ -315,6 +315,37 @@ pub fn create_webrender_instance(
     mut options: WebRenderOptions,
     shaders: Option<&SharedShaders>,
 ) -> Result<(Renderer, RenderApiSender), RendererError> {
+    match options.compositor_config {
+        CompositorConfig::Draw { .. } | CompositorConfig::Native { .. } => {}
+        CompositorConfig::Layer { .. } => {
+            options.surface_origin_is_top_left = true;
+        }
+    }
+
+    let device = Device::new(
+        gl,
+        options.crash_annotator.clone(),
+        options.resource_override_path.clone(),
+        options.use_optimized_shaders,
+        options.upload_method.clone(),
+        options.batched_upload_threshold,
+        options.cached_programs.take(),
+        options.allow_texture_storage_support,
+        options.allow_texture_swizzling,
+        options.dump_shader_source.take(),
+        options.surface_origin_is_top_left,
+        options.panic_on_gl_error,
+    );
+
+    create_webrender_instance_with_device(device, notifier, options, shaders)
+}
+
+fn create_webrender_instance_with_device(
+    mut device: Device,
+    notifier: Box<dyn RenderNotifier>,
+    mut options: WebRenderOptions,
+    shaders: Option<&SharedShaders>,
+) -> Result<(Renderer, RenderApiSender), RendererError> {
     if !wr_has_been_initialized() {
         // If the profiler feature is enabled, try to load the profiler shared library
         // if the path was provided.
@@ -342,22 +373,7 @@ pub fn create_webrender_instance(
 
     let (api_tx, api_rx) = unbounded_channel();
     let (result_tx, result_rx) = unbounded_channel();
-    let gl_type = gl.get_type();
-
-    let mut device = Device::new(
-        gl,
-        options.crash_annotator.clone(),
-        options.resource_override_path.clone(),
-        options.use_optimized_shaders,
-        options.upload_method.clone(),
-        options.batched_upload_threshold,
-        options.cached_programs.take(),
-        options.allow_texture_storage_support,
-        options.allow_texture_swizzling,
-        options.dump_shader_source.take(),
-        options.surface_origin_is_top_left,
-        options.panic_on_gl_error,
-    );
+    let gl_type = device.gl_type();
 
     let color_cache_formats = device.preferred_color_formats();
     let swizzle_settings = device.swizzle_settings();
