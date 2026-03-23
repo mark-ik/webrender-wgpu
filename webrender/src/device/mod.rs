@@ -64,6 +64,17 @@ mod shared_types {
 #[cfg(not(feature = "gl_backend"))]
 pub use self::shared_types::*;
 
+/// Plain old data that can be used to initialize a texture.
+pub unsafe trait Texel: Copy + Default {
+    fn image_format() -> api::ImageFormat;
+}
+
+unsafe impl Texel for u8 {
+    fn image_format() -> api::ImageFormat {
+        api::ImageFormat::R8
+    }
+}
+
 /// Metadata used when allocating a texture as a render target.
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "capture", derive(Serialize))]
@@ -91,7 +102,7 @@ pub trait GpuDevice {
         render_target: Option<RenderTargetInfo>,
     ) -> Self::Texture;
 
-    fn upload_texture_immediate(&mut self, texture: &Self::Texture, pixels: &[u8]);
+    fn upload_texture_immediate<T: Texel>(&mut self, texture: &Self::Texture, pixels: &[T]);
     fn delete_texture(&mut self, texture: Self::Texture);
 
     fn draw_triangles_u16(&mut self, first_vertex: i32, index_count: i32);

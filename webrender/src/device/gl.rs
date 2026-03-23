@@ -9,6 +9,7 @@ use api::{CrashAnnotator, CrashAnnotation, CrashAnnotatorGuard};
 use api::units::*;
 use euclid::default::Transform3D;
 use gleam::gl;
+use crate::device::Texel;
 use crate::device::query::{GpuDebugMethod, GpuProfiler};
 use crate::render_api::MemoryReport;
 use crate::internal_types::{FastHashMap, RenderTargetInfo, Swizzle, SwizzleSettings};
@@ -136,15 +137,6 @@ pub enum UploadMethod {
     Immediate,
     /// Accumulate the changes in PBO first before transferring to a texture.
     PixelBuffer(VertexUsageHint),
-}
-
-/// Plain old data that can be used to initialize a texture.
-pub unsafe trait Texel: Copy + Default {
-    fn image_format() -> ImageFormat;
-}
-
-unsafe impl Texel for u8 {
-    fn image_format() -> ImageFormat { ImageFormat::R8 }
 }
 
 /// Returns the size in bytes of a depth target with the given dimensions.
@@ -4297,7 +4289,7 @@ impl super::GpuDevice for Device {
         Device::create_texture(self, target, format, width, height, filter, render_target)
     }
 
-    fn upload_texture_immediate(&mut self, texture: &Self::Texture, pixels: &[u8]) {
+    fn upload_texture_immediate<T: Texel>(&mut self, texture: &Self::Texture, pixels: &[T]) {
         Device::upload_texture_immediate(self, texture, pixels)
     }
 

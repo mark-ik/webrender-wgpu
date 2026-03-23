@@ -13,9 +13,11 @@
 //! `unimplemented!()`.  They are addressed in Stage 4b once render
 //! pipelines and WGSL shaders are wired up.
 
+use std::mem;
+
 use api::{ImageBufferKind, ImageFormat};
 use api::units::FramebufferIntRect;
-use crate::device::{GpuDevice, GpuFrameId, RenderTargetInfo, TextureFilter};
+use crate::device::{GpuDevice, GpuFrameId, RenderTargetInfo, Texel, TextureFilter};
 
 // ── Opaque resource types ─────────────────────────────────────────────────────
 
@@ -179,11 +181,11 @@ impl GpuDevice for WgpuDevice {
         WgpuTexture { texture, format: wgpu_format, width: width as u32, height: height as u32 }
     }
 
-    fn upload_texture_immediate(&mut self, texture: &Self::Texture, pixels: &[u8]) {
-        let bytes_per_row = texture.width * wgpu_format_bytes_per_pixel(texture.format);
+    fn upload_texture_immediate<T: Texel>(&mut self, texture: &Self::Texture, pixels: &[T]) {
+        let bytes_per_row = texture.width * mem::size_of::<T>() as u32;
         self.queue.write_texture(
             texture.texture.as_image_copy(),
-            pixels,
+            texels_to_u8_slice(pixels),
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(bytes_per_row),
@@ -220,6 +222,15 @@ impl GpuDevice for WgpuDevice {
         _output: &mut [u8],
     ) {
         unimplemented!("read_pixels_into: async readback not yet implemented — Stage 4b");
+    }
+}
+
+fn texels_to_u8_slice<T: Texel>(texels: &[T]) -> &[u8] {
+    unsafe {
+        std::slice::from_raw_parts(
+            texels.as_ptr() as *const u8,
+            std::mem::size_of_val(texels),
+        )
     }
 }
 
