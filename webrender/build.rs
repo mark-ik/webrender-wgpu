@@ -366,33 +366,22 @@ fn strip_glsl_comment(s: &str) -> &str {
     match s.find("//") { Some(i) => s[..i].trim_end(), None => s }
 }
 
-/// For each function PROTOTYPE found in the assembled GLSL source
-/// (`rettype name(params);` at brace depth 0, single- or multi-line),
-/// find the corresponding DEFINITION (`rettype name(params) { … }`) that
-/// appears AFTER the prototype, and move it to the position of the prototype.
+/// For each function PROTOTYPE found in the assembled GLSL source,
+/// find the corresponding DEFINITION that appears AFTER the prototype.
+/// Collect the definition AND all non-function code between the last
+/// driver-section function and the definition (the "specific shader
+/// preamble": struct definitions, helper functions, varyings) and move
+/// the entire block to the prototype position.
 ///
-/// This gives naga's GLSL frontend the definition-before-use ordering it
-/// requires even though standard GLSL forward declarations (prototypes) are
-/// present.  WebRender uses this pattern in `brush.glsl` / `ps_quad.glsl` where
-/// a prototype is declared, `main()` calls it, and the specific shader (e.g.
-/// `brush_solid.glsl`) appended later provides the body.
-///
-/// Unmatched prototypes are left in place so naga can report a useful error.
-/// Definitions that have no prototype are left in their original position.
-///
-/// ## Algorithm
-///
-/// For each chunk of consecutive lines at brace-depth 0 whose first token is
-/// not a keyword (control flow, storage qualifier, etc.):
-///   - Track paren depth to identify the end of the parameter list.
-///   - If the parameter list ends with `;` (no body) → **prototype** chunk.
-///   - If the parameter list is followed by a `{ … }` body → **definition** chunk.
-///
-/// The paren-balanced accumulation correctly handles signatures spanning many
-/// lines (e.g. `void brush_vs(\n    param1,\n    param2\n);`).
+/// This satisfies naga's requirement that callee function handles are
+/// always lower than caller handles.  WebRender's shader assembly puts
+/// "driver" code (brush.glsl / ps_quad.glsl) before "specific" code
+/// (brush_solid.glsl, etc.) via `#include`, so definitions referenced
+/// by the prototyped function always have higher handles without this
+/// reordering.
 #[cfg(feature = "wgpu_backend")]
 fn move_definitions_before_prototypes(src: &str) -> String {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
 
     let lines: Vec<&str> = src.lines().collect();
     let n = lines.len();
@@ -402,8 +391,6 @@ fn move_definitions_before_prototypes(src: &str) -> String {
     let mut prototypes: Vec<(String, usize, usize)> = Vec::new();
     let mut defs:       Vec<(String, usize, usize)> = Vec::new();
 
-    // Brace depth for blocks that are NOT function definitions (struct, uniform
-    // block, etc.).  When this is > 0 we skip everything.
     let mut block_depth: i32 = 0;
     let mut i = 0;
 
@@ -418,7 +405,6 @@ fn move_definitions_before_prototypes(src: &str) -> String {
             continue;
         }
 
-        // Skip blank lines, preprocessor directives, and comment lines.
         if code.is_empty() || code.starts_with('#') || code.starts_with("//") {
             i += 1;
             continue;
@@ -427,7 +413,6 @@ fn move_definitions_before_prototypes(src: &str) -> String {
         let first = code.split_whitespace().next().unwrap_or("");
 
         if NOT_FUNC_START.contains(&first) {
-            // Non-function declaration (struct, uniform block, etc.) — track braces.
             for c in code.chars() {
                 match c { '{' => block_depth += 1, '}' => block_depth -= 1, _ => {} }
             }
@@ -435,8 +420,6 @@ fn move_definitions_before_prototypes(src: &str) -> String {
             continue;
         }
 
-        // Reject lines without `(` — variable declarations without initializer,
-        // `return` without parens, closing `}` of a block, etc.
         if !code.contains('(') {
             for c in code.chars() {
                 match c { '{' => block_depth += 1, '}' => block_depth -= 1, _ => {} }
@@ -445,9 +428,6 @@ fn move_definitions_before_prototypes(src: &str) -> String {
             continue;
         }
 
-        // Reject assignment statements: `=` appearing before the first `(`.
-        // These are variable declarations with initializer (`Type v = fn(…);`),
-        // not function signatures.
         {
             let paren = code.find('(').unwrap();
             if code[..paren].contains('=') {
@@ -459,15 +439,11 @@ fn move_definitions_before_prototypes(src: &str) -> String {
             }
         }
 
-        // ── Paren-balanced accumulation ──────────────────────────────────────
-        // Accumulate lines starting at `i` until we classify the chunk as a
-        // prototype (ends with `;` after balanced parens) or definition (has a
-        // `{ … }` body after balanced parens).
         let chunk_start = i;
         let mut paren_depth: i32 = 0;
         let mut brace_depth: i32 = 0;
-        let mut sig_closed  = false;  // paren_depth returned to 0
-        let mut body_open   = false;  // `{` seen after sig_closed
+        let mut sig_closed  = false;
+        let mut body_open   = false;
         let mut j = i;
 
         'accum: while j < n && (j - chunk_start) < 200 {
@@ -487,21 +463,19 @@ fn move_definitions_before_prototypes(src: &str) -> String {
                         brace_depth -= 1;
                         if brace_depth <= 0 {
                             j += 1;
-                            break 'accum;  // definition body complete
+                            break 'accum;
                         }
                     }
                     _ => {}
                 }
             }
             j += 1;
-            // Prototype: signature balanced and this line ends the statement.
             if sig_closed && !body_open && (lc.ends_with(';') || lc.ends_with(");")) {
                 break 'accum;
             }
         }
 
         if !sig_closed {
-            // Could not parse — treat as unknown, advance by 1.
             for c in code.chars() {
                 match c { '{' => block_depth += 1, '}' => block_depth -= 1, _ => {} }
             }
@@ -509,7 +483,6 @@ fn move_definitions_before_prototypes(src: &str) -> String {
             continue;
         }
 
-        // Extract function name from the first line of the chunk.
         let sig_first = strip_glsl_comment(lines[chunk_start].trim());
         let name_opt = sig_first.find('(')
             .map(|p| sig_first[..p].trim_end())
@@ -527,67 +500,120 @@ fn move_definitions_before_prototypes(src: &str) -> String {
         i = j;
     }
 
-    // ── Pass 2: build move table ──────────────────────────────────────────────
-    // For each prototype, find the LAST definition for that name that appears
-    // AFTER the prototype.  Only consider definitions that come after.
+    // ── Pass 2: identify "specific blocks" to move ───────────────────────────
+    // For each prototype with a matching definition AFTER it, we need to move
+    // the definition to the prototype position.  But the definition may depend
+    // on structs and helper functions defined between the last "driver" function
+    // and the definition.
+    //
+    // Strategy: find the LAST function definition or prototype that appears
+    // BEFORE the prototype being processed — that's the end of the "driver
+    // prefix".  Everything AFTER the end of the LAST function that appears
+    // before the definition (but which is itself NOT part of a move) up to
+    // and including the definition is the "specific block" to move.
+    //
+    // Since multiple prototypes may need moving (e.g., brush_vs and
+    // text_shader_main in brush.glsl), we process them and collect the
+    // largest contiguous block that covers all definitions.
+
     let mut def_by_name: HashMap<String, (usize, usize)> = HashMap::new();
     for (name, start, end) in &defs {
-        // Last definition with that name wins (HashMap insert overwrites).
         def_by_name.insert(name.clone(), (*start, *end));
     }
 
-    // Collect names where we'll actually do a move.
-    let names_to_move: Vec<String> = prototypes
-        .iter()
-        .filter_map(|(name, ps, _pe)| {
-            def_by_name.get(name.as_str())
-                .filter(|(ds, _)| ds > ps)
-                .map(|_| name.clone())
-        })
-        .collect();
+    // Collect prototypes that need moves, sorted by prototype start line.
+    let mut to_move: Vec<(String, usize, usize, usize, usize)> = Vec::new();
+    for (name, ps, pe) in &prototypes {
+        if let Some(&(ds, de)) = def_by_name.get(name.as_str()) {
+            if ds > *ps {
+                to_move.push((name.clone(), *ps, *pe, ds, de));
+            }
+        }
+    }
 
-    if names_to_move.is_empty() {
+    if to_move.is_empty() {
         return src.to_string();
     }
 
-    // Build skip sets and replacement map.
-    let mut skip_lines: HashSet<usize> = HashSet::new();
-    // Map: prototype_start_line → (def_start, def_end, proto_end)
-    let mut replacements: HashMap<usize, (usize, usize, usize)> = HashMap::new();
+    to_move.sort_by_key(|t| t.1); // sort by prototype start
 
-    for name in &names_to_move {
-        let (ps, pe) = prototypes.iter()
-            .find(|(n, _, _)| n == name)
-            .map(|(_, s, e)| (*s, *e))
-            .unwrap();
-        let (ds, de) = def_by_name[name.as_str()];
+    // The "specific block" = everything from after the last `main()` definition
+    // (which is always the final function in the driver section) up to and
+    // including the last definition being moved.  `main()` is the ultimate
+    // caller in brush.glsl / ps_quad.glsl, so everything after it belongs to
+    // the "specific" shader (struct types, helper functions, prototyped
+    // function bodies).
+    //
+    // We look for the last definition named "main" that appears BETWEEN the
+    // first prototype and the earliest definition being moved.  If no such
+    // main exists (shouldn't happen for WR shaders), fall back to the end of
+    // the last prototype being moved.
+    let earliest_def_start = to_move.iter().map(|t| t.3).min().unwrap();
+    let first_proto_start = to_move[0].1;
 
-        // Skip all prototype lines (they get replaced) and definition
-        // lines (they get moved to the prototype position).
-        for li in ps..pe { skip_lines.insert(li); }
-        for li in ds..de { skip_lines.insert(li); }
+    let main_end = defs.iter()
+        .filter(|(name, s, e)| name == "main" && *s >= first_proto_start && *e <= earliest_def_start)
+        .map(|(_, _, e)| *e)
+        .max();
 
-        replacements.insert(ps, (ds, de, pe));
-    }
+    let specific_block_start = main_end.unwrap_or_else(|| {
+        // Fallback: use the end of the last function/prototype between
+        // first prototype end and earliest definition start.
+        let last_proto_end = to_move.last().unwrap().2;
+        let mut boundaries: Vec<usize> = Vec::new();
+        for (_, _, e) in &defs {
+            if *e > last_proto_end && *e <= earliest_def_start {
+                boundaries.push(*e);
+            }
+        }
+        boundaries.into_iter().max().unwrap_or(last_proto_end)
+    });
+
+    // The "specific block end" = end of the last definition being moved.
+    let specific_block_end = to_move.iter().map(|t| t.4).max().unwrap();
+
+    // The insertion point = right before the FIRST function DEFINITION in the
+    // driver section (between the first prototype and the earliest specific
+    // definition).  This ensures all #define constants that appear between
+    // the prototypes and the driver definitions are above the moved code.
+    let first_driver_def_start = defs.iter()
+        .filter(|(_, s, _)| *s > first_proto_start && *s < earliest_def_start)
+        .map(|(_, s, _)| *s)
+        .min();
+
+    let insertion_point = first_driver_def_start.unwrap_or(to_move[0].1);
 
     // ── Pass 3: reconstruct ──────────────────────────────────────────────────
     let mut result = String::with_capacity(src.len() + 512);
     let mut li = 0;
+    let mut specific_emitted = false;
     while li < n {
-        if let Some(&(ds, de, pe)) = replacements.get(&li) {
-            // Emit the definition body in place of the prototype.
-            for l in ds..de {
+        // Skip prototypes being moved (they are no longer needed since the
+        // definitions will appear before the driver functions).
+        let proto_match = to_move.iter().find(|(_, ps, _, _, _)| li == *ps);
+        if let Some((_, _, pe, _, _)) = proto_match {
+            li = *pe;
+            continue;
+        }
+
+        // At the insertion point, emit the specific block first.
+        if li == insertion_point && !specific_emitted {
+            specific_emitted = true;
+            for l in specific_block_start..specific_block_end {
                 result.push_str(lines[l]);
                 result.push('\n');
             }
-            // Jump past the prototype range.
-            li = pe;
+            // Don't skip current line — fall through to emit it normally
+        }
+
+        // Skip lines that are part of the specific block (they've been moved)
+        if li >= specific_block_start && li < specific_block_end {
+            li += 1;
             continue;
         }
-        if !skip_lines.contains(&li) {
-            result.push_str(lines[li]);
-            result.push('\n');
-        }
+
+        result.push_str(lines[li]);
+        result.push('\n');
         li += 1;
     }
     result
@@ -1224,9 +1250,113 @@ fn storage_qual(code: &str) -> Option<&'static str> {
     None
 }
 
+/// Resolve `#ifdef WR_VERTEX_SHADER` / `#ifdef WR_FRAGMENT_SHADER` / `#endif`
+/// conditionals based on the current compilation stage.  Lines inside the
+/// ACTIVE stage block are kept; lines inside the INACTIVE stage block are
+/// removed.  Code outside any stage conditional is always kept.
+///
+/// Handles nested `#ifdef` / `#if` / `#endif` correctly: only conditionals
+/// whose directive matches `WR_VERTEX_SHADER` or `WR_FRAGMENT_SHADER` at the
+/// outermost ifdef depth are resolved.  Other `#ifdef` / `#endif` pairs inside
+/// the stage block are passed through for naga's preprocessor.
+#[cfg(feature = "wgpu_backend")]
+fn resolve_stage_ifdefs(src: &str, stage: naga::ShaderStage) -> String {
+    let active_define = match stage {
+        naga::ShaderStage::Vertex   => "WR_VERTEX_SHADER",
+        naga::ShaderStage::Fragment => "WR_FRAGMENT_SHADER",
+        _ => return src.to_string(),
+    };
+    let inactive_define = match stage {
+        naga::ShaderStage::Vertex   => "WR_FRAGMENT_SHADER",
+        naga::ShaderStage::Fragment => "WR_VERTEX_SHADER",
+        _ => return src.to_string(),
+    };
+
+    let mut out = String::with_capacity(src.len());
+    // Track nesting of #ifdef/#endif to handle inner #ifdef pairs.
+    // state: 0 = outside any stage block,
+    //        1 = inside active stage block (emit),
+    //       -1 = inside inactive stage block (skip)
+    let mut stage_state: i32 = 0;
+    let mut inner_depth: i32 = 0; // #ifdef nesting depth inside a stage block
+
+    for line in src.lines() {
+        let trimmed = line.trim();
+        // Normalize #endif variants: `#endif`, `#endif //comment`, `#endif /* comment */`
+        let is_endif = trimmed == "#endif"
+            || trimmed.starts_with("#endif ")
+            || trimmed.starts_with("#endif//");
+
+        if stage_state == 0 {
+            // Outside any stage block.
+            if trimmed == &format!("#ifdef {}", active_define) {
+                stage_state = 1;
+                inner_depth = 0;
+                // Don't emit the #ifdef line itself — naga doesn't need it
+                // since we've resolved it.
+                continue;
+            } else if trimmed == &format!("#ifdef {}", inactive_define) {
+                stage_state = -1;
+                inner_depth = 0;
+                continue;
+            }
+            out.push_str(line);
+            out.push('\n');
+        } else if stage_state == 1 {
+            // Inside active stage block — emit lines, track inner nesting.
+            if trimmed.starts_with("#ifdef ")
+                || trimmed.starts_with("#if ")
+                || trimmed.starts_with("#ifndef ")
+            {
+                inner_depth += 1;
+                out.push_str(line);
+                out.push('\n');
+            } else if is_endif {
+                if inner_depth > 0 {
+                    inner_depth -= 1;
+                    out.push_str(line);
+                    out.push('\n');
+                } else {
+                    // Closing #endif for the active stage block.
+                    stage_state = 0;
+                }
+            } else {
+                out.push_str(line);
+                out.push('\n');
+            }
+        } else {
+            // stage_state == -1: inside inactive stage block — skip lines.
+            if trimmed.starts_with("#ifdef ")
+                || trimmed.starts_with("#if ")
+                || trimmed.starts_with("#ifndef ")
+            {
+                inner_depth += 1;
+            } else if is_endif {
+                if inner_depth > 0 {
+                    inner_depth -= 1;
+                } else {
+                    stage_state = 0;
+                }
+            }
+            // All lines in inactive block are skipped.
+        }
+    }
+
+    out
+}
+
 #[cfg(feature = "wgpu_backend")]
 fn preprocess_for_naga(src: &str, stage: naga::ShaderStage) -> String {
     use std::collections::{HashMap, HashSet};
+
+    // ── Step 0: resolve WR_VERTEX_SHADER / WR_FRAGMENT_SHADER conditionals ──
+    // The assembled GLSL still contains both #ifdef WR_VERTEX_SHADER and
+    // #ifdef WR_FRAGMENT_SHADER blocks.  naga's built-in preprocessor normally
+    // resolves these, but our text-based function-reordering pass
+    // (move_definitions_before_prototypes) needs to see only code for the
+    // current stage.  Resolve the simple `#ifdef WR_*_SHADER` / `#endif`
+    // conditionals here so that all downstream passes work correctly.
+    let src = resolve_stage_ifdefs(src, stage);
 
     // ── Combined-sampler type table ──────────────────────────────────────────
     // Maps the GLSL combined sampler type keyword to the separate Vulkan-GLSL
@@ -1424,19 +1554,13 @@ fn preprocess_for_naga(src: &str, stage: naga::ShaderStage) -> String {
     //      if-else chain so no switch fall-through tracking is needed.
     result = fix_switch_fallthrough(&result);
 
-    // NOTE: move_definitions_before_prototypes() was tested here (Stage 4c) but
-    // had to be deactivated.  WR's brush / ps_quad ForwardDependency pattern
-    // involves definitions that depend on struct types defined in the same
-    // "specific" shader file (e.g. SolidBrush in brush_solid.glsl).  Moving
-    // only the function body — without also moving the struct and helper
-    // functions it depends on — produces UnknownVariable errors.
-    //
-    // Fixing ForwardDependency correctly requires either:
-    //   a) Full topological sort of all global declarations, OR
-    //   b) Restructuring build_shader_strings so "specific" shader content
-    //      (struct + helper_fn + brush_vs body) is assembled BEFORE the driver
-    //      file's brush_shader_main_vs / main rather than after.
-    // That work is deferred to a later stage.
+    // Reorder function definitions to satisfy naga's ForwardDependency check.
+    // For each prototyped function whose definition appears later (brush_vs,
+    // pattern_vertex, etc.), move the definition AND its preamble (struct types,
+    // helper functions, varying declarations from the "specific" shader) to
+    // where the prototype was.  This gives callee functions lower naga handles
+    // than their callers.
+    result = move_definitions_before_prototypes(&result);
 
     result
 }
@@ -1470,6 +1594,7 @@ fn translate_to_wgsl(
             .map_err(|e| format!(
                 "GLSL->naga parse failed [shader={} config={:?}]: {:?}", name_s, config_s, e
             ))?;
+
         let info = Validator::new(ValidationFlags::all(), Capabilities::all())
             .validate(&module)
             .map_err(|e| format!(
@@ -1547,14 +1672,6 @@ fn write_wgsl_shaders(
             // split sampler2D declarations, assign locations and bindings.
             let vert_glsl = preprocess_for_naga(&vert_glsl, naga::ShaderStage::Vertex);
             let frag_glsl = preprocess_for_naga(&frag_glsl, naga::ShaderStage::Fragment);
-
-            // DEBUG: dump preprocessed GLSL for failing shaders
-            for dump_name in &["ps_text_run", "cs_clip_box_shadow", "cs_border_solid", "cs_line_decoration", "cs_border_segment"] {
-                if (*shader_name).contains(dump_name) && (config.is_empty() || config.contains("TEXTURE_2D")) {
-                    let _ = std::fs::write(format!("/tmp/{}_vert.glsl", dump_name), &vert_glsl);
-                    let _ = std::fs::write(format!("/tmp/{}_frag.glsl", dump_name), &frag_glsl);
-                }
-            }
 
             let vert_wgsl = translate_to_wgsl(
                 &vert_glsl,
