@@ -1915,7 +1915,7 @@ fn translate_to_wgsl(
     });
 
     match outcome {
-        Ok(inner) => inner,
+        Ok(inner) => inner.map(|wgsl| fix_generated_wgsl(&wgsl)),
         Err(panic_val) => {
             let msg = if let Some(s) = panic_val.downcast_ref::<String>() {
                 s.clone()
@@ -1927,6 +1927,89 @@ fn translate_to_wgsl(
             Err(format!("naga panicked [shader={} config={:?}]: {}", name, config, msg))
         }
     }
+}
+
+fn fix_generated_wgsl(wgsl: &str) -> String {
+    rewrite_set_sat_helpers(wgsl)
+}
+
+fn rewrite_set_sat_helpers(wgsl: &str) -> String {
+    if !wgsl.contains("fn SetSatInner(Cmin: ptr<function, f32>") || !wgsl.contains("fn SetSat(") {
+        return wgsl.to_string();
+    }
+
+    let Some((inner_start, _inner_end)) = find_function_block(wgsl, "SetSatInner") else {
+        return wgsl.to_string();
+    };
+    let Some((set_sat_start, set_sat_end)) = find_function_block(wgsl, "SetSat") else {
+        return wgsl.to_string();
+    };
+
+    if inner_start >= set_sat_start {
+        return wgsl.to_string();
+    }
+
+    let replacement = r#"fn SetSatInnerVals(Cmin: f32, Cmid: f32, Cmax: f32, s_3: f32) -> vec3<f32> {
+    if (Cmax > Cmin) {
+        return vec3<f32>(0f, (((Cmid - Cmin) * s_3) / (Cmax - Cmin)), s_3);
+    }
+    return vec3<f32>(0f, 0f, 0f);
+}
+
+fn SetSat(C_4: vec3<f32>, s_5: f32) -> vec3<f32> {
+    var C_5: vec3<f32>;
+    C_5 = C_4;
+    if (C_5.x <= C_5.y) {
+        if (C_5.y <= C_5.z) {
+            let sat_0 = SetSatInnerVals(C_5.x, C_5.y, C_5.z, s_5);
+            C_5 = vec3<f32>(sat_0.x, sat_0.y, sat_0.z);
+        } else if (C_5.x <= C_5.z) {
+            let sat_1 = SetSatInnerVals(C_5.x, C_5.z, C_5.y, s_5);
+            C_5 = vec3<f32>(sat_1.x, sat_1.z, sat_1.y);
+        } else {
+            let sat_2 = SetSatInnerVals(C_5.z, C_5.x, C_5.y, s_5);
+            C_5 = vec3<f32>(sat_2.y, sat_2.z, sat_2.x);
+        }
+    } else if (C_5.x <= C_5.z) {
+        let sat_3 = SetSatInnerVals(C_5.y, C_5.x, C_5.z, s_5);
+        C_5 = vec3<f32>(sat_3.y, sat_3.x, sat_3.z);
+    } else if (C_5.y <= C_5.z) {
+        let sat_4 = SetSatInnerVals(C_5.y, C_5.z, C_5.x, s_5);
+        C_5 = vec3<f32>(sat_4.z, sat_4.x, sat_4.y);
+    } else {
+        let sat_5 = SetSatInnerVals(C_5.z, C_5.y, C_5.x, s_5);
+        C_5 = vec3<f32>(sat_5.z, sat_5.y, sat_5.x);
+    }
+    return C_5;
+}
+"#;
+
+    format!(
+        "{}{}{}",
+        &wgsl[..inner_start],
+        replacement,
+        &wgsl[set_sat_end..]
+    )
+}
+
+fn find_function_block(src: &str, name: &str) -> Option<(usize, usize)> {
+    let needle = format!("fn {}(", name);
+    let start = src.find(&needle)?;
+    let brace_start = src[start..].find('{')? + start;
+    let mut depth = 0i32;
+    for (offset, ch) in src[brace_start..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((start, brace_start + offset + 1));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Generate WGSL shaders for the wgpu backend and write the `WGSL_SHADERS`
