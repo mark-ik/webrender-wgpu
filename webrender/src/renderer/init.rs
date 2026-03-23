@@ -767,11 +767,7 @@ fn create_webrender_instance_with_device(
         profiler::unregister_thread();
     })?;
 
-    let debug_method = device.gpu_debug_method(options.enable_gpu_markers);
-
-    info!("using {:?}", debug_method);
-
-    let gpu_profiler = device.create_gpu_profiler(debug_method);
+    let gpu_profiler = device.create_gpu_profiler(options.enable_gpu_markers);
     #[cfg(feature = "capture")]
     let read_fbo = device.create_fbo();
 

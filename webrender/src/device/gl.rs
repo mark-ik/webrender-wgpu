@@ -2036,7 +2036,7 @@ impl Device {
         self.capabilities.supports_r8_texture_upload
     }
 
-    pub fn gpu_debug_method(&self, enable_gpu_markers: bool) -> GpuDebugMethod {
+    fn gpu_debug_method(&self, enable_gpu_markers: bool) -> GpuDebugMethod {
         if !enable_gpu_markers {
             GpuDebugMethod::None
         } else if self.capabilities.supports_khr_debug {
@@ -2049,7 +2049,9 @@ impl Device {
         }
     }
 
-    pub fn create_gpu_profiler(&self, debug_method: GpuDebugMethod) -> GpuProfiler {
+    pub fn create_gpu_profiler(&self, enable_gpu_markers: bool) -> GpuProfiler {
+        let debug_method = self.gpu_debug_method(enable_gpu_markers);
+        info!("using {:?}", debug_method);
         GpuProfiler::new(Rc::clone(&self.gl), debug_method)
     }
 
