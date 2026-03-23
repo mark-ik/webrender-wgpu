@@ -121,6 +121,38 @@ pub enum RendererBackend {
     Gl { gl: Rc<dyn gl::Gl> },
 }
 
+struct RendererDeviceConfig {
+    crash_annotator: Option<Box<dyn CrashAnnotator>>,
+    resource_override_path: Option<PathBuf>,
+    use_optimized_shaders: bool,
+    upload_method: UploadMethod,
+    batched_upload_threshold: i32,
+    cached_programs: Option<Rc<ProgramCache>>,
+    allow_texture_storage_support: bool,
+    allow_texture_swizzling: bool,
+    dump_shader_source: Option<String>,
+    surface_origin_is_top_left: bool,
+    panic_on_gl_error: bool,
+}
+
+impl RendererDeviceConfig {
+    fn from_options(options: &mut WebRenderOptions) -> Self {
+        RendererDeviceConfig {
+            crash_annotator: options.crash_annotator.take(),
+            resource_override_path: options.resource_override_path.clone(),
+            use_optimized_shaders: options.use_optimized_shaders,
+            upload_method: options.upload_method.clone(),
+            batched_upload_threshold: options.batched_upload_threshold,
+            cached_programs: options.cached_programs.take(),
+            allow_texture_storage_support: options.allow_texture_storage_support,
+            allow_texture_swizzling: options.allow_texture_swizzling,
+            dump_shader_source: options.dump_shader_source.take(),
+            surface_origin_is_top_left: options.surface_origin_is_top_left,
+            panic_on_gl_error: options.panic_on_gl_error,
+        }
+    }
+}
+
 impl RendererBackend {
     fn prepare_options(&self, options: &mut WebRenderOptions) {
         match options.compositor_config {
@@ -131,23 +163,35 @@ impl RendererBackend {
         }
     }
 
-    fn into_device(self, options: &mut WebRenderOptions) -> Device {
-        self.prepare_options(options);
+    fn into_device(self, config: RendererDeviceConfig) -> Device {
+        let RendererDeviceConfig {
+            crash_annotator,
+            resource_override_path,
+            use_optimized_shaders,
+            upload_method,
+            batched_upload_threshold,
+            cached_programs,
+            allow_texture_storage_support,
+            allow_texture_swizzling,
+            dump_shader_source,
+            surface_origin_is_top_left,
+            panic_on_gl_error,
+        } = config;
 
         match self {
             RendererBackend::Gl { gl } => Device::new(
                 gl,
-                options.crash_annotator.clone(),
-                options.resource_override_path.clone(),
-                options.use_optimized_shaders,
-                options.upload_method.clone(),
-                options.batched_upload_threshold,
-                options.cached_programs.take(),
-                options.allow_texture_storage_support,
-                options.allow_texture_swizzling,
-                options.dump_shader_source.take(),
-                options.surface_origin_is_top_left,
-                options.panic_on_gl_error,
+                crash_annotator,
+                resource_override_path,
+                use_optimized_shaders,
+                upload_method,
+                batched_upload_threshold,
+                cached_programs,
+                allow_texture_storage_support,
+                allow_texture_swizzling,
+                dump_shader_source,
+                surface_origin_is_top_left,
+                panic_on_gl_error,
             ),
         }
     }
@@ -350,7 +394,9 @@ pub fn create_webrender_instance(
     mut options: WebRenderOptions,
     shaders: Option<&SharedShaders>,
 ) -> Result<(Renderer, RenderApiSender), RendererError> {
-    let device = backend.into_device(&mut options);
+    backend.prepare_options(&mut options);
+    let device_config = RendererDeviceConfig::from_options(&mut options);
+    let device = backend.into_device(device_config);
 
     create_webrender_instance_with_device(device, notifier, options, shaders)
 }
