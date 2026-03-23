@@ -9,6 +9,7 @@ use api::{CrashAnnotator, CrashAnnotation, CrashAnnotatorGuard};
 use api::units::*;
 use euclid::default::Transform3D;
 use gleam::gl;
+use crate::device::query::GpuDebugMethod;
 use crate::render_api::MemoryReport;
 use crate::internal_types::{FastHashMap, RenderTargetInfo, Swizzle, SwizzleSettings};
 use crate::util::round_up_to_multiple;
@@ -1990,6 +1991,66 @@ impl Device {
 
     pub fn get_error(&self) -> gl::GLenum {
         self.gl.get_error()
+    }
+
+    pub fn dual_source_blending_is_supported(&self, allow_dual_source_blending: bool) -> bool {
+        self.capabilities.supports_dual_source_blending && allow_dual_source_blending
+    }
+
+    pub fn advanced_blend_equation_is_supported(&self, allow_advanced_blend_equation: bool) -> bool {
+        self.capabilities.supports_advanced_blend_equation && allow_advanced_blend_equation
+    }
+
+    pub fn advanced_blend_is_coherent(&self) -> bool {
+        self.supports_extension("GL_KHR_blend_equation_advanced_coherent")
+    }
+
+    pub fn resolve_clear_scissor(&self, requested: Option<bool>) -> bool {
+        requested.unwrap_or(self.capabilities.prefers_clear_scissor)
+    }
+
+    pub fn is_software_rasterizer(&self) -> bool {
+        let renderer_name_lc = self.capabilities.renderer_name.to_lowercase();
+        renderer_name_lc.contains("llvmpipe")
+            || renderer_name_lc.contains("softpipe")
+            || renderer_name_lc.contains("software rasterizer")
+    }
+
+    pub fn is_software_webrender(&self) -> bool {
+        self.capabilities.renderer_name.starts_with("Software")
+    }
+
+    pub fn supports_gpu_cache_scatter(&self) -> bool {
+        self.capabilities.supports_color_buffer_float
+    }
+
+    pub fn requires_quad_target_clears(&self) -> bool {
+        !self.capabilities.supports_alpha_target_clears
+    }
+
+    pub fn supports_render_target_partial_update(&self) -> bool {
+        self.capabilities.supports_render_target_partial_update
+    }
+
+    pub fn external_images_require_copy(&self) -> bool {
+        !self.capabilities.supports_image_external_essl3
+    }
+
+    pub fn supports_r8_texture_upload(&self) -> bool {
+        self.capabilities.supports_r8_texture_upload
+    }
+
+    pub fn gpu_debug_method(&self, enable_gpu_markers: bool) -> GpuDebugMethod {
+        if !enable_gpu_markers {
+            GpuDebugMethod::None
+        } else if self.capabilities.supports_khr_debug {
+            GpuDebugMethod::KHR
+        } else if self.supports_extension("GL_EXT_debug_marker") {
+            GpuDebugMethod::MarkerEXT
+        } else {
+            warn!("asking to enable_gpu_markers but no supporting extension was found");
+            GpuDebugMethod::None
+        }
     }
 
     pub fn start_tiling_qcom(&self, rect: DeviceIntRect, preserve_mask: gl::GLuint) {

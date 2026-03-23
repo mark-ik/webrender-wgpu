@@ -22,7 +22,7 @@ use crate::gpu_types::PrimitiveInstanceData;
 use crate::internal_types::{FastHashMap, FastHashSet, FrameId};
 use crate::picture;
 use crate::profiler::{self, Profiler, TransactionProfile};
-use crate::device::query::{GpuProfiler, GpuDebugMethod};
+use crate::device::query::GpuProfiler;
 use crate::render_backend::RenderBackend;
 use crate::resource_cache::ResourceCache;
 use crate::scene_builder_thread::{SceneBuilderThread, SceneBuilderThreadChannels, LowPrioritySceneBuilderThread};
@@ -385,17 +385,12 @@ fn create_webrender_instance_with_device(
     let color_cache_formats = device.preferred_color_formats();
     let swizzle_settings = device.swizzle_settings();
     let use_dual_source_blending =
-        device.get_capabilities().supports_dual_source_blending &&
-        options.allow_dual_source_blending;
+        device.dual_source_blending_is_supported(options.allow_dual_source_blending);
     let ext_blend_equation_advanced =
-        options.allow_advanced_blend_equation &&
-        device.get_capabilities().supports_advanced_blend_equation;
-    let ext_blend_equation_advanced_coherent =
-        device.supports_extension("GL_KHR_blend_equation_advanced_coherent");
+        device.advanced_blend_equation_is_supported(options.allow_advanced_blend_equation);
+    let ext_blend_equation_advanced_coherent = device.advanced_blend_is_coherent();
 
-    let enable_clear_scissor = options
-        .enable_clear_scissor
-        .unwrap_or(device.get_capabilities().prefers_clear_scissor);
+    let enable_clear_scissor = device.resolve_clear_scissor(options.enable_clear_scissor);
 
     // 2048 is the minimum that the texture cache can work with.
     const MIN_TEXTURE_SIZE: i32 = 2048;
@@ -414,11 +409,8 @@ fn create_webrender_instance_with_device(
         max_internal_texture_size = max_internal_texture_size.min(internal_limit);
     }
 
-    if options.reject_software_rasterizer {
-        let renderer_name_lc = device.get_capabilities().renderer_name.to_lowercase();
-        if renderer_name_lc.contains("llvmpipe") || renderer_name_lc.contains("softpipe") || renderer_name_lc.contains("software rasterizer") {
+    if options.reject_software_rasterizer && device.is_software_rasterizer() {
         return Err(RendererError::SoftwareRasterizer);
-        }
     }
 
     let image_tiling_threshold = options.image_tiling_threshold
@@ -545,12 +537,12 @@ fn create_webrender_instance_with_device(
     // We want a better solution long-term, but for now this is a significant performance
     // improvement on HD4600 era GPUs, and shouldn't hurt performance in a noticeable
     // way on other systems running under ANGLE.
-    let is_software = device.get_capabilities().renderer_name.starts_with("Software");
+    let is_software = device.is_software_webrender();
 
     // On other GL platforms, like macOS or Android, creating many PBOs is very inefficient.
     // This is what happens in GPU cache updates in PBO path. Instead, we switch everything
     // except software GL to use the GPU scattered updates.
-    let supports_scatter = device.get_capabilities().supports_color_buffer_float;
+    let supports_scatter = device.supports_gpu_cache_scatter();
     let gpu_cache_texture = gpu_cache::GpuCacheTexture::new(
         &mut device,
         supports_scatter && !is_software,
@@ -560,7 +552,7 @@ fn create_webrender_instance_with_device(
 
     let backend_notifier = notifier.clone();
 
-    let clear_alpha_targets_with_quads = !device.get_capabilities().supports_alpha_target_clears;
+    let clear_alpha_targets_with_quads = device.requires_quad_target_clears();
 
     let prefer_subpixel_aa = options.enable_subpixel_aa && use_dual_source_blending;
     let default_font_render_mode = match (options.enable_aa, prefer_subpixel_aa) {
@@ -593,8 +585,8 @@ fn create_webrender_instance_with_device(
         gpu_supports_fast_clears: options.gpu_supports_fast_clears,
         gpu_supports_advanced_blend: ext_blend_equation_advanced,
         advanced_blend_is_coherent: ext_blend_equation_advanced_coherent,
-        gpu_supports_render_target_partial_update: device.get_capabilities().supports_render_target_partial_update,
-        external_images_require_copy: !device.get_capabilities().supports_image_external_essl3,
+        gpu_supports_render_target_partial_update: device.supports_render_target_partial_update(),
+        external_images_require_copy: device.external_images_require_copy(),
         batch_lookback_count: WebRenderOptions::BATCH_LOOKBACK_COUNT,
         background_color: Some(options.clear_color),
         compositor_kind,
@@ -655,7 +647,7 @@ fn create_webrender_instance_with_device(
     let glyph_rasterizer = GlyphRasterizer::new(
         workers,
         options.dedicated_glyph_raster_thread,
-        device.get_capabilities().supports_r8_texture_upload,
+        device.supports_r8_texture_upload(),
     );
 
     let (scene_builder_channels, scene_tx) =
@@ -777,17 +769,7 @@ fn create_webrender_instance_with_device(
         profiler::unregister_thread();
     })?;
 
-    let debug_method = if !options.enable_gpu_markers {
-        // The GPU markers are disabled.
-        GpuDebugMethod::None
-    } else if device.get_capabilities().supports_khr_debug {
-        GpuDebugMethod::KHR
-    } else if device.supports_extension("GL_EXT_debug_marker") {
-        GpuDebugMethod::MarkerEXT
-    } else {
-        warn!("asking to enable_gpu_markers but no supporting extension was found");
-        GpuDebugMethod::None
-    };
+    let debug_method = device.gpu_debug_method(options.enable_gpu_markers);
 
     info!("using {:?}", debug_method);
 
