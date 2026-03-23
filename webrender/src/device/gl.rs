@@ -4273,6 +4273,56 @@ impl super::RendererBackend {
     }
 }
 
+impl super::GpuDevice for Device {
+    type Texture = Texture;
+    type Program = Program;
+
+    fn begin_frame(&mut self) -> GpuFrameId {
+        Device::begin_frame(self)
+    }
+
+    fn end_frame(&mut self) {
+        Device::end_frame(self)
+    }
+
+    fn create_texture(
+        &mut self,
+        target: ImageBufferKind,
+        format: ImageFormat,
+        width: i32,
+        height: i32,
+        filter: TextureFilter,
+        render_target: Option<RenderTargetInfo>,
+    ) -> Self::Texture {
+        Device::create_texture(self, target, format, width, height, filter, render_target)
+    }
+
+    fn upload_texture_immediate(&mut self, texture: &Self::Texture, pixels: &[u8]) {
+        Device::upload_texture_immediate(self, texture, pixels)
+    }
+
+    fn delete_texture(&mut self, texture: Self::Texture) {
+        Device::delete_texture(self, texture)
+    }
+
+    fn draw_triangles_u16(&mut self, first_vertex: i32, index_count: i32) {
+        Device::draw_triangles_u16(self, first_vertex, index_count)
+    }
+
+    fn draw_triangles_u32(&mut self, first_vertex: i32, index_count: i32) {
+        Device::draw_triangles_u32(self, first_vertex, index_count)
+    }
+
+    fn read_pixels_into(
+        &mut self,
+        rect: FramebufferIntRect,
+        format: ImageFormat,
+        output: &mut [u8],
+    ) {
+        Device::read_pixels_into(self, rect, format, output)
+    }
+}
+
 pub struct FormatDesc {
     /// Format the texel data is internally stored in within a texture.
     pub internal: gl::GLenum,

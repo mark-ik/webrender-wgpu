@@ -74,7 +74,6 @@ pub struct RenderTargetInfo {
 
 // ── GpuDevice trait ───────────────────────────────────────────────────────────
 
-#[cfg(not(feature = "gl_backend"))]
 pub trait GpuDevice {
     type Texture;
     type Program;
