@@ -674,9 +674,9 @@ pub struct PendingShadersToPrecache {
 impl Shaders {
     pub fn new(
         device: &mut Device,
-        gl_type: GlType,
         options: &WebRenderOptions,
     ) -> Result<Self, ShaderError> {
+        let gl_type = device.gl_type();
         let use_dual_source_blending =
             device.get_capabilities().supports_dual_source_blending &&
             options.allow_dual_source_blending;
@@ -1085,7 +1085,7 @@ impl Shaders {
             &shader_list,
         )?;
 
-        let composite = CompositorShaders::new(device, gl_type, &mut loader)?;
+        let composite = CompositorShaders::new(device, &mut loader)?;
 
         Ok(Shaders {
             loader,
@@ -1355,9 +1355,9 @@ pub struct CompositorShaders {
 impl CompositorShaders {
     pub fn new(
         device: &mut Device,
-        gl_type: GlType,
         loader: &mut ShaderLoader,
     )  -> Result<Self, ShaderError>  {
+        let gl_type = device.gl_type();
         let mut yuv_clip_features = Vec::new();
         let mut yuv_fast_features = Vec::new();
         let mut rgba_features = Vec::new();
