@@ -350,6 +350,249 @@ fn strip_precision(s: &str) -> String {
     out
 }
 
+/// Tokens that begin control-flow statements or storage-qualifier declarations
+/// rather than user-defined function definitions.
+#[cfg(feature = "wgpu_backend")]
+const NOT_FUNC_START: &[&str] = &[
+    "if", "else", "for", "while", "do", "switch", "return",
+    "struct", "uniform", "in", "out", "varying", "attribute",
+    "flat", "smooth", "noperspective", "layout", "PER_INSTANCE",
+];
+
+/// Strip the trailing `// comment` portion of a GLSL source line.
+#[cfg(feature = "wgpu_backend")]
+#[inline]
+fn strip_glsl_comment(s: &str) -> &str {
+    match s.find("//") { Some(i) => s[..i].trim_end(), None => s }
+}
+
+/// For each function PROTOTYPE found in the assembled GLSL source
+/// (`rettype name(params);` at brace depth 0, single- or multi-line),
+/// find the corresponding DEFINITION (`rettype name(params) { … }`) that
+/// appears AFTER the prototype, and move it to the position of the prototype.
+///
+/// This gives naga's GLSL frontend the definition-before-use ordering it
+/// requires even though standard GLSL forward declarations (prototypes) are
+/// present.  WebRender uses this pattern in `brush.glsl` / `ps_quad.glsl` where
+/// a prototype is declared, `main()` calls it, and the specific shader (e.g.
+/// `brush_solid.glsl`) appended later provides the body.
+///
+/// Unmatched prototypes are left in place so naga can report a useful error.
+/// Definitions that have no prototype are left in their original position.
+///
+/// ## Algorithm
+///
+/// For each chunk of consecutive lines at brace-depth 0 whose first token is
+/// not a keyword (control flow, storage qualifier, etc.):
+///   - Track paren depth to identify the end of the parameter list.
+///   - If the parameter list ends with `;` (no body) → **prototype** chunk.
+///   - If the parameter list is followed by a `{ … }` body → **definition** chunk.
+///
+/// The paren-balanced accumulation correctly handles signatures spanning many
+/// lines (e.g. `void brush_vs(\n    param1,\n    param2\n);`).
+#[cfg(feature = "wgpu_backend")]
+fn move_definitions_before_prototypes(src: &str) -> String {
+    use std::collections::{HashMap, HashSet};
+
+    let lines: Vec<&str> = src.lines().collect();
+    let n = lines.len();
+
+    // ── Pass 1: collect prototype chunks and definition chunks ────────────────
+    // Each item: (function_name, start_line_incl, end_line_excl)
+    let mut prototypes: Vec<(String, usize, usize)> = Vec::new();
+    let mut defs:       Vec<(String, usize, usize)> = Vec::new();
+
+    // Brace depth for blocks that are NOT function definitions (struct, uniform
+    // block, etc.).  When this is > 0 we skip everything.
+    let mut block_depth: i32 = 0;
+    let mut i = 0;
+
+    while i < n {
+        let code = strip_glsl_comment(lines[i].trim());
+
+        if block_depth > 0 {
+            for c in code.chars() {
+                match c { '{' => block_depth += 1, '}' => block_depth -= 1, _ => {} }
+            }
+            i += 1;
+            continue;
+        }
+
+        // Skip blank lines, preprocessor directives, and comment lines.
+        if code.is_empty() || code.starts_with('#') || code.starts_with("//") {
+            i += 1;
+            continue;
+        }
+
+        let first = code.split_whitespace().next().unwrap_or("");
+
+        if NOT_FUNC_START.contains(&first) {
+            // Non-function declaration (struct, uniform block, etc.) — track braces.
+            for c in code.chars() {
+                match c { '{' => block_depth += 1, '}' => block_depth -= 1, _ => {} }
+            }
+            i += 1;
+            continue;
+        }
+
+        // Reject lines without `(` — variable declarations without initializer,
+        // `return` without parens, closing `}` of a block, etc.
+        if !code.contains('(') {
+            for c in code.chars() {
+                match c { '{' => block_depth += 1, '}' => block_depth -= 1, _ => {} }
+            }
+            i += 1;
+            continue;
+        }
+
+        // Reject assignment statements: `=` appearing before the first `(`.
+        // These are variable declarations with initializer (`Type v = fn(…);`),
+        // not function signatures.
+        {
+            let paren = code.find('(').unwrap();
+            if code[..paren].contains('=') {
+                for c in code.chars() {
+                    match c { '{' => block_depth += 1, '}' => block_depth -= 1, _ => {} }
+                }
+                i += 1;
+                continue;
+            }
+        }
+
+        // ── Paren-balanced accumulation ──────────────────────────────────────
+        // Accumulate lines starting at `i` until we classify the chunk as a
+        // prototype (ends with `;` after balanced parens) or definition (has a
+        // `{ … }` body after balanced parens).
+        let chunk_start = i;
+        let mut paren_depth: i32 = 0;
+        let mut brace_depth: i32 = 0;
+        let mut sig_closed  = false;  // paren_depth returned to 0
+        let mut body_open   = false;  // `{` seen after sig_closed
+        let mut j = i;
+
+        'accum: while j < n && (j - chunk_start) < 200 {
+            let lc = strip_glsl_comment(lines[j].trim());
+            for c in lc.chars() {
+                match c {
+                    '(' => paren_depth += 1,
+                    ')' => {
+                        paren_depth -= 1;
+                        if paren_depth <= 0 { paren_depth = 0; sig_closed = true; }
+                    }
+                    '{' if sig_closed => {
+                        brace_depth += 1;
+                        body_open = true;
+                    }
+                    '}' if body_open => {
+                        brace_depth -= 1;
+                        if brace_depth <= 0 {
+                            j += 1;
+                            break 'accum;  // definition body complete
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            j += 1;
+            // Prototype: signature balanced and this line ends the statement.
+            if sig_closed && !body_open && (lc.ends_with(';') || lc.ends_with(");")) {
+                break 'accum;
+            }
+        }
+
+        if !sig_closed {
+            // Could not parse — treat as unknown, advance by 1.
+            for c in code.chars() {
+                match c { '{' => block_depth += 1, '}' => block_depth -= 1, _ => {} }
+            }
+            i += 1;
+            continue;
+        }
+
+        // Extract function name from the first line of the chunk.
+        let sig_first = strip_glsl_comment(lines[chunk_start].trim());
+        let name_opt = sig_first.find('(')
+            .map(|p| sig_first[..p].trim_end())
+            .and_then(|before| before.split_whitespace().last())
+            .map(|s| s.to_string());
+
+        if let Some(name) = name_opt {
+            if body_open && brace_depth <= 0 {
+                defs.push((name, chunk_start, j));
+            } else if !body_open {
+                prototypes.push((name, chunk_start, j));
+            }
+        }
+
+        i = j;
+    }
+
+    // ── Pass 2: build move table ──────────────────────────────────────────────
+    // For each prototype, find the LAST definition for that name that appears
+    // AFTER the prototype.  Only consider definitions that come after.
+    let mut def_by_name: HashMap<String, (usize, usize)> = HashMap::new();
+    for (name, start, end) in &defs {
+        // Last definition with that name wins (HashMap insert overwrites).
+        def_by_name.insert(name.clone(), (*start, *end));
+    }
+
+    // Collect names where we'll actually do a move.
+    let names_to_move: Vec<String> = prototypes
+        .iter()
+        .filter_map(|(name, ps, _pe)| {
+            def_by_name.get(name.as_str())
+                .filter(|(ds, _)| ds > ps)
+                .map(|_| name.clone())
+        })
+        .collect();
+
+    if names_to_move.is_empty() {
+        return src.to_string();
+    }
+
+    // Build skip sets and replacement map.
+    let mut skip_lines: HashSet<usize> = HashSet::new();
+    // Map: prototype_start_line → (def_start, def_end, proto_end)
+    let mut replacements: HashMap<usize, (usize, usize, usize)> = HashMap::new();
+
+    for name in &names_to_move {
+        let (ps, pe) = prototypes.iter()
+            .find(|(n, _, _)| n == name)
+            .map(|(_, s, e)| (*s, *e))
+            .unwrap();
+        let (ds, de) = def_by_name[name.as_str()];
+
+        // Skip all prototype lines (they get replaced) and definition
+        // lines (they get moved to the prototype position).
+        for li in ps..pe { skip_lines.insert(li); }
+        for li in ds..de { skip_lines.insert(li); }
+
+        replacements.insert(ps, (ds, de, pe));
+    }
+
+    // ── Pass 3: reconstruct ──────────────────────────────────────────────────
+    let mut result = String::with_capacity(src.len() + 512);
+    let mut li = 0;
+    while li < n {
+        if let Some(&(ds, de, pe)) = replacements.get(&li) {
+            // Emit the definition body in place of the prototype.
+            for l in ds..de {
+                result.push_str(lines[l]);
+                result.push('\n');
+            }
+            // Jump past the prototype range.
+            li = pe;
+            continue;
+        }
+        if !skip_lines.contains(&li) {
+            result.push_str(lines[li]);
+            result.push('\n');
+        }
+        li += 1;
+    }
+    result
+}
+
 /// Scan the leading tokens of a GLSL declaration line and return the first
 /// GLSL storage/interface qualifier found.
 ///
@@ -562,6 +805,20 @@ fn preprocess_for_naga(src: &str, stage: naga::ShaderStage) -> String {
     // invalid in GLSL 4.50 core.  They can appear inside function bodies and
     // struct/uniform blocks where the per-line Pass 1 handler doesn't reach.
     result = strip_precision(&result);
+
+    // NOTE: move_definitions_before_prototypes() was tested here (Stage 4c) but
+    // had to be deactivated.  WR's brush / ps_quad ForwardDependency pattern
+    // involves definitions that depend on struct types defined in the same
+    // "specific" shader file (e.g. SolidBrush in brush_solid.glsl).  Moving
+    // only the function body — without also moving the struct and helper
+    // functions it depends on — produces UnknownVariable errors.
+    //
+    // Fixing ForwardDependency correctly requires either:
+    //   a) Full topological sort of all global declarations, OR
+    //   b) Restructuring build_shader_strings so "specific" shader content
+    //      (struct + helper_fn + brush_vs body) is assembled BEFORE the driver
+    //      file's brush_shader_main_vs / main rather than after.
+    // That work is deferred to a later stage.
 
     result
 }
