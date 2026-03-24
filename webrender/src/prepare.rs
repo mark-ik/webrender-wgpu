@@ -7,15 +7,15 @@
 //! TODO: document this!
 
 use api::{ColorF, DebugFlags};
-use api::{BoxShadowClipMode, BorderStyle, ClipMode};
+use api::{BoxShadowClipMode, ClipMode};
 use api::units::*;
 use euclid::Scale;
 use smallvec::SmallVec;
 use crate::composite::CompositorSurfaceKind;
 use crate::command_buffer::{CommandBufferIndex, PrimitiveCommand};
 use crate::image_tiling::{self, Repetition};
-use crate::border::{get_max_scale_for_border, build_border_instances};
 use crate::clip::{ClipStore, ClipNodeRange};
+use crate::render_task_graph::RenderTaskId;
 use crate::renderer::{GpuBufferAddress, GpuBufferBuilderF, GpuBufferWriterF, GpuBufferDataF};
 use crate::spatial_tree::{SpatialNodeIndex, SpatialTree};
 use crate::clip::{ClipDataStore, ClipNodeFlags, ClipChainInstance, ClipItemKind};
@@ -29,12 +29,8 @@ use crate::prim_store::*;
 use crate::quad::{self, QuadTransformState};
 use crate::prim_store::gradient::GradientGpuBlockBuilder;
 use crate::render_backend::DataStores;
-use crate::render_task_graph::RenderTaskId;
-use crate::render_task_cache::RenderTaskCacheKeyKind;
-use crate::render_task_cache::{RenderTaskCacheKey, to_cache_size, RenderTaskParent};
 use crate::render_task::{EmptyTask, RenderTask, RenderTaskKind};
 use crate::segment::SegmentBuilder;
-use crate::util::clamp_to_scale_factor;
 use crate::visibility::{compute_conservative_visible_rect, PrimitiveVisibility, VisibilityState};
 
 
@@ -453,82 +449,22 @@ fn prepare_interned_prim_for_render(
             let common_data = &mut prim_data.common;
             let border_data = &mut prim_data.kind;
 
-            common_data.may_need_repetition =
-                matches!(border_data.border.top.style, BorderStyle::Dotted | BorderStyle::Dashed) ||
-                matches!(border_data.border.right.style, BorderStyle::Dotted | BorderStyle::Dashed) ||
-                matches!(border_data.border.bottom.style, BorderStyle::Dotted | BorderStyle::Dashed) ||
-                matches!(border_data.border.left.style, BorderStyle::Dotted | BorderStyle::Dashed);
+            border_data.write_brush_gpu_blocks(common_data, frame_state);
 
-
-            // Update the template this instance references, which may refresh the GPU
-            // cache with any shared template data.
-            border_data.update(common_data, frame_state);
-
-            // TODO(gw): For now, the scale factors to rasterize borders at are
-            //           based on the true world transform of the primitive. When
-            //           raster roots with local scale are supported in future,
-            //           that will need to be accounted for here.
-            let scale = frame_context
-                .spatial_tree
-                .get_world_transform(prim_spatial_node_index)
-                .scale_factors();
-
-            // Scale factors are normalized to a power of 2 to reduce the number of
-            // resolution changes.
-            // For frames with a changing scale transform round scale factors up to
-            // nearest power-of-2 boundary so that we don't keep having to redraw
-            // the content as it scales up and down. Rounding up to nearest
-            // power-of-2 boundary ensures we never scale up, only down --- avoiding
-            // jaggies. It also ensures we never scale down by more than a factor of
-            // 2, avoiding bad downscaling quality.
-            let scale_width = clamp_to_scale_factor(scale.0, false);
-            let scale_height = clamp_to_scale_factor(scale.1, false);
-            // Pick the maximum dimension as scale
-            let world_scale = LayoutToWorldScale::new(scale_width.max(scale_height));
-            let mut scale = world_scale * device_pixel_scale;
-            let max_scale = get_max_scale_for_border(border_data);
-            scale.0 = scale.0.min(max_scale.0);
-
-            // For each edge and corner, request the render task by content key
-            // from the render task cache. This ensures that the render task for
-            // this segment will be available for batching later in the frame.
             let mut handles: SmallVec<[RenderTaskId; 8]> = SmallVec::new();
 
-            for segment in &border_data.border_segments {
-                // Update the cache key device size based on requested scale.
-                let cache_size = to_cache_size(segment.local_task_size, &mut scale);
-                let cache_key = RenderTaskCacheKey {
-                    kind: RenderTaskCacheKeyKind::BorderSegment(segment.cache_key.clone()),
-                    origin: DeviceIntPoint::zero(),
-                    size: cache_size,
-                };
+            border_data.update(
+                common_data,
+                prim_spatial_node_index,
+                device_pixel_scale,
+                frame_context,
+                frame_state,
+                &mut |task_id| {
+                    handles.push(task_id);
+                }
+            );
 
-                handles.push(frame_state.resource_cache.request_render_task(
-                    Some(cache_key),
-                    false,          // TODO(gw): We don't calculate opacity for borders yet!
-                    RenderTaskParent::Surface,
-                    &mut frame_state.frame_gpu_data.f32,
-                    frame_state.rg_builder,
-                    &mut frame_state.surface_builder,
-                    &mut |rg_builder, _| {
-                        rg_builder.add().init(RenderTask::new_dynamic(
-                            cache_size,
-                            RenderTaskKind::new_border_segment(
-                                build_border_instances(
-                                    &segment.cache_key,
-                                    cache_size,
-                                    &border_data.border,
-                                    scale,
-                                )
-                            ),
-                        ))
-                    }
-                ));
-            }
-
-            *render_task_ids = scratch
-                .border_cache_handles
-                .extend(handles);
+            *render_task_ids = scratch.border_cache_handles.extend(handles)
         }
         PrimitiveInstanceKind::ImageBorder { data_handle, .. } => {
             profile_scope!("ImageBorder");
