@@ -494,7 +494,7 @@ fn create_webrender_instance_with_device(
     // This is what happens in GPU cache updates in PBO path. Instead, we switch everything
     // except software GL to use the GPU scattered updates.
     let supports_scatter = device.get_capabilities().supports_color_buffer_float;
-    let gpu_cache_texture = gpu_cache::GpuCacheTexture::new(
+    let gpu_cache_texture = gpu_cache::RendererGpuCache::new_gl(
         &mut device,
         supports_scatter && !is_software,
     )?;

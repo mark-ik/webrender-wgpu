@@ -78,9 +78,8 @@ impl CacheRow {
     }
 }
 
-/// The bus over which CPU and GPU versions of the GPU cache
-/// get synchronized.
-enum GpuCacheBus {
+/// Backend-specific GPU cache update machinery.
+enum GpuCacheBackend {
     /// PBO-based updates, currently operate on a row granularity.
     /// Therefore, are subject to fragmentation issues.
     PixelBuffer {
@@ -103,15 +102,19 @@ enum GpuCacheBus {
     },
 }
 
-/// The device-specific representation of the cache texture in gpu_cache.rs
-pub struct GpuCacheTexture {
+/// Shared texture storage for the GPU cache, independent of update backend.
+struct GpuCacheTextureStorage {
     texture: Option<Texture>,
-    bus: GpuCacheBus,
 }
 
-impl GpuCacheTexture {
+impl GpuCacheTextureStorage {
     /// Ensures that we have an appropriately-sized texture.
-    fn ensure_texture<D: GpuCacheStorageDevice>(&mut self, device: &mut D, height: i32) {
+    fn ensure_texture<D: GpuCacheStorageDevice>(
+        &mut self,
+        backend: &mut GpuCacheBackend,
+        device: &mut D,
+        height: i32,
+    ) {
         // If we already have a texture that works, we're done.
         if self.texture.as_ref().map_or(false, |t| t.get_dimensions().height >= height) {
             if GPU_CACHE_RESIZE_TEST {
@@ -135,7 +138,7 @@ impl GpuCacheTexture {
         // we simply re-upload the entire contents rather than copying upon resize.
         let supports_copy_image_sub_data = device.supports_copy_image_sub_data();
         let supports_color_buffer_float = device.supports_color_buffer_float();
-        let rt_info = if matches!(self.bus, GpuCacheBus::PixelBuffer { .. })
+        let rt_info = if matches!(backend, GpuCacheBackend::PixelBuffer { .. })
             && (supports_copy_image_sub_data || !supports_color_buffer_float)
         {
             None
@@ -155,13 +158,13 @@ impl GpuCacheTexture {
         if let Some(blit_source) = blit_source {
             if !supports_copy_image_sub_data && !supports_color_buffer_float {
                 // Cannot copy texture, so must re-upload everything.
-                match self.bus {
-                    GpuCacheBus::PixelBuffer { ref mut rows } => {
+                match backend {
+                    GpuCacheBackend::PixelBuffer { ref mut rows } => {
                         for row in rows {
                             row.add_dirty(0, super::MAX_VERTEX_TEXTURE_WIDTH);
                         }
                     }
-                    GpuCacheBus::Scatter { .. } => {
+                    GpuCacheBackend::Scatter { .. } => {
                         panic!("Texture must be copyable to use scatter GPU cache bus method");
                     }
                 }
@@ -173,6 +176,46 @@ impl GpuCacheTexture {
 
         self.texture = Some(texture);
     }
+
+    fn take_texture(&mut self) -> Option<Texture> {
+        self.texture.take()
+    }
+
+    fn get_height(&self) -> i32 {
+        self.texture.as_ref().map_or(0, |t| t.get_dimensions().height)
+    }
+
+    fn report_memory_to(&self, report: &mut MemoryReport) {
+        report.gpu_cache_textures += self.texture.as_ref().map_or(0, |t| t.size_in_bytes());
+    }
+
+    fn gpu_size_in_bytes(&self) -> usize {
+        match &self.texture {
+            Some(tex) => tex.size_in_bytes(),
+            None => 0,
+        }
+    }
+}
+
+/// The device-specific representation of the GPU cache in gpu_cache.rs
+pub struct GpuCacheTexture {
+    storage: GpuCacheTextureStorage,
+    backend: GpuCacheBackend,
+}
+
+#[cfg(feature = "wgpu_backend")]
+#[allow(dead_code)]
+pub struct WgpuGpuCacheTexture;
+
+#[cfg_attr(feature = "wgpu_backend", allow(dead_code))]
+pub enum RendererGpuCache {
+    Gl(GpuCacheTexture),
+    #[cfg(feature = "wgpu_backend")]
+    #[allow(dead_code)]
+    Wgpu(WgpuGpuCacheTexture),
+}
+
+impl GpuCacheTexture {
 
     pub fn new(device: &mut Device, use_scatter: bool) -> Result<Self, super::RendererError> {
         use super::desc::GPU_CACHE_UPDATE;
@@ -195,7 +238,7 @@ impl GpuCacheTexture {
                 buf_position.stream_with(&GPU_CACHE_UPDATE.vertex_attributes[0..1]),
                 buf_value   .stream_with(&GPU_CACHE_UPDATE.vertex_attributes[1..2]),
             ]);
-            GpuCacheBus::Scatter {
+            GpuCacheBackend::Scatter {
                 program,
                 vao,
                 buf_position,
@@ -203,22 +246,22 @@ impl GpuCacheTexture {
                 count: 0,
             }
         } else {
-            GpuCacheBus::PixelBuffer {
+            GpuCacheBackend::PixelBuffer {
                 rows: Vec::new(),
             }
         };
 
         Ok(GpuCacheTexture {
-            texture: None,
-            bus,
+            storage: GpuCacheTextureStorage { texture: None },
+            backend: bus,
         })
     }
 
     pub fn deinit(mut self, device: &mut Device) {
-        if let Some(t) = self.texture.take() {
+        if let Some(t) = self.storage.take_texture() {
             device.delete_texture(t);
         }
-        if let GpuCacheBus::Scatter { program, vao, buf_position, buf_value, .. } = self.bus {
+        if let GpuCacheBackend::Scatter { program, vao, buf_position, buf_value, .. } = self.backend {
             device.delete_program(program);
             device.delete_custom_vao(vao);
             device.delete_vbo(buf_position);
@@ -227,12 +270,12 @@ impl GpuCacheTexture {
     }
 
     pub fn get_height(&self) -> i32 {
-        self.texture.as_ref().map_or(0, |t| t.get_dimensions().height)
+        self.storage.get_height()
     }
 
     #[cfg(feature = "capture")]
     pub fn get_texture(&self) -> &Texture {
-        self.texture.as_ref().unwrap()
+        self.storage.texture.as_ref().unwrap()
     }
 
     fn prepare_for_updates(
@@ -241,10 +284,10 @@ impl GpuCacheTexture {
         total_block_count: usize,
         max_height: i32,
     ) {
-        self.ensure_texture(device, max_height);
-        match self.bus {
-            GpuCacheBus::PixelBuffer { .. } => {},
-            GpuCacheBus::Scatter {
+        self.storage.ensure_texture(&mut self.backend, device, max_height);
+        match self.backend {
+            GpuCacheBackend::PixelBuffer { .. } => {},
+            GpuCacheBackend::Scatter {
                 ref mut buf_position,
                 ref mut buf_value,
                 ref mut count,
@@ -260,22 +303,22 @@ impl GpuCacheTexture {
     }
 
     pub fn invalidate(&mut self) {
-        match self.bus {
-            GpuCacheBus::PixelBuffer { ref mut rows, .. } => {
+        match self.backend {
+            GpuCacheBackend::PixelBuffer { ref mut rows, .. } => {
                 info!("Invalidating GPU caches");
                 for row in rows {
                     row.add_dirty(0, super::MAX_VERTEX_TEXTURE_WIDTH);
                 }
             }
-            GpuCacheBus::Scatter { .. } => {
+            GpuCacheBackend::Scatter { .. } => {
                 warn!("Unable to invalidate scattered GPU cache");
             }
         }
     }
 
     fn update(&mut self, device: &mut Device, updates: &GpuCacheUpdateList) {
-        match self.bus {
-            GpuCacheBus::PixelBuffer { ref mut rows, .. } => {
+        match self.backend {
+            GpuCacheBackend::PixelBuffer { ref mut rows, .. } => {
                 for update in &updates.updates {
                     match *update {
                         GpuCacheUpdate::Copy {
@@ -305,7 +348,7 @@ impl GpuCacheTexture {
                     }
                 }
             }
-            GpuCacheBus::Scatter {
+            GpuCacheBackend::Scatter {
                 ref buf_position,
                 ref buf_value,
                 ref mut count,
@@ -315,7 +358,7 @@ impl GpuCacheTexture {
                 // Unused positions will be left as 0xFFFF, which translates to
                 // (1.0, 1.0) in the vertex output position and gets culled out
                 let mut position_data = vec![[!0u16; 2]; updates.blocks.len()];
-                let size = self.texture.as_ref().unwrap().get_dimensions().to_usize();
+                let size = self.storage.texture.as_ref().unwrap().get_dimensions().to_usize();
 
                 for update in &updates.updates {
                     match *update {
@@ -342,9 +385,9 @@ impl GpuCacheTexture {
     }
 
     fn flush(&mut self, device: &mut Device, pbo_pool: &mut UploadPBOPool) -> usize {
-        let texture = self.texture.as_ref().unwrap();
-        match self.bus {
-            GpuCacheBus::PixelBuffer { ref mut rows } => {
+        let texture = self.storage.texture.as_ref().unwrap();
+        match self.backend {
+            GpuCacheBackend::PixelBuffer { ref mut rows } => {
                 let rows_dirty = rows
                     .iter()
                     .filter(|row| row.is_dirty())
@@ -375,7 +418,7 @@ impl GpuCacheTexture {
 
                 rows_dirty
             }
-            GpuCacheBus::Scatter { ref program, ref vao, count, .. } => {
+            GpuCacheBackend::Scatter { ref program, ref vao, count, .. } => {
                 device.disable_depth();
                 device.set_blend(false);
                 device.bind_program(program);
@@ -394,16 +437,16 @@ impl GpuCacheTexture {
 
     #[cfg(feature = "replay")]
     pub fn remove_texture(&mut self, device: &mut Device) {
-        if let Some(t) = self.texture.take() {
+        if let Some(t) = self.storage.take_texture() {
             device.delete_texture(t);
         }
     }
 
     #[cfg(feature = "replay")]
     pub fn load_from_data(&mut self, texture: Texture, data: Vec<u8>) {
-        assert!(self.texture.is_none());
-        match self.bus {
-            GpuCacheBus::PixelBuffer { ref mut rows, .. } => {
+        assert!(self.storage.texture.is_none());
+        match self.backend {
+            GpuCacheBackend::PixelBuffer { ref mut rows, .. } => {
                 let dim = texture.get_dimensions();
                 let blocks = unsafe {
                     std::slice::from_raw_parts(
@@ -420,28 +463,113 @@ impl GpuCacheTexture {
                     row.cpu_blocks.copy_from_slice(chunk);
                 }
             }
-            GpuCacheBus::Scatter { .. } => {}
+            GpuCacheBackend::Scatter { .. } => {}
         }
-        self.texture = Some(texture);
+        self.storage.texture = Some(texture);
     }
 
     pub fn report_memory_to(&self, report: &mut MemoryReport, size_op_funs: &MallocSizeOfOps) {
-        if let GpuCacheBus::PixelBuffer{ref rows, ..} = self.bus {
+        if let GpuCacheBackend::PixelBuffer{ref rows, ..} = self.backend {
             for row in rows.iter() {
                 report.gpu_cache_cpu_mirror += unsafe { (size_op_funs.size_of_op)(row.cpu_blocks.as_ptr() as *const _) };
             }
         }
 
-        // GPU cache GPU memory.
-        report.gpu_cache_textures +=
-            self.texture.as_ref().map_or(0, |t| t.size_in_bytes());
+        self.storage.report_memory_to(report);
     }
 
     pub fn gpu_size_in_bytes(&self) -> usize {
-        match &self.texture {
-            Some(tex) => tex.size_in_bytes(),
-            None => 0,
+        self.storage.gpu_size_in_bytes()
+    }
+}
+
+impl RendererGpuCache {
+    pub fn new_gl(
+        device: &mut Device,
+        use_scatter: bool,
+    ) -> Result<Self, super::RendererError> {
+        Ok(Self::Gl(GpuCacheTexture::new(device, use_scatter)?))
+    }
+
+    fn gl(&self) -> &GpuCacheTexture {
+        match self {
+            Self::Gl(cache) => cache,
+            #[cfg(feature = "wgpu_backend")]
+            Self::Wgpu(..) => unreachable!("wgpu gpu cache backend is not wired yet"),
         }
+    }
+
+    fn gl_mut(&mut self) -> &mut GpuCacheTexture {
+        match self {
+            Self::Gl(cache) => cache,
+            #[cfg(feature = "wgpu_backend")]
+            Self::Wgpu(..) => unreachable!("wgpu gpu cache backend is not wired yet"),
+        }
+    }
+
+    pub fn uses_scatter_updates(&self) -> bool {
+        matches!(self.gl().backend, GpuCacheBackend::Scatter { .. })
+    }
+
+    fn texture(&self) -> &Texture {
+        self.gl().storage.texture.as_ref().unwrap()
+    }
+
+    pub fn get_height(&self) -> i32 {
+        self.gl().get_height()
+    }
+
+    #[cfg(feature = "capture")]
+    pub fn get_texture(&self) -> &Texture {
+        self.texture()
+    }
+
+    fn prepare_for_updates(
+        &mut self,
+        device: &mut Device,
+        total_block_count: usize,
+        max_height: i32,
+    ) {
+        self.gl_mut()
+            .prepare_for_updates(device, total_block_count, max_height);
+    }
+
+    pub fn invalidate(&mut self) {
+        self.gl_mut().invalidate();
+    }
+
+    fn update(&mut self, device: &mut Device, updates: &GpuCacheUpdateList) {
+        self.gl_mut().update(device, updates);
+    }
+
+    fn flush(&mut self, device: &mut Device, pbo_pool: &mut UploadPBOPool) -> usize {
+        self.gl_mut().flush(device, pbo_pool)
+    }
+
+    pub fn deinit(self, device: &mut Device) {
+        match self {
+            Self::Gl(cache) => cache.deinit(device),
+            #[cfg(feature = "wgpu_backend")]
+            Self::Wgpu(..) => {}
+        }
+    }
+
+    #[cfg(feature = "replay")]
+    pub fn remove_texture(&mut self, device: &mut Device) {
+        self.gl_mut().remove_texture(device);
+    }
+
+    #[cfg(feature = "replay")]
+    pub fn load_from_data(&mut self, texture: Texture, data: Vec<u8>) {
+        self.gl_mut().load_from_data(texture, data);
+    }
+
+    pub fn report_memory_to(&self, report: &mut MemoryReport, size_op_funs: &MallocSizeOfOps) {
+        self.gl().report_memory_to(report, size_op_funs);
+    }
+
+    pub fn gpu_size_in_bytes(&self) -> usize {
+        self.gl().gpu_size_in_bytes()
     }
 }
 
@@ -511,9 +639,8 @@ impl super::Renderer {
         self.profile.start_time(profiler::GPU_CACHE_PREPARE_TIME);
 
         if self.pending_gpu_cache_clear {
-            let use_scatter =
-                matches!(self.gpu_cache_texture.bus, GpuCacheBus::Scatter { .. });
-            let new_cache = match GpuCacheTexture::new(&mut self.device, use_scatter) {
+            let use_scatter = self.gpu_cache_texture.uses_scatter_updates();
+            let new_cache = match RendererGpuCache::new_gl(&mut self.device, use_scatter) {
                 Ok(cache) => cache,
                 Err(err) => {
                     self.profile.end_time(profiler::GPU_CACHE_PREPARE_TIME);
@@ -534,7 +661,7 @@ impl super::Renderer {
         // so we need to bind it here.
         self.device.bind_texture(
             super::TextureSampler::GpuCache,
-            self.gpu_cache_texture.texture.as_ref().unwrap(),
+            self.gpu_cache_texture.texture(),
             Swizzle::default(),
         );
 
@@ -544,7 +671,7 @@ impl super::Renderer {
     }
 
     pub fn read_gpu_cache(&mut self) -> (DeviceIntSize, Vec<u8>) {
-        let texture = self.gpu_cache_texture.texture.as_ref().unwrap();
+        let texture = self.gpu_cache_texture.texture();
         let size = device_size_as_framebuffer_size(texture.get_dimensions());
         let mut texels = vec![0; (size.width * size.height * 16) as usize];
         self.device.begin_frame();

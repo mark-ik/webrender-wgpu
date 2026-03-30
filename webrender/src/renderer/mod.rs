@@ -891,7 +891,7 @@ pub struct Renderer {
     pub gpu_profiler: GpuProfiler,
     vaos: vertex::RendererVAOs,
 
-    gpu_cache_texture: gpu_cache::GpuCacheTexture,
+    gpu_cache_texture: gpu_cache::RendererGpuCache,
     vertex_data_textures: Vec<vertex::VertexDataTextures>,
     current_vertex_data_textures: usize,
 
