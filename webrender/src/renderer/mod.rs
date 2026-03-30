@@ -3361,150 +3361,187 @@ impl Renderer {
 
         if !alpha_batch_container.opaque_batches.is_empty()
             && !self.debug_flags.contains(DebugFlags::DISABLE_OPAQUE_PASS) {
-            let _gl = self.gpu_profiler.start_marker("opaque batches");
-            let opaque_sampler = self.gpu_profiler.start_sampler(GPU_SAMPLER_TAG_OPAQUE);
-            self.set_blend(false, framebuffer_kind);
-            //Note: depth equality is needed for split planes
-            self.device.enable_depth(DepthFunction::LessEqual);
-            self.device.enable_depth_write();
-
-            // Draw opaque batches front-to-back for maximum
-            // z-buffer efficiency!
-            for batch in alpha_batch_container
-                .opaque_batches
-                .iter()
-                .rev()
-                {
-                    if should_skip_batch(&batch.key.kind, self.debug_flags) {
-                        continue;
-                    }
-
-                    self.shaders.borrow_mut()
-                        .get(&batch.key, batch.features, self.debug_flags, &self.device)
-                        .bind(
-                            &mut self.device, projection, None,
-                            &mut self.renderer_errors,
-                            &mut self.profile,
-                        );
-
-                    let _timer = self.gpu_profiler.start_timer(batch.key.kind.sampler_tag());
-                    self.draw_instanced_batch(
-                        &batch.instances,
-                        VertexArrayKind::Primitive,
-                        &batch.key.textures,
-                        stats
-                    );
-                }
-
-            self.device.disable_depth_write();
-            self.gpu_profiler.finish_sampler(opaque_sampler);
+            self.draw_opaque_batches(
+                alpha_batch_container,
+                framebuffer_kind,
+                projection,
+                stats,
+            );
         } else {
             self.device.disable_depth();
         }
 
         if !alpha_batch_container.alpha_batches.is_empty()
             && !self.debug_flags.contains(DebugFlags::DISABLE_ALPHA_PASS) {
-            let _gl = self.gpu_profiler.start_marker("alpha batches");
-            let transparent_sampler = self.gpu_profiler.start_sampler(GPU_SAMPLER_TAG_TRANSPARENT);
-            self.set_blend(true, framebuffer_kind);
-
-            let mut prev_blend_mode = BlendMode::None;
-            let shaders_rc = self.shaders.clone();
-
-            for batch in &alpha_batch_container.alpha_batches {
-                if should_skip_batch(&batch.key.kind, self.debug_flags) {
-                    continue;
-                }
-
-                let mut shaders = shaders_rc.borrow_mut();
-                let shader = shaders.get(
-                    &batch.key,
-                    batch.features | BatchFeatures::ALPHA_PASS,
-                    self.debug_flags,
-                    &self.device,
-                );
-
-                if batch.key.blend_mode != prev_blend_mode {
-                    match batch.key.blend_mode {
-                        _ if self.debug_flags.contains(DebugFlags::SHOW_OVERDRAW) &&
-                            framebuffer_kind == FramebufferKind::Main => {
-                            self.device.set_blend_mode_show_overdraw();
-                        }
-                        BlendMode::None => {
-                            unreachable!("bug: opaque blend in alpha pass");
-                        }
-                        BlendMode::Alpha => {
-                            self.device.set_blend_mode_alpha();
-                        }
-                        BlendMode::PremultipliedAlpha => {
-                            self.device.set_blend_mode_premultiplied_alpha();
-                        }
-                        BlendMode::PremultipliedDestOut => {
-                            self.device.set_blend_mode_premultiplied_dest_out();
-                        }
-                        BlendMode::SubpixelDualSource => {
-                            self.device.set_blend_mode_subpixel_dual_source();
-                        }
-                        BlendMode::Advanced(mode) => {
-                            if self.enable_advanced_blend_barriers {
-                                self.device.blend_barrier_advanced();
-                            }
-                            self.device.set_blend_mode_advanced(mode);
-                        }
-                        BlendMode::MultiplyDualSource => {
-                            self.device.set_blend_mode_multiply_dual_source();
-                        }
-                        BlendMode::Screen => {
-                            self.device.set_blend_mode_screen();
-                        }
-                        BlendMode::Exclusion => {
-                            self.device.set_blend_mode_exclusion();
-                        }
-                        BlendMode::PlusLighter => {
-                            self.device.set_blend_mode_plus_lighter();
-                        }
-                    }
-                    prev_blend_mode = batch.key.blend_mode;
-                }
-
-                // Handle special case readback for composites.
-                if let BatchKind::Brush(BrushBatchKind::MixBlend { task_id, backdrop_id }) = batch.key.kind {
-                    // composites can't be grouped together because
-                    // they may overlap and affect each other.
-                    debug_assert_eq!(batch.instances.len(), 1);
-                    self.handle_readback_composite(
-                        draw_target,
-                        uses_scissor,
-                        &render_tasks[task_id],
-                        &render_tasks[backdrop_id],
-                    );
-                }
-
-                let _timer = self.gpu_profiler.start_timer(batch.key.kind.sampler_tag());
-                shader.bind(
-                    &mut self.device,
-                    projection,
-                    None,
-                    &mut self.renderer_errors,
-                    &mut self.profile,
-                );
-
-                self.draw_instanced_batch(
-                    &batch.instances,
-                    VertexArrayKind::Primitive,
-                    &batch.key.textures,
-                    stats
-                );
-            }
-
+            self.draw_transparent_batches(
+                alpha_batch_container,
+                draw_target,
+                uses_scissor,
+                framebuffer_kind,
+                projection,
+                render_tasks,
+                stats,
+            );
             self.set_blend(false, framebuffer_kind);
-            self.gpu_profiler.finish_sampler(transparent_sampler);
         }
 
         self.device.disable_depth();
         if uses_scissor {
             self.device.disable_scissor();
         }
+    }
+
+    fn draw_opaque_batches(
+        &mut self,
+        alpha_batch_container: &AlphaBatchContainer,
+        framebuffer_kind: FramebufferKind,
+        projection: &default::Transform3D<f32>,
+        stats: &mut RendererStats,
+    ) {
+        let _gl = self.gpu_profiler.start_marker("opaque batches");
+        let opaque_sampler = self.gpu_profiler.start_sampler(GPU_SAMPLER_TAG_OPAQUE);
+        self.set_blend(false, framebuffer_kind);
+        self.device.enable_depth(DepthFunction::LessEqual);
+        self.device.enable_depth_write();
+
+        for batch in alpha_batch_container.opaque_batches.iter().rev() {
+            if should_skip_batch(&batch.key.kind, self.debug_flags) {
+                continue;
+            }
+
+            self.shaders.borrow_mut()
+                .get(&batch.key, batch.features, self.debug_flags, &self.device)
+                .bind(
+                    &mut self.device, projection, None,
+                    &mut self.renderer_errors,
+                    &mut self.profile,
+                );
+
+            let _timer = self.gpu_profiler.start_timer(batch.key.kind.sampler_tag());
+            self.draw_instanced_batch(
+                &batch.instances,
+                VertexArrayKind::Primitive,
+                &batch.key.textures,
+                stats
+            );
+        }
+
+        self.device.disable_depth_write();
+        self.gpu_profiler.finish_sampler(opaque_sampler);
+    }
+
+    fn apply_alpha_batch_blend_mode(
+        &mut self,
+        blend_mode: BlendMode,
+        framebuffer_kind: FramebufferKind,
+    ) {
+        match blend_mode {
+            _ if self.debug_flags.contains(DebugFlags::SHOW_OVERDRAW) &&
+                framebuffer_kind == FramebufferKind::Main => {
+                self.device.set_blend_mode_show_overdraw();
+            }
+            BlendMode::None => {
+                unreachable!("bug: opaque blend in alpha pass");
+            }
+            BlendMode::Alpha => {
+                self.device.set_blend_mode_alpha();
+            }
+            BlendMode::PremultipliedAlpha => {
+                self.device.set_blend_mode_premultiplied_alpha();
+            }
+            BlendMode::PremultipliedDestOut => {
+                self.device.set_blend_mode_premultiplied_dest_out();
+            }
+            BlendMode::SubpixelDualSource => {
+                self.device.set_blend_mode_subpixel_dual_source();
+            }
+            BlendMode::Advanced(mode) => {
+                if self.enable_advanced_blend_barriers {
+                    self.device.blend_barrier_advanced();
+                }
+                self.device.set_blend_mode_advanced(mode);
+            }
+            BlendMode::MultiplyDualSource => {
+                self.device.set_blend_mode_multiply_dual_source();
+            }
+            BlendMode::Screen => {
+                self.device.set_blend_mode_screen();
+            }
+            BlendMode::Exclusion => {
+                self.device.set_blend_mode_exclusion();
+            }
+            BlendMode::PlusLighter => {
+                self.device.set_blend_mode_plus_lighter();
+            }
+        }
+    }
+
+    fn draw_transparent_batches(
+        &mut self,
+        alpha_batch_container: &AlphaBatchContainer,
+        draw_target: DrawTarget,
+        uses_scissor: bool,
+        framebuffer_kind: FramebufferKind,
+        projection: &default::Transform3D<f32>,
+        render_tasks: &RenderTaskGraph,
+        stats: &mut RendererStats,
+    ) {
+        let _gl = self.gpu_profiler.start_marker("alpha batches");
+        let transparent_sampler = self.gpu_profiler.start_sampler(GPU_SAMPLER_TAG_TRANSPARENT);
+        self.set_blend(true, framebuffer_kind);
+
+        let mut prev_blend_mode = BlendMode::None;
+        let shaders_rc = self.shaders.clone();
+
+        for batch in &alpha_batch_container.alpha_batches {
+            if should_skip_batch(&batch.key.kind, self.debug_flags) {
+                continue;
+            }
+
+            let mut shaders = shaders_rc.borrow_mut();
+            let shader = shaders.get(
+                &batch.key,
+                batch.features | BatchFeatures::ALPHA_PASS,
+                self.debug_flags,
+                &self.device,
+            );
+
+            if batch.key.blend_mode != prev_blend_mode {
+                self.apply_alpha_batch_blend_mode(
+                    batch.key.blend_mode,
+                    framebuffer_kind,
+                );
+                prev_blend_mode = batch.key.blend_mode;
+            }
+
+            if let BatchKind::Brush(BrushBatchKind::MixBlend { task_id, backdrop_id }) = batch.key.kind {
+                debug_assert_eq!(batch.instances.len(), 1);
+                self.handle_readback_composite(
+                    draw_target,
+                    uses_scissor,
+                    &render_tasks[task_id],
+                    &render_tasks[backdrop_id],
+                );
+            }
+
+            let _timer = self.gpu_profiler.start_timer(batch.key.kind.sampler_tag());
+            shader.bind(
+                &mut self.device,
+                projection,
+                None,
+                &mut self.renderer_errors,
+                &mut self.profile,
+            );
+
+            self.draw_instanced_batch(
+                &batch.instances,
+                VertexArrayKind::Primitive,
+                &batch.key.textures,
+                stats
+            );
+        }
+
+        self.gpu_profiler.finish_sampler(transparent_sampler);
     }
 
     /// Rasterize any external compositor surfaces that require updating
