@@ -274,6 +274,13 @@ const GPU_TAG_COMPOSITE: GpuProfileTag = GpuProfileTag {
     color: debug_colors::TOMATO,
 };
 
+type CompositeShaderParams = (
+    CompositeSurfaceFormat,
+    ImageBufferKind,
+    CompositeFeatures,
+    Option<DeviceSize>,
+);
+
 // Key used when adding compositing tiles to the occlusion tracker.
 // Since an entire tile may have a mask, but we may segment that in
 // to masked and non-masked regions, we need to track which of the
@@ -2358,6 +2365,42 @@ impl Renderer {
         instances.clear();
     }
 
+    fn update_composite_batch_state(
+        &mut self,
+        projection: &default::Transform3D<f32>,
+        instances: &mut Vec<CompositeInstance>,
+        current_textures: &mut BatchTextures,
+        current_shader_params: &mut CompositeShaderParams,
+        next_textures: BatchTextures,
+        next_shader_params: CompositeShaderParams,
+        stats: &mut RendererStats,
+    ) {
+        let flush_batch = !current_textures.is_compatible_with(&next_textures) ||
+            next_shader_params != *current_shader_params;
+
+        if flush_batch {
+            self.flush_composite_batch(
+                instances,
+                current_textures,
+                stats,
+            );
+        }
+
+        if next_shader_params != *current_shader_params {
+            self.bind_composite_shader(
+                projection,
+                next_shader_params.3,
+                next_shader_params.0,
+                next_shader_params.1,
+                next_shader_params.2,
+            );
+
+            *current_shader_params = next_shader_params;
+        }
+
+        *current_textures = next_textures;
+    }
+
     fn draw_instanced_batch<T: Clone>(
         &mut self,
         data: &[T],
@@ -3458,7 +3501,7 @@ impl Renderer {
         projection: &default::Transform3D<f32>,
         stats: &mut RendererStats,
     ) {
-        let mut current_shader_params = (
+        let mut current_shader_params: CompositeShaderParams = (
             CompositeSurfaceFormat::Rgba,
             ImageBufferKind::Texture2D,
             CompositeFeatures::empty(),
@@ -3622,31 +3665,15 @@ impl Renderer {
                 }
             };
 
-            // Flush batch if shader params or textures changed
-            let flush_batch = !current_textures.is_compatible_with(&textures) ||
-                shader_params != current_shader_params;
-
-            if flush_batch {
-                self.flush_composite_batch(
-                    &mut instances,
-                    &current_textures,
-                    stats,
-                );
-            }
-
-            if shader_params != current_shader_params {
-                self.bind_composite_shader(
-                    projection,
-                    shader_params.3,
-                    shader_params.0,
-                    shader_params.1,
-                    shader_params.2,
-                );
-
-                current_shader_params = shader_params;
-            }
-
-            current_textures = textures;
+            self.update_composite_batch_state(
+                projection,
+                &mut instances,
+                &mut current_textures,
+                &mut current_shader_params,
+                textures,
+                shader_params,
+                stats,
+            );
 
             // Add instance to current batch
             instances.push(instance);
