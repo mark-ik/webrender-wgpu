@@ -124,6 +124,43 @@ pub enum RendererBackend {
     Wgpu,
 }
 
+impl RendererBackend {
+    fn prepare_options(&self, options: &mut WebRenderOptions) {
+        // For now, we assume that native OS compositors are top-left origin.
+        match options.compositor_config {
+            CompositorConfig::Draw { .. } | CompositorConfig::Native { .. } => {}
+            CompositorConfig::Layer { .. } => {
+                options.surface_origin_is_top_left = true;
+            }
+        }
+    }
+
+    fn into_device(self, options: &mut WebRenderOptions) -> Result<Device, RendererError> {
+        self.prepare_options(options);
+
+        match self {
+            RendererBackend::Gl { gl } => Ok(Device::new(
+                gl,
+                options.crash_annotator.clone(),
+                options.resource_override_path.clone(),
+                options.use_optimized_shaders,
+                options.upload_method.clone(),
+                options.batched_upload_threshold,
+                options.cached_programs.take(),
+                options.allow_texture_storage_support,
+                options.allow_texture_swizzling,
+                options.dump_shader_source.take(),
+                options.surface_origin_is_top_left,
+                options.panic_on_gl_error,
+            )),
+            #[cfg(feature = "wgpu_backend")]
+            RendererBackend::Wgpu => Err(RendererError::UnsupportedBackend(
+                "wgpu renderer integration is not available yet",
+            )),
+        }
+    }
+}
+
 pub struct WebRenderOptions {
     pub resource_override_path: Option<PathBuf>,
     /// Whether to use shaders that have been optimized at build time.
@@ -335,6 +372,16 @@ pub fn create_webrender_instance_with_backend(
     mut options: WebRenderOptions,
     shaders: Option<&SharedShaders>,
 ) -> Result<(Renderer, RenderApiSender), RendererError> {
+    let device = backend.into_device(&mut options)?;
+    create_webrender_instance_with_device(device, notifier, options, shaders)
+}
+
+fn create_webrender_instance_with_device(
+    mut device: Device,
+    notifier: Box<dyn RenderNotifier>,
+    mut options: WebRenderOptions,
+    shaders: Option<&SharedShaders>,
+) -> Result<(Renderer, RenderApiSender), RendererError> {
     if !wr_has_been_initialized() {
         // If the profiler feature is enabled, try to load the profiler shared library
         // if the path was provided.
@@ -351,44 +398,9 @@ pub fn create_webrender_instance_with_backend(
 
     HAS_BEEN_INITIALIZED.store(true, Ordering::SeqCst);
 
-    // For now, we assume that native OS compositors are top-left origin. If that doesn't
-    // turn out to be the case, we can add a query method on `LayerCompositor`.
-    match options.compositor_config {
-        CompositorConfig::Draw { .. } | CompositorConfig::Native { .. } => {}
-        CompositorConfig::Layer { .. } => {
-            options.surface_origin_is_top_left = true;
-        }
-    }
-
     let (api_tx, api_rx) = unbounded_channel();
     let (result_tx, result_rx) = unbounded_channel();
-
-    let (mut device, gl_type) = match backend {
-        RendererBackend::Gl { gl } => {
-            let gl_type = gl.get_type();
-            let device = Device::new(
-                gl,
-                options.crash_annotator.clone(),
-                options.resource_override_path.clone(),
-                options.use_optimized_shaders,
-                options.upload_method.clone(),
-                options.batched_upload_threshold,
-                options.cached_programs.take(),
-                options.allow_texture_storage_support,
-                options.allow_texture_swizzling,
-                options.dump_shader_source.take(),
-                options.surface_origin_is_top_left,
-                options.panic_on_gl_error,
-            );
-            (device, gl_type)
-        }
-        #[cfg(feature = "wgpu_backend")]
-        RendererBackend::Wgpu => {
-            return Err(RendererError::UnsupportedBackend(
-                "wgpu renderer integration is not available yet",
-            ));
-        }
-    };
+    let gl_type = device.gl_type();
 
     let color_cache_formats = device.preferred_color_formats();
     let swizzle_settings = device.swizzle_settings();
