@@ -3668,44 +3668,12 @@ impl Renderer {
         partial_present_mode: Option<PartialPresentMode>,
         layer: &SwapChainLayer,
     ) {
-        self.device.bind_draw_target(draw_target);
-        self.device.disable_depth_write();
-        self.device.disable_depth();
-
-        // If using KHR_partial_update, call eglSetDamageRegion.
-        // This must be called exactly once per frame, and prior to any rendering to the main
-        // framebuffer. Additionally, on Mali-G77 we encountered rendering issues when calling
-        // this earlier in the frame, during offscreen render passes. So call it now, immediately
-        // before rendering to the main framebuffer. See bug 1685276 for details.
-        if let Some(partial_present) = self.compositor_config.partial_present() {
-            if let Some(PartialPresentMode::Single { dirty_rect }) = partial_present_mode {
-                partial_present.set_buffer_damage_region(&[dirty_rect.to_i32()]);
-            }
-        }
-
-        // Clear the framebuffer
-        let clear_color = Some(clear_color.to_array());
-
-        match partial_present_mode {
-            Some(PartialPresentMode::Single { dirty_rect }) => {
-                // There is no need to clear if the dirty rect is occluded. Additionally,
-                // on Mali-G77 we have observed artefacts when calling glClear (even with
-                // the empty scissor rect set) after calling eglSetDamageRegion with an
-                // empty damage region. So avoid clearing in that case. See bug 1709548.
-                if !dirty_rect.is_empty() && layer.occlusion.test(&dirty_rect) {
-                    // We have a single dirty rect, so clear only that
-                    self.device.clear_target(clear_color,
-                                             None,
-                                             Some(draw_target.to_framebuffer_rect(dirty_rect.to_i32())));
-                }
-            }
-            None => {
-                // Partial present is disabled, so clear the entire framebuffer
-                self.device.clear_target(clear_color,
-                                         None,
-                                         None);
-            }
-        }
+        self.begin_composite_pass(
+            draw_target,
+            clear_color,
+            partial_present_mode,
+            layer,
+        );
 
         // Draw opaque tiles
         let opaque_items = layer.occlusion.opaque_items();
@@ -3751,6 +3719,53 @@ impl Renderer {
                 &mut results.stats,
             );
             self.gpu_profiler.finish_sampler(transparent_sampler);
+        }
+    }
+
+    fn begin_composite_pass(
+        &mut self,
+        draw_target: DrawTarget,
+        clear_color: ColorF,
+        partial_present_mode: Option<PartialPresentMode>,
+        layer: &SwapChainLayer,
+    ) {
+        self.device.bind_draw_target(draw_target);
+        self.device.disable_depth_write();
+        self.device.disable_depth();
+
+        // If using KHR_partial_update, call eglSetDamageRegion.
+        // This must be called exactly once per frame, and prior to any rendering to the main
+        // framebuffer. Additionally, on Mali-G77 we encountered rendering issues when calling
+        // this earlier in the frame, during offscreen render passes. So call it now, immediately
+        // before rendering to the main framebuffer. See bug 1685276 for details.
+        if let Some(partial_present) = self.compositor_config.partial_present() {
+            if let Some(PartialPresentMode::Single { dirty_rect }) = partial_present_mode {
+                partial_present.set_buffer_damage_region(&[dirty_rect.to_i32()]);
+            }
+        }
+
+        // Clear the framebuffer
+        let clear_color = Some(clear_color.to_array());
+
+        match partial_present_mode {
+            Some(PartialPresentMode::Single { dirty_rect }) => {
+                // There is no need to clear if the dirty rect is occluded. Additionally,
+                // on Mali-G77 we have observed artefacts when calling glClear (even with
+                // the empty scissor rect set) after calling eglSetDamageRegion with an
+                // empty damage region. So avoid clearing in that case. See bug 1709548.
+                if !dirty_rect.is_empty() && layer.occlusion.test(&dirty_rect) {
+                    // We have a single dirty rect, so clear only that
+                    self.device.clear_target(clear_color,
+                                             None,
+                                             Some(draw_target.to_framebuffer_rect(dirty_rect.to_i32())));
+                }
+            }
+            None => {
+                // Partial present is disabled, so clear the entire framebuffer
+                self.device.clear_target(clear_color,
+                                         None,
+                                         None);
+            }
         }
     }
 
