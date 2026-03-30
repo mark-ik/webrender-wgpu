@@ -535,6 +535,27 @@ fn create_dummy_cache_texture<D: GpuDevice<Texture = Texture>>(device: &mut D) -
     dummy_cache_texture
 }
 
+fn create_gpu_buffer_texture<D: GpuDevice<Texture = Texture>, T: Texel>(
+    device: &mut D,
+    buffer: &GpuBuffer<T>,
+) -> Option<Texture> {
+    if buffer.is_empty() {
+        None
+    } else {
+        let gpu_buffer_texture = device.create_texture(
+            ImageBufferKind::Texture2D,
+            buffer.format,
+            buffer.size.width,
+            buffer.size.height,
+            TextureFilter::Nearest,
+            None,
+        );
+
+        device.upload_texture_immediate(&gpu_buffer_texture, &buffer.data);
+        Some(gpu_buffer_texture)
+    }
+}
+
 impl TextureResolver {
     fn new(device: &mut Device) -> TextureResolver {
         let dummy_cache_texture = create_dummy_cache_texture(device);
@@ -5187,38 +5208,6 @@ impl Renderer {
         }
     }
 
-    fn create_gpu_buffer_texture<T: Texel>(
-        &mut self,
-        buffer: &GpuBuffer<T>,
-        sampler: TextureSampler,
-    ) -> Option<Texture> {
-        if buffer.is_empty() {
-            None
-        } else {
-            let gpu_buffer_texture = self.device.create_texture(
-                ImageBufferKind::Texture2D,
-                buffer.format,
-                buffer.size.width,
-                buffer.size.height,
-                TextureFilter::Nearest,
-                None,
-            );
-
-            self.device.bind_texture(
-                sampler,
-                &gpu_buffer_texture,
-                Swizzle::default(),
-            );
-
-            self.device.upload_texture_immediate(
-                &gpu_buffer_texture,
-                &buffer.data,
-            );
-
-            Some(gpu_buffer_texture)
-        }
-    }
-
     fn draw_frame(
         &mut self,
         frame: &mut Frame,
@@ -5245,14 +5234,17 @@ impl Renderer {
 
         // Upload experimental GPU buffer texture if there is any data present
         // TODO: Recycle these textures, upload via PBO or best approach for platform
-        let gpu_buffer_texture_f = self.create_gpu_buffer_texture(
-            &frame.gpu_buffer_f,
-            TextureSampler::GpuBufferF,
-        );
-        let gpu_buffer_texture_i = self.create_gpu_buffer_texture(
-            &frame.gpu_buffer_i,
-            TextureSampler::GpuBufferI,
-        );
+        let gpu_buffer_texture_f = create_gpu_buffer_texture(&mut self.device, &frame.gpu_buffer_f);
+        if let Some(ref texture) = gpu_buffer_texture_f {
+            self.device
+                .bind_texture(TextureSampler::GpuBufferF, texture, Swizzle::default());
+        }
+
+        let gpu_buffer_texture_i = create_gpu_buffer_texture(&mut self.device, &frame.gpu_buffer_i);
+        if let Some(ref texture) = gpu_buffer_texture_i {
+            self.device
+                .bind_texture(TextureSampler::GpuBufferI, texture, Swizzle::default());
+        }
 
         let bytes_to_mb = 1.0 / 1000000.0;
         let gpu_buffer_bytes_f = gpu_buffer_texture_f
