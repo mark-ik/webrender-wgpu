@@ -631,6 +631,31 @@ impl TextureResolver {
         }
     }
 
+    fn bind_batch_textures(
+        &self,
+        textures: &BatchTextures,
+        device: &mut Device,
+        aux_textures: &RendererAuxTextures,
+    ) {
+        for i in 0 .. 3 {
+            self.bind(
+                &textures.input.colors[i],
+                TextureSampler::color(i),
+                device,
+            );
+        }
+
+        self.bind(
+            &textures.clip_mask,
+            TextureSampler::ClipMask,
+            device,
+        );
+
+        if let Some(texture) = aux_textures.dither_texture() {
+            device.bind_texture(TextureSampler::Dither, texture, Swizzle::default());
+        }
+    }
+
     // Get the real (OpenGL) texture ID for a given source texture.
     // For a texture cache texture, the IDs are stored in a vector
     // map for fast access.
@@ -2280,27 +2305,6 @@ impl Renderer {
         // Probably should check for other errors?
     }
 
-    fn bind_textures(&mut self, textures: &BatchTextures) {
-        for i in 0 .. 3 {
-            self.texture_resolver.bind(
-                &textures.input.colors[i],
-                TextureSampler::color(i),
-                &mut self.device,
-            );
-        }
-
-        self.texture_resolver.bind(
-            &textures.clip_mask,
-            TextureSampler::ClipMask,
-            &mut self.device,
-        );
-
-        // TODO: this probably isn't the best place for this.
-        if let Some(texture) = self.aux_textures.dither_texture() {
-            self.device.bind_texture(TextureSampler::Dither, texture, Swizzle::default());
-        }
-    }
-
     fn draw_instanced_batch<T: Clone>(
         &mut self,
         data: &[T],
@@ -2308,7 +2312,8 @@ impl Renderer {
         textures: &BatchTextures,
         stats: &mut RendererStats,
     ) {
-        self.bind_textures(textures);
+        self.texture_resolver
+            .bind_batch_textures(textures, &mut self.device, &self.aux_textures);
 
         // If we end up with an empty draw call here, that means we have
         // probably introduced unnecessary batch breaks during frame
@@ -4709,10 +4714,6 @@ impl Renderer {
                 &mut self.profile,
             );
 
-            if let Some(texture) = self.aux_textures.dither_texture() {
-                self.device.bind_texture(TextureSampler::Dither, texture, Swizzle::default());
-            }
-
             self.draw_instanced_batch(
                 &target.linear_gradients,
                 VertexArrayKind::LinearGradient,
@@ -4735,10 +4736,6 @@ impl Renderer {
                 &mut self.profile,
             );
 
-            if let Some(texture) = self.aux_textures.dither_texture() {
-                self.device.bind_texture(TextureSampler::Dither, texture, Swizzle::default());
-            }
-
             self.draw_instanced_batch(
                 &target.radial_gradients,
                 VertexArrayKind::RadialGradient,
@@ -4760,10 +4757,6 @@ impl Renderer {
                 &mut self.renderer_errors,
                 &mut self.profile,
             );
-
-            if let Some(texture) = self.aux_textures.dither_texture() {
-                self.device.bind_texture(TextureSampler::Dither, texture, Swizzle::default());
-            }
 
             self.draw_instanced_batch(
                 &target.conic_gradients,
