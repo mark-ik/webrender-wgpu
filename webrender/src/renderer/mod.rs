@@ -556,6 +556,20 @@ fn create_gpu_buffer_texture<D: GpuDevice<Texture = Texture>, T: Texel>(
     }
 }
 
+fn create_cache_texture<D: GpuDevice<Texture = Texture>>(
+    device: &mut D,
+    info: &TextureCacheAllocInfo,
+) -> Texture {
+    device.create_texture(
+        info.target,
+        info.format,
+        info.width,
+        info.height,
+        info.filter,
+        Some(RenderTargetInfo { has_depth: info.has_depth }),
+    )
+}
+
 impl TextureResolver {
     fn new(device: &mut Device) -> TextureResolver {
         let dummy_cache_texture = create_dummy_cache_texture(device);
@@ -2116,18 +2130,10 @@ impl Renderer {
                         //
                         // Ensure no PBO is bound when creating the texture storage,
                         // or GL will attempt to read data from there.
-                        let mut texture = reused_textures.pop_front().unwrap_or(None).unwrap_or_else(|| {
-                            self.device.create_texture(
-                                info.target,
-                                info.format,
-                                info.width,
-                                info.height,
-                                info.filter,
-                                // This needs to be a render target because some render
-                                // tasks get rendered into the texture cache.
-                                Some(RenderTargetInfo { has_depth: info.has_depth }),
-                            )
-                        });
+                        let mut texture = reused_textures
+                            .pop_front()
+                            .unwrap_or(None)
+                            .unwrap_or_else(|| create_cache_texture(&mut self.device, info));
 
                         if info.is_shared_cache {
                             texture.flags_mut()
@@ -6328,12 +6334,12 @@ impl Renderer {
     }
 
     #[cfg(feature = "replay")]
-    fn load_texture(
+    fn load_texture<D: GpuDevice<Texture = Texture>>(
         target: ImageBufferKind,
         plain: &PlainTexture,
         rt_info: Option<RenderTargetInfo>,
         root: &PathBuf,
-        device: &mut Device
+        device: &mut D
     ) -> (Texture, Vec<u8>)
     {
         use std::fs::File;
