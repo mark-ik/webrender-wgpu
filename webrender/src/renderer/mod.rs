@@ -2339,6 +2339,25 @@ impl Renderer {
         });
     }
 
+    fn flush_composite_batch(
+        &mut self,
+        instances: &mut Vec<CompositeInstance>,
+        textures: &BatchTextures,
+        stats: &mut RendererStats,
+    ) {
+        if instances.is_empty() {
+            return;
+        }
+
+        self.draw_instanced_batch(
+            instances,
+            VertexArrayKind::Composite,
+            textures,
+            stats,
+        );
+        instances.clear();
+    }
+
     fn draw_instanced_batch<T: Clone>(
         &mut self,
         data: &[T],
@@ -3608,15 +3627,11 @@ impl Renderer {
                 shader_params != current_shader_params;
 
             if flush_batch {
-                if !instances.is_empty() {
-                    self.draw_instanced_batch(
-                        &instances,
-                        VertexArrayKind::Composite,
-                        &current_textures,
-                        stats,
-                    );
-                    instances.clear();
-                }
+                self.flush_composite_batch(
+                    &mut instances,
+                    &current_textures,
+                    stats,
+                );
             }
 
             if shader_params != current_shader_params {
@@ -3638,14 +3653,11 @@ impl Renderer {
         }
 
         // Flush the last batch
-        if !instances.is_empty() {
-            self.draw_instanced_batch(
-                &instances,
-                VertexArrayKind::Composite,
-                &current_textures,
-                stats,
-            );
-        }
+        self.flush_composite_batch(
+            &mut instances,
+            &current_textures,
+            stats,
+        );
     }
 
     // Composite tiles in a swapchain. When using LayerCompositor, we may
