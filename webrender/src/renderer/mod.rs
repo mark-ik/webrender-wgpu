@@ -3678,47 +3678,57 @@ impl Renderer {
         // Draw opaque tiles
         let opaque_items = layer.occlusion.opaque_items();
         if !opaque_items.is_empty() {
-            let opaque_sampler = self.gpu_profiler.start_sampler(GPU_SAMPLER_TAG_OPAQUE);
-            self.set_blend(false, FramebufferKind::Main);
-            self.draw_tile_list(
-                opaque_items.iter(),
-                &composite_state,
-                &composite_state.external_surfaces,
-                projection,
-                &mut results.stats,
+            self.draw_composite_tile_group(
+                GPU_SAMPLER_TAG_OPAQUE,
+                false,
+                |_| {},
+                |renderer| {
+                    renderer.draw_tile_list(
+                        opaque_items.iter(),
+                        &composite_state,
+                        &composite_state.external_surfaces,
+                        projection,
+                        &mut results.stats,
+                    );
+                },
             );
-            self.gpu_profiler.finish_sampler(opaque_sampler);
         }
 
         // Draw clear tiles
         if !layer.clear_tiles.is_empty() {
-            let transparent_sampler = self.gpu_profiler.start_sampler(GPU_SAMPLER_TAG_TRANSPARENT);
-            self.set_blend(true, FramebufferKind::Main);
-            self.device.set_blend_mode_premultiplied_dest_out();
-            self.draw_tile_list(
-                layer.clear_tiles.iter(),
-                &composite_state,
-                &composite_state.external_surfaces,
-                projection,
-                &mut results.stats,
+            self.draw_composite_tile_group(
+                GPU_SAMPLER_TAG_TRANSPARENT,
+                true,
+                |renderer| renderer.device.set_blend_mode_premultiplied_dest_out(),
+                |renderer| {
+                    renderer.draw_tile_list(
+                        layer.clear_tiles.iter(),
+                        &composite_state,
+                        &composite_state.external_surfaces,
+                        projection,
+                        &mut results.stats,
+                    );
+                },
             );
-            self.gpu_profiler.finish_sampler(transparent_sampler);
         }
 
         // Draw alpha tiles
         let alpha_items = layer.occlusion.alpha_items();
         if !alpha_items.is_empty() {
-            let transparent_sampler = self.gpu_profiler.start_sampler(GPU_SAMPLER_TAG_TRANSPARENT);
-            self.set_blend(true, FramebufferKind::Main);
-            self.set_blend_mode_premultiplied_alpha(FramebufferKind::Main);
-            self.draw_tile_list(
-                alpha_items.iter().rev(),
-                &composite_state,
-                &composite_state.external_surfaces,
-                projection,
-                &mut results.stats,
+            self.draw_composite_tile_group(
+                GPU_SAMPLER_TAG_TRANSPARENT,
+                true,
+                |renderer| renderer.set_blend_mode_premultiplied_alpha(FramebufferKind::Main),
+                |renderer| {
+                    renderer.draw_tile_list(
+                        alpha_items.iter().rev(),
+                        &composite_state,
+                        &composite_state.external_surfaces,
+                        projection,
+                        &mut results.stats,
+                    );
+                },
             );
-            self.gpu_profiler.finish_sampler(transparent_sampler);
         }
     }
 
@@ -3767,6 +3777,24 @@ impl Renderer {
                                          None);
             }
         }
+    }
+
+    fn draw_composite_tile_group<FB, FD>(
+        &mut self,
+        sampler_tag: GpuProfileTag,
+        blend: bool,
+        configure_blend: FB,
+        draw_tiles: FD,
+    )
+    where
+        FB: FnOnce(&mut Self),
+        FD: FnOnce(&mut Self),
+    {
+        let sampler = self.gpu_profiler.start_sampler(sampler_tag);
+        self.set_blend(blend, FramebufferKind::Main);
+        configure_blend(self);
+        draw_tiles(self);
+        self.gpu_profiler.finish_sampler(sampler);
     }
 
     /// Composite picture cache tiles into the framebuffer. This is currently
