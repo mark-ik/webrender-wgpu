@@ -54,7 +54,7 @@ use crate::batch::{AlphaBatchContainer, BatchKind, BatchFeatures, BatchTextures,
 use crate::batch::ClipMaskInstanceList;
 #[cfg(any(feature = "capture", feature = "replay"))]
 use crate::capture::{CaptureConfig, ExternalCaptureImage, PlainExternalImage};
-use crate::composite::{CompositeState, CompositeTileSurface, CompositorInputLayer, CompositorSurfaceTransform, ResolvedExternalSurface};
+use crate::composite::{CompositeState, CompositeTile, CompositeTileSurface, CompositorInputLayer, CompositorSurfaceTransform, ResolvedExternalSurface};
 use crate::composite::{CompositorKind, Compositor, NativeTileId, CompositeFeatures, CompositeSurfaceFormat, ResolvedExternalSurfaceColorData};
 use crate::composite::{CompositorConfig, NativeSurfaceOperationDetails, NativeSurfaceId, NativeSurfaceOperation, ClipRadius};
 use crate::composite::TileKind;
@@ -2401,6 +2401,149 @@ impl Renderer {
         *current_textures = next_textures;
     }
 
+    fn build_composite_draw_item(
+        &mut self,
+        tile: &CompositeTile,
+        clip_rect: DeviceRect,
+        needs_mask: bool,
+        composite_state: &CompositeState,
+        external_surfaces: &[ResolvedExternalSurface],
+    ) -> (CompositeInstance, BatchTextures, CompositeShaderParams) {
+        let tile_rect = composite_state.get_device_rect(&tile.local_rect, tile.transform_index);
+        let transform = composite_state.get_device_transform(tile.transform_index);
+        let flip = (transform.scale.x < 0.0, transform.scale.y < 0.0);
+
+        let clip = match (needs_mask, tile.clip_index) {
+            (true, Some(index)) => Some(composite_state.get_compositor_clip(index)),
+            _ => None,
+        };
+
+        match tile.surface {
+            CompositeTileSurface::Color { color } => {
+                let dummy = TextureSource::Dummy;
+                let image_buffer_kind = dummy.image_buffer_kind();
+                let instance = CompositeInstance::new(
+                    tile_rect,
+                    clip_rect,
+                    color.premultiplied(),
+                    flip,
+                    clip,
+                );
+                let features = instance.get_rgb_features();
+                (
+                    instance,
+                    BatchTextures::composite_rgb(dummy),
+                    (CompositeSurfaceFormat::Rgba, image_buffer_kind, features, None),
+                )
+            }
+            CompositeTileSurface::Texture { surface: ResolvedSurfaceTexture::TextureCache { texture } } => {
+                let instance = CompositeInstance::new(
+                    tile_rect,
+                    clip_rect,
+                    PremultipliedColorF::WHITE,
+                    flip,
+                    clip,
+                );
+                let features = instance.get_rgb_features();
+                (
+                    instance,
+                    BatchTextures::composite_rgb(texture),
+                    (
+                        CompositeSurfaceFormat::Rgba,
+                        ImageBufferKind::Texture2D,
+                        features,
+                        None,
+                    ),
+                )
+            }
+            CompositeTileSurface::ExternalSurface { external_surface_index } => {
+                let surface = &external_surfaces[external_surface_index.0];
+
+                match surface.color_data {
+                    ResolvedExternalSurfaceColorData::Yuv{ ref planes, color_space, format, channel_bit_depth, .. } => {
+                        let textures = BatchTextures::composite_yuv(
+                            planes[0].texture,
+                            planes[1].texture,
+                            planes[2].texture,
+                        );
+
+                        let uv_rects = [
+                            self.texture_resolver.get_uv_rect(&textures.input.colors[0], planes[0].uv_rect),
+                            self.texture_resolver.get_uv_rect(&textures.input.colors[1], planes[1].uv_rect),
+                            self.texture_resolver.get_uv_rect(&textures.input.colors[2], planes[2].uv_rect),
+                        ];
+
+                        let instance = CompositeInstance::new_yuv(
+                            tile_rect,
+                            clip_rect,
+                            color_space,
+                            format,
+                            channel_bit_depth,
+                            uv_rects,
+                            flip,
+                            clip,
+                        );
+                        let features = instance.get_yuv_features();
+
+                        (
+                            instance,
+                            textures,
+                            (
+                                CompositeSurfaceFormat::Yuv,
+                                surface.image_buffer_kind,
+                                features,
+                                None
+                            ),
+                        )
+                    },
+                    ResolvedExternalSurfaceColorData::Rgb { ref plane, .. } => {
+                        let uv_rect = self.texture_resolver.get_uv_rect(&plane.texture, plane.uv_rect);
+                        let instance = CompositeInstance::new_rgb(
+                            tile_rect,
+                            clip_rect,
+                            PremultipliedColorF::WHITE,
+                            uv_rect,
+                            plane.texture.uses_normalized_uvs(),
+                            flip,
+                            clip,
+                        );
+                        let features = instance.get_rgb_features();
+                        (
+                            instance,
+                            BatchTextures::composite_rgb(plane.texture),
+                            (
+                                CompositeSurfaceFormat::Rgba,
+                                surface.image_buffer_kind,
+                                features,
+                                Some(self.texture_resolver.get_texture_size(&plane.texture).to_f32()),
+                            ),
+                        )
+                    },
+                }
+            }
+            CompositeTileSurface::Clear => {
+                let dummy = TextureSource::Dummy;
+                let image_buffer_kind = dummy.image_buffer_kind();
+                let instance = CompositeInstance::new(
+                    tile_rect,
+                    clip_rect,
+                    PremultipliedColorF::BLACK,
+                    flip,
+                    clip,
+                );
+                let features = instance.get_rgb_features();
+                (
+                    instance,
+                    BatchTextures::composite_rgb(dummy),
+                    (CompositeSurfaceFormat::Rgba, image_buffer_kind, features, None),
+                )
+            }
+            CompositeTileSurface::Texture { surface: ResolvedSurfaceTexture::Native { .. } } => {
+                unreachable!("bug: found native surface in simple composite path");
+            }
+        }
+    }
+
     fn draw_instanced_batch<T: Clone>(
         &mut self,
         data: &[T],
@@ -3520,150 +3663,13 @@ impl Renderer {
 
         for item in tiles_iter {
             let tile = &composite_state.tiles[item.key.tile_index];
-
-            let clip_rect = item.rectangle;
-            let tile_rect = composite_state.get_device_rect(&tile.local_rect, tile.transform_index);
-            let transform = composite_state.get_device_transform(tile.transform_index);
-            let flip = (transform.scale.x < 0.0, transform.scale.y < 0.0);
-
-            let clip = if item.key.needs_mask {
-                tile.clip_index.map(|index| {
-                    composite_state.get_compositor_clip(index)
-                })
-            } else {
-                None
-            };
-
-            // Work out the draw params based on the tile surface
-            let (instance, textures, shader_params) = match tile.surface {
-                CompositeTileSurface::Color { color } => {
-                    let dummy = TextureSource::Dummy;
-                    let image_buffer_kind = dummy.image_buffer_kind();
-                    let instance = CompositeInstance::new(
-                        tile_rect,
-                        clip_rect,
-                        color.premultiplied(),
-                        flip,
-                        clip,
-                    );
-                    let features = instance.get_rgb_features();
-                    (
-                        instance,
-                        BatchTextures::composite_rgb(dummy),
-                        (CompositeSurfaceFormat::Rgba, image_buffer_kind, features, None),
-                    )
-                }
-                CompositeTileSurface::Texture { surface: ResolvedSurfaceTexture::TextureCache { texture } } => {
-                    let instance = CompositeInstance::new(
-                        tile_rect,
-                        clip_rect,
-                        PremultipliedColorF::WHITE,
-                        flip,
-                        clip,
-                    );
-                    let features = instance.get_rgb_features();
-                    (
-                        instance,
-                        BatchTextures::composite_rgb(texture),
-                        (
-                            CompositeSurfaceFormat::Rgba,
-                            ImageBufferKind::Texture2D,
-                            features,
-                            None,
-                        ),
-                    )
-                }
-                CompositeTileSurface::ExternalSurface { external_surface_index } => {
-                    let surface = &external_surfaces[external_surface_index.0];
-
-                    match surface.color_data {
-                        ResolvedExternalSurfaceColorData::Yuv{ ref planes, color_space, format, channel_bit_depth, .. } => {
-                            let textures = BatchTextures::composite_yuv(
-                                planes[0].texture,
-                                planes[1].texture,
-                                planes[2].texture,
-                            );
-
-                            // When the texture is an external texture, the UV rect is not known when
-                            // the external surface descriptor is created, because external textures
-                            // are not resolved until the lock() callback is invoked at the start of
-                            // the frame render. To handle this, query the texture resolver for the
-                            // UV rect if it's an external texture, otherwise use the default UV rect.
-                            let uv_rects = [
-                                self.texture_resolver.get_uv_rect(&textures.input.colors[0], planes[0].uv_rect),
-                                self.texture_resolver.get_uv_rect(&textures.input.colors[1], planes[1].uv_rect),
-                                self.texture_resolver.get_uv_rect(&textures.input.colors[2], planes[2].uv_rect),
-                            ];
-
-                            let instance = CompositeInstance::new_yuv(
-                                tile_rect,
-                                clip_rect,
-                                color_space,
-                                format,
-                                channel_bit_depth,
-                                uv_rects,
-                                flip,
-                                clip,
-                            );
-                            let features = instance.get_yuv_features();
-
-                            (
-                                instance,
-                                textures,
-                                (
-                                    CompositeSurfaceFormat::Yuv,
-                                    surface.image_buffer_kind,
-                                    features,
-                                    None
-                                ),
-                            )
-                        },
-                        ResolvedExternalSurfaceColorData::Rgb { ref plane, .. } => {
-                            let uv_rect = self.texture_resolver.get_uv_rect(&plane.texture, plane.uv_rect);
-                            let instance = CompositeInstance::new_rgb(
-                                tile_rect,
-                                clip_rect,
-                                PremultipliedColorF::WHITE,
-                                uv_rect,
-                                plane.texture.uses_normalized_uvs(),
-                                flip,
-                                clip,
-                            );
-                            let features = instance.get_rgb_features();
-                            (
-                                instance,
-                                BatchTextures::composite_rgb(plane.texture),
-                                (
-                                    CompositeSurfaceFormat::Rgba,
-                                    surface.image_buffer_kind,
-                                    features,
-                                    Some(self.texture_resolver.get_texture_size(&plane.texture).to_f32()),
-                                ),
-                            )
-                        },
-                    }
-                }
-                CompositeTileSurface::Clear => {
-                    let dummy = TextureSource::Dummy;
-                    let image_buffer_kind = dummy.image_buffer_kind();
-                    let instance = CompositeInstance::new(
-                        tile_rect,
-                        clip_rect,
-                        PremultipliedColorF::BLACK,
-                        flip,
-                        clip,
-                    );
-                    let features = instance.get_rgb_features();
-                    (
-                        instance,
-                        BatchTextures::composite_rgb(dummy),
-                        (CompositeSurfaceFormat::Rgba, image_buffer_kind, features, None),
-                    )
-                }
-                CompositeTileSurface::Texture { surface: ResolvedSurfaceTexture::Native { .. } } => {
-                    unreachable!("bug: found native surface in simple composite path");
-                }
-            };
+            let (instance, textures, shader_params) = self.build_composite_draw_item(
+                tile,
+                item.rectangle,
+                item.key.needs_mask,
+                composite_state,
+                external_surfaces,
+            );
 
             self.update_composite_batch_state(
                 projection,
