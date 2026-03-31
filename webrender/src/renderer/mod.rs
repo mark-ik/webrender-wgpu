@@ -1257,8 +1257,7 @@ impl Renderer {
             device_size.height as u32,
         );
 
-        // Collect solid-color composite tiles into CompositeInstance batches.
-        // Texture-backed tiles are skipped for now (no wgpu texture cache yet).
+        // Collect composite tiles into batches by type.
         let composite_state = &doc.frame.composite_state;
         let mut color_instances: Vec<CompositeInstance> = Vec::new();
         // Group texture-backed tiles by their CacheTextureId.
@@ -1273,12 +1272,13 @@ impl Renderer {
             );
             let transform = composite_state.get_device_transform(tile.transform_index);
             let flip = (transform.scale.x < 0.0, transform.scale.y < 0.0);
+            let clip_rect = tile.device_clip_rect;
 
             match tile.surface {
                 CompositeTileSurface::Color { color } => {
                     let instance = CompositeInstance::new(
                         tile_rect,
-                        tile_rect,
+                        clip_rect,
                         color.premultiplied(),
                         flip,
                         None,
@@ -1292,7 +1292,7 @@ impl Renderer {
                         if self.wgpu_texture_cache.contains_key(&cache_id) {
                             let instance = CompositeInstance::new(
                                 tile_rect,
-                                tile_rect,
+                                clip_rect,
                                 PremultipliedColorF::WHITE,
                                 flip,
                                 None,
