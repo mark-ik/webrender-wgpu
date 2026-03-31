@@ -578,6 +578,123 @@ impl WgpuDevice {
         }
         self.queue.submit([encoder.finish()]);
     }
+
+    /// Render composite tile instances through the composite pipeline.
+    ///
+    /// This is the first real draw path that exercises instanced rendering
+    /// with the same data layout that the GL renderer uses. The caller
+    /// provides raw `CompositeInstance` bytes and a pipeline config key.
+    pub fn render_composite_instances(
+        &self,
+        target: &WgpuTexture,
+        source_texture: Option<&WgpuTexture>,
+        instance_bytes: &[u8],
+        instance_count: u32,
+        config: &str,
+        clear: bool,
+    ) {
+        let pipeline_key = ("composite", config);
+        let program = self
+            .pipelines
+            .get(&pipeline_key)
+            .unwrap_or_else(|| panic!("composite pipeline not found for config {:?}", config));
+
+        let target_view = target
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Transform: orthographic projection matching the target dimensions
+        let projection = ortho(target.width as f32, target.height as f32);
+        let mut transform_data = Vec::with_capacity(64);
+        for f in &projection {
+            transform_data.extend_from_slice(&f.to_le_bytes());
+        }
+        let transform_buf = self.create_uniform_buffer("composite transform", &transform_data);
+
+        let mut tex_size_data = Vec::with_capacity(8);
+        tex_size_data.extend_from_slice(&(target.width as f32).to_le_bytes());
+        tex_size_data.extend_from_slice(&(target.height as f32).to_le_bytes());
+        let tex_size_buf = self.create_uniform_buffer("composite texture size", &tex_size_data);
+        let mali_buf =
+            self.create_uniform_buffer("composite mali workaround", &0u32.to_le_bytes());
+
+        let source_view = source_texture.map(|t| {
+            t.texture
+                .create_view(&wgpu::TextureViewDescriptor::default())
+        });
+        let (bg0, bg1) = self.create_bind_groups_with_color0(
+            source_view.as_ref(),
+            &transform_buf,
+            &tex_size_buf,
+            &mali_buf,
+        );
+
+        // Unit quad vertex buffer: 4 corners as Unorm8x2, padded to 4-byte
+        // stride (VERTEX_STRIDE_ALIGNMENT). Matches GL's QUAD_VERTICES.
+        let quad_verts: [[u8; 4]; 4] = [
+            [0, 0, 0, 0],
+            [0xFF, 0, 0, 0],
+            [0, 0xFF, 0, 0],
+            [0xFF, 0xFF, 0, 0],
+        ];
+        let quad_bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(
+                quad_verts.as_ptr() as *const u8,
+                std::mem::size_of_val(&quad_verts),
+            )
+        };
+        let vb = self.create_vertex_buffer("composite quad verts", quad_bytes);
+
+        // Index buffer: two triangles
+        let indices: [u16; 6] = [0, 1, 2, 2, 1, 3];
+        let idx_bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(
+                indices.as_ptr() as *const u8,
+                std::mem::size_of_val(&indices),
+            )
+        };
+        let ib = self.create_index_buffer("composite indices", idx_bytes);
+
+        // Instance buffer
+        let instance_buf = self.create_vertex_buffer("composite instances", instance_bytes);
+
+        let load = if clear {
+            wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+        } else {
+            wgpu::LoadOp::Load
+        };
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("composite render"),
+            });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("composite pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&program.pipeline);
+            pass.set_bind_group(0, &bg0, &[]);
+            pass.set_bind_group(1, &bg1, &[]);
+            pass.set_vertex_buffer(0, vb.slice(..));
+            pass.set_vertex_buffer(1, instance_buf.slice(..));
+            pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint16);
+            pass.draw_indexed(0..6, 0, 0..instance_count);
+        }
+        self.queue.submit([encoder.finish()]);
+    }
 }
 
 impl GpuDevice for WgpuDevice {
@@ -766,7 +883,7 @@ fn vertex_format_from_wgsl_type(ty: &str) -> wgpu::VertexFormat {
         "vec2<u32>" => wgpu::VertexFormat::Uint32x2,
         "vec3<u32>" => wgpu::VertexFormat::Uint32x3,
         "vec4<u32>" => wgpu::VertexFormat::Uint32x4,
-        other => panic!("Unsupported WGSL vertex input type: {}", other),
+        other => unreachable!("WGSL vertex input type not in WebRender's set: {}", other),
     }
 }
 
@@ -780,11 +897,19 @@ fn format_size(fmt: wgpu::VertexFormat) -> u64 {
         wgpu::VertexFormat::Unorm8x4 => 4,
         wgpu::VertexFormat::Unorm16x2 | wgpu::VertexFormat::Uint16x2 => 4,
         wgpu::VertexFormat::Unorm16x4 | wgpu::VertexFormat::Uint16x4 => 8,
-        _ => panic!("Unsupported format_size: {:?}", fmt),
+        _ => unreachable!("format_size: format not in WebRender's set: {:?}", fmt),
     }
 }
 
-fn build_vertex_layouts(vertex_wgsl: &str) -> Vec<wgpu::VertexBufferLayout<'static>> {
+/// A parsed vertex/instance input from a WGSL entry point.
+struct WgslVertexInput {
+    shader_location: u32,
+    name: String,
+    format: wgpu::VertexFormat,
+}
+
+/// Parse all `@location(N)` vertex inputs from a WGSL vertex entry point.
+fn parse_wgsl_vertex_inputs(vertex_wgsl: &str) -> Vec<WgslVertexInput> {
     let vertex_line = vertex_wgsl
         .lines()
         .find(|line| line.contains("fn main("))
@@ -798,8 +923,7 @@ fn build_vertex_layouts(vertex_wgsl: &str) -> Vec<wgpu::VertexBufferLayout<'stat
         .expect("WGSL vertex params terminator not found");
     let params_src = &vertex_line[params_start..params_end];
 
-    let mut attrs: Vec<wgpu::VertexAttribute> = Vec::new();
-    let mut stride: u64 = 0;
+    let mut inputs = Vec::new();
 
     for param in params_src.split(", @").map(|part| {
         if part.starts_with('@') {
@@ -814,29 +938,125 @@ fn build_vertex_layouts(vertex_wgsl: &str) -> Vec<wgpu::VertexBufferLayout<'stat
         let loc_start = param.find("@location(").unwrap() + "@location(".len();
         let loc_end = param[loc_start..].find(')').unwrap() + loc_start;
         let shader_location: u32 = param[loc_start..loc_end].parse().unwrap();
-        let ty = param
+        // Extract "name: type" — strip any extra qualifiers like @interpolate(flat)
+        let mut rest = param[loc_end + 1..].trim();
+        while rest.starts_with('@') {
+            // Skip @interpolate(...) or similar
+            if let Some(paren_start) = rest.find('(') {
+                if let Some(paren_end) = rest[paren_start..].find(')') {
+                    rest = rest[paren_start + paren_end + 1..].trim();
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        let (name, ty) = rest
             .rsplit_once(": ")
-            .map(|(_, ty)| ty.trim())
-            .expect("WGSL vertex input type not found");
-        let format = vertex_format_from_wgsl_type(ty);
-        attrs.push(wgpu::VertexAttribute {
-            format,
-            offset: stride,
-            shader_location,
-        });
-        stride += format_size(format);
+            .expect("WGSL vertex input name:type not found");
+        let name = name.trim().to_string();
+        let format = vertex_format_from_wgsl_type(ty.trim());
+        inputs.push(WgslVertexInput { shader_location, name, format });
     }
 
-    let stride = align_vertex_stride(stride);
-    let attrs = attrs.leak();
-    vec![wgpu::VertexBufferLayout {
-        array_stride: stride,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: attrs,
-    }]
+    inputs
 }
 
-fn build_debug_color_layouts() -> Vec<wgpu::VertexBufferLayout<'static>> {
+/// Build vertex attributes treating all inputs as a single per-vertex buffer.
+/// Used for debug_color / debug_font which have no instancing.
+fn build_all_as_vertex_attrs(inputs: &[WgslVertexInput]) -> (Vec<wgpu::VertexAttribute>, u64) {
+    let mut attrs = Vec::new();
+    let mut stride: u64 = 0;
+    for input in inputs {
+        attrs.push(wgpu::VertexAttribute {
+            format: input.format,
+            offset: stride,
+            shader_location: input.shader_location,
+        });
+        stride += format_size(input.format);
+    }
+    let stride = align_vertex_stride(stride);
+    (attrs, stride)
+}
+
+/// Build two buffer layouts for instanced shaders: buffer 0 is the unit-quad
+/// vertex (location 0), buffer 1 is the instance data.
+///
+/// The instance layout is specified by name→(format, byte_size) in struct
+/// memory order, because the WGSL `@location(N)` numbers are assigned
+/// sequentially per-variant and can differ for the same field across variants.
+/// The name is used to look up the actual location from the parsed WGSL inputs.
+fn build_instanced_layouts(
+    inputs: &[WgslVertexInput],
+    instance_struct: &[(&str, wgpu::VertexFormat)],
+) -> (Vec<wgpu::VertexAttribute>, u64, Vec<wgpu::VertexAttribute>, u64) {
+    // Buffer 0: vertex position (the input named "aPosition")
+    // The WGSL declares vec2<f32> but the actual vertex data is U8Norm
+    // (matching the GL VAO: [[0,0],[0xFF,0],[0,0xFF],[0xFF,0xFF]]).
+    // wgpu auto-converts Unorm8x2 → vec2<f32> in the shader.
+    let vertex_input = inputs
+        .iter()
+        .find(|i| i.name == "aPosition")
+        .expect("instanced shader must have aPosition");
+    let vertex_format = wgpu::VertexFormat::Unorm8x2;
+    let vertex_attrs = vec![wgpu::VertexAttribute {
+        format: vertex_format,
+        offset: 0,
+        shader_location: vertex_input.shader_location,
+    }];
+    let vertex_stride = align_vertex_stride(format_size(vertex_format));
+
+    // Build a name → location map from the shader's actual inputs
+    let name_to_loc: HashMap<&str, u32> = inputs
+        .iter()
+        .map(|i| (i.name.as_str(), i.shader_location))
+        .collect();
+
+    // Buffer 1: instance data, laid out per the struct memory order.
+    // Only emit attributes for fields the shader actually reads.
+    let mut instance_attrs = Vec::new();
+    let mut instance_offset: u64 = 0;
+    for &(field_name, format) in instance_struct {
+        if let Some(&loc) = name_to_loc.get(field_name) {
+            instance_attrs.push(wgpu::VertexAttribute {
+                format,
+                offset: instance_offset,
+                shader_location: loc,
+            });
+        }
+        // Always advance offset — the struct field exists in memory
+        // even if this shader variant doesn't read it.
+        instance_offset += format_size(format);
+    }
+    let instance_stride = align_vertex_stride(instance_offset);
+
+    (vertex_attrs, vertex_stride, instance_attrs, instance_stride)
+}
+
+/// Instance struct layout for `CompositeInstance` (gpu_types.rs).
+/// Listed in struct field order with the WGSL attribute name used by the
+/// shader (after naga translation, field names may have a trailing `_`).
+const COMPOSITE_INSTANCE_LAYOUT: &[(&str, wgpu::VertexFormat)] = &[
+    ("aDeviceRect",             wgpu::VertexFormat::Float32x4),
+    ("aDeviceClipRect",         wgpu::VertexFormat::Float32x4),
+    ("aColor",                  wgpu::VertexFormat::Float32x4),
+    ("aParams",                 wgpu::VertexFormat::Float32x4),
+    ("aUvRect0_",               wgpu::VertexFormat::Float32x4),
+    ("aUvRect1_",               wgpu::VertexFormat::Float32x4),
+    ("aUvRect2_",               wgpu::VertexFormat::Float32x4),
+    ("aFlip",                   wgpu::VertexFormat::Float32x2),
+    ("aDeviceRoundedClipRect",  wgpu::VertexFormat::Float32x4),
+    ("aDeviceRoundedClipRadii", wgpu::VertexFormat::Float32x4),
+];
+
+/// Instance struct layout for `PrimitiveInstanceData` (gpu_types.rs).
+#[allow(dead_code)]
+const PRIMITIVE_INSTANCE_LAYOUT: &[(&str, wgpu::VertexFormat)] = &[
+    ("aData", wgpu::VertexFormat::Sint32x4),
+];
+
+fn build_debug_color_attrs() -> (Vec<wgpu::VertexAttribute>, u64) {
     let attrs = vec![
         wgpu::VertexAttribute {
             format: wgpu::VertexFormat::Float32x2,
@@ -848,16 +1068,11 @@ fn build_debug_color_layouts() -> Vec<wgpu::VertexBufferLayout<'static>> {
             offset: 8,
             shader_location: 1,
         },
-    ]
-    .leak();
-    vec![wgpu::VertexBufferLayout {
-        array_stride: 12,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: attrs,
-    }]
+    ];
+    (attrs, 12)
 }
 
-fn build_debug_font_layouts() -> Vec<wgpu::VertexBufferLayout<'static>> {
+fn build_debug_font_attrs() -> (Vec<wgpu::VertexAttribute>, u64) {
     let attrs = vec![
         wgpu::VertexAttribute {
             format: wgpu::VertexFormat::Float32x2,
@@ -874,13 +1089,8 @@ fn build_debug_font_layouts() -> Vec<wgpu::VertexBufferLayout<'static>> {
             offset: 12,
             shader_location: 2,
         },
-    ]
-    .leak();
-    vec![wgpu::VertexBufferLayout {
-        array_stride: 20,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: attrs,
-    }]
+    ];
+    (attrs, 20)
 }
 
 fn align_vertex_stride(stride: u64) -> u64 {
@@ -907,10 +1117,72 @@ fn create_all_pipelines(
             source: wgpu::ShaderSource::Wgsl(source.frag_source.into()),
         });
 
-        let vertex_layouts = match name {
-            "debug_color" => build_debug_color_layouts(),
-            "debug_font" => build_debug_font_layouts(),
-            _ => build_vertex_layouts(source.vert_source),
+        // Determine buffer layout(s) based on shader kind.
+        // - debug_color / debug_font: single per-vertex buffer (no instancing)
+        // - composite: vertex + instance buffer with CompositeInstance layout
+        // - all others: single per-vertex buffer for now (pipeline creates
+        //   successfully; correct instanced layouts will be added as needed)
+        let inputs = parse_wgsl_vertex_inputs(source.vert_source);
+        let instance_layout = match name {
+            "composite" => Some(COMPOSITE_INSTANCE_LAYOUT),
+            _ => None,
+        };
+
+        // Build the buffer layouts — either one or two buffers.
+        let vertex_buf_attrs;
+        let vertex_buf_stride;
+        let instance_buf_attrs;
+        let instance_buf_stride;
+        let vertex_layouts_1;
+        let vertex_layouts_2;
+        let vertex_layouts: &[wgpu::VertexBufferLayout] = match (name, instance_layout) {
+            ("debug_color", _) | ("debug_font", _) => {
+                let (attrs, stride) = match name {
+                    "debug_color" => build_debug_color_attrs(),
+                    "debug_font" => build_debug_font_attrs(),
+                    _ => unreachable!(),
+                };
+                vertex_buf_attrs = attrs;
+                vertex_buf_stride = stride;
+                vertex_layouts_1 = [wgpu::VertexBufferLayout {
+                    array_stride: vertex_buf_stride,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &vertex_buf_attrs,
+                }];
+                &vertex_layouts_1
+            }
+            (_, Some(inst_layout)) => {
+                let (va, vs, ia, is) = build_instanced_layouts(&inputs, inst_layout);
+                vertex_buf_attrs = va;
+                vertex_buf_stride = vs;
+                instance_buf_attrs = ia;
+                instance_buf_stride = is;
+                vertex_layouts_2 = [
+                    wgpu::VertexBufferLayout {
+                        array_stride: vertex_buf_stride,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &vertex_buf_attrs,
+                    },
+                    wgpu::VertexBufferLayout {
+                        array_stride: instance_buf_stride,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &instance_buf_attrs,
+                    },
+                ];
+                &vertex_layouts_2
+            }
+            _ => {
+                // Fallback: all inputs as a single per-vertex buffer.
+                let (attrs, stride) = build_all_as_vertex_attrs(&inputs);
+                vertex_buf_attrs = attrs;
+                vertex_buf_stride = stride;
+                vertex_layouts_1 = [wgpu::VertexBufferLayout {
+                    array_stride: vertex_buf_stride,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &vertex_buf_attrs,
+                }];
+                &vertex_layouts_1
+            }
         };
         let pipeline_label = format!("{}#{}", name, config);
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -995,7 +1267,7 @@ fn wgpu_format_bytes_per_pixel(format: wgpu::TextureFormat) -> u32 {
         wgpu::TextureFormat::Rg8Unorm => 2,
         wgpu::TextureFormat::Rg16Unorm => 4,
         wgpu::TextureFormat::Rgba32Float | wgpu::TextureFormat::Rgba32Sint => 16,
-        other => panic!("wgpu_format_bytes_per_pixel: unhandled format {:?}", other),
+        other => unreachable!("wgpu_format_bytes_per_pixel: format not in WebRender's set: {:?}", other),
     }
 }
 
@@ -1124,6 +1396,96 @@ mod tests {
         dev.read_texture_pixels(&rt, &mut pixels);
 
         let idx = (((size / 2) * size + (size / 2)) * 4) as usize;
+        let b = pixels[idx];
+        let g = pixels[idx + 1];
+        let r = pixels[idx + 2];
+        let a = pixels[idx + 3];
+
+        assert!(g > 250, "Green channel should be ~255, got {}", g);
+        assert!(r < 5, "Red channel should be ~0, got {}", r);
+        assert!(b < 5, "Blue channel should be ~0, got {}", b);
+        assert!(a > 250, "Alpha channel should be ~255, got {}", a);
+    }
+
+    #[test]
+    fn render_composite_instance() {
+        let Some(mut dev) = try_device() else { return };
+        let size: u32 = 64;
+
+        // Render target
+        let rt = dev.create_texture(
+            ImageBufferKind::Texture2D,
+            ImageFormat::BGRA8,
+            size as i32,
+            size as i32,
+            TextureFilter::Nearest,
+            Some(RenderTargetInfo { has_depth: false }),
+        );
+
+        // Source texture: solid green (BGRA8 = B,G,R,A)
+        let src = dev.create_texture(
+            ImageBufferKind::Texture2D,
+            ImageFormat::BGRA8,
+            1,
+            1,
+            TextureFilter::Nearest,
+            None,
+        );
+        dev.upload_texture_immediate(&src, &[0, 255, 0, 255]); // BGRA: green
+
+        // Build a CompositeInstance as raw bytes.
+        // Struct layout (all f32 unless noted):
+        //   rect(4), clip_rect(4), color(4), params(4),
+        //   uv_rects[0](4), uv_rects[1](4), uv_rects[2](4),
+        //   flip(2), rounded_clip_rect(4), rounded_clip_radii(4)
+        // = 38 floats = 152 bytes
+        let s = size as f32;
+        let floats: [f32; 38] = [
+            // rect: device-space destination (x0, y0, x1, y1)
+            0.0, 0.0, s, s,
+            // clip_rect
+            0.0, 0.0, s, s,
+            // color (white, not used for texture sampling)
+            1.0, 1.0, 1.0, 1.0,
+            // params: _padding, UV_TYPE_NORMALIZED=0, yuv_format=0, yuv_channel_bit_depth=0
+            0.0, 0.0, 0.0, 0.0,
+            // uv_rects[0]: normalized UV rect covering full source
+            0.0, 0.0, 1.0, 1.0,
+            // uv_rects[1]: unused
+            0.0, 0.0, 0.0, 0.0,
+            // uv_rects[2]: unused
+            0.0, 0.0, 0.0, 0.0,
+            // flip: (0, 0) = no flip
+            0.0, 0.0,
+            // rounded_clip_rect: unused
+            0.0, 0.0, 0.0, 0.0,
+            // rounded_clip_radii: unused
+            0.0, 0.0, 0.0, 0.0,
+        ];
+        let instance_bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(
+                floats.as_ptr() as *const u8,
+                std::mem::size_of_val(&floats),
+            )
+        };
+        assert_eq!(instance_bytes.len(), 152);
+
+        dev.render_composite_instances(
+            &rt,
+            Some(&src),
+            instance_bytes,
+            1,
+            "FAST_PATH,TEXTURE_2D",
+            true,
+        );
+
+        // Read back and verify center pixel is green
+        let mut pixels = vec![0u8; (size * size * 4) as usize];
+        dev.read_texture_pixels(&rt, &mut pixels);
+
+        let cx = size / 2;
+        let cy = size / 2;
+        let idx = ((cy * size + cx) * 4) as usize;
         let b = pixels[idx];
         let g = pixels[idx + 1];
         let r = pixels[idx + 2];
