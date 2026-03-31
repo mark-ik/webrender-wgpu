@@ -145,6 +145,10 @@ mod bump_allocator;
 pub use crate::device::{TextureFilter, WgpuDevice};
 #[cfg(feature = "wgpu_backend")]
 pub use crate::internal_types::RenderTargetInfo;
+/// Re-export wgpu so downstream consumers can use the same version
+/// for creating surfaces to pass to `RendererBackend::Wgpu`.
+#[cfg(feature = "wgpu_backend")]
+pub use wgpu;
 
 ///
 pub mod intern;

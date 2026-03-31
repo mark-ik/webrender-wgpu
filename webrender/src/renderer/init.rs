@@ -121,7 +121,14 @@ pub trait RenderBackendHooks {
 pub enum RendererBackend {
     Gl { gl: Rc<dyn gl::Gl> },
     #[cfg(feature = "wgpu_backend")]
-    Wgpu,
+    Wgpu {
+        /// Window surface for presentation. Pass `None` for headless mode.
+        surface: Option<wgpu::Surface<'static>>,
+        /// Initial framebuffer width (ignored if surface is None).
+        width: u32,
+        /// Initial framebuffer height (ignored if surface is None).
+        height: u32,
+    },
 }
 
 impl RendererBackend {
@@ -154,8 +161,8 @@ impl RendererBackend {
                 options.panic_on_gl_error,
             )),
             #[cfg(feature = "wgpu_backend")]
-            RendererBackend::Wgpu => Err(RendererError::UnsupportedBackend(
-                "wgpu renderer integration is not available yet",
+            RendererBackend::Wgpu { .. } => Err(RendererError::UnsupportedBackend(
+                "wgpu uses create_webrender_instance_wgpu, not the GL device path",
             )),
         }
     }
@@ -373,8 +380,8 @@ pub fn create_webrender_instance_with_backend(
     shaders: Option<&SharedShaders>,
 ) -> Result<(Renderer, RenderApiSender), RendererError> {
     #[cfg(feature = "wgpu_backend")]
-    if matches!(backend, RendererBackend::Wgpu) {
-        return create_webrender_instance_wgpu(notifier, options);
+    if let RendererBackend::Wgpu { surface, width, height } = backend {
+        return create_webrender_instance_wgpu(notifier, options, surface, width, height);
     }
 
     let device = backend.into_device(&mut options)?;
@@ -886,6 +893,9 @@ fn create_dither_matrix_texture<D: GpuDevice>(device: &mut D) -> D::Texture {
 pub fn create_webrender_instance_wgpu(
     notifier: Box<dyn RenderNotifier>,
     mut options: WebRenderOptions,
+    surface: Option<wgpu::Surface<'static>>,
+    surface_width: u32,
+    surface_height: u32,
 ) -> Result<(Renderer, RenderApiSender), RendererError> {
     use crate::device::WgpuDevice;
 
@@ -906,9 +916,14 @@ pub fn create_webrender_instance_wgpu(
     let (api_tx, api_rx) = unbounded_channel();
     let (result_tx, result_rx) = unbounded_channel();
 
-    // Create the wgpu device.
-    let wgpu_device = WgpuDevice::new_headless()
-        .ok_or(RendererError::UnsupportedBackend("no wgpu adapter available"))?;
+    // Create the wgpu device — with surface if provided, else headless.
+    let wgpu_device = if let Some(surface) = surface {
+        WgpuDevice::new_with_surface(surface, surface_width, surface_height)
+            .ok_or(RendererError::UnsupportedBackend("no wgpu adapter available for surface"))?
+    } else {
+        WgpuDevice::new_headless()
+            .ok_or(RendererError::UnsupportedBackend("no wgpu adapter available"))?
+    };
 
     // Hardcoded capability answers for wgpu — no GL queries needed.
     let max_texture_size: i32 = 16384;

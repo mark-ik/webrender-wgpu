@@ -1251,11 +1251,20 @@ impl Renderer {
             None => return Ok(results),
         };
 
-        // Create or reuse the wgpu render target matching device_size.
-        let rt = wgpu_dev.create_render_target(
-            device_size.width as u32,
-            device_size.height as u32,
-        );
+        // Acquire the render target: surface texture for presentation, else offscreen.
+        let w = device_size.width as u32;
+        let h = device_size.height as u32;
+        let surface_texture = wgpu_dev.acquire_surface_texture();
+        let offscreen_rt = if surface_texture.is_none() {
+            Some(wgpu_dev.create_render_target(w, h))
+        } else {
+            None
+        };
+        let target_view = if let Some(ref st) = surface_texture {
+            st.texture.create_view(&wgpu::TextureViewDescriptor::default())
+        } else {
+            offscreen_rt.as_ref().unwrap().create_view()
+        };
 
         // Collect composite tiles into batches by type.
         let composite_state = &doc.frame.composite_state;
@@ -1326,8 +1335,10 @@ impl Renderer {
                 )
             };
 
-            wgpu_dev.render_composite_instances(
-                &rt,
+            wgpu_dev.render_composite_instances_to_view(
+                &target_view,
+                w,
+                h,
                 None, // no source texture for solid-color tiles
                 instance_bytes,
                 color_instances.len() as u32,
@@ -1349,8 +1360,10 @@ impl Renderer {
                     instances.len() * std::mem::size_of::<CompositeInstance>(),
                 )
             };
-            wgpu_dev.render_composite_instances(
-                &rt,
+            wgpu_dev.render_composite_instances_to_view(
+                &target_view,
+                w,
+                h,
                 Some(wgpu_tex),
                 instance_bytes,
                 instances.len() as u32,
@@ -1372,6 +1385,11 @@ impl Renderer {
             );
         }
 
+        // Present the surface texture if we rendered to one.
+        if let Some(st) = surface_texture {
+            st.present();
+        }
+
         // Drain notifications that expect FrameRendered
         drain_filter(
             &mut self.notifications,
@@ -1381,6 +1399,15 @@ impl Renderer {
         self.notifications.clear();
 
         Ok(results)
+    }
+
+    /// Resize the wgpu surface when the window size changes.
+    /// No-op if this is not a wgpu renderer with a surface.
+    #[cfg(feature = "wgpu_backend")]
+    pub fn resize_surface(&mut self, width: u32, height: u32) {
+        if let Some(ref mut dev) = self.wgpu_device {
+            dev.resize_surface(width, height);
+        }
     }
 
     /// Update the current position of the debug cursor.

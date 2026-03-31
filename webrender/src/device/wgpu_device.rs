@@ -26,6 +26,13 @@ pub struct WgpuTexture {
     height: u32,
 }
 
+impl WgpuTexture {
+    /// Create a default texture view for this texture.
+    pub fn create_view(&self) -> wgpu::TextureView {
+        self.texture.create_view(&wgpu::TextureViewDescriptor::default())
+    }
+}
+
 /// A wgpu-backed shader pipeline.
 pub struct WgpuProgram {
     pipeline: wgpu::RenderPipeline,
@@ -45,6 +52,9 @@ pub struct WgpuDevice {
     global_sampler: wgpu::Sampler,
     dummy_texture_f32: wgpu::TextureView,
     dummy_texture_i32: wgpu::TextureView,
+    /// Window surface for presentation. None in headless mode.
+    surface: Option<wgpu::Surface<'static>>,
+    surface_config: Option<wgpu::SurfaceConfiguration>,
 }
 
 impl WgpuDevice {
@@ -103,7 +113,130 @@ impl WgpuDevice {
             global_sampler,
             dummy_texture_f32,
             dummy_texture_i32,
+            surface: None,
+            surface_config: None,
         })
+    }
+
+    /// Create a device with a window surface for presentation.
+    ///
+    /// The caller creates the `wgpu::Surface<'static>` from its window handle
+    /// and passes it here along with the initial framebuffer size.
+    pub fn new_with_surface(
+        surface: wgpu::Surface<'static>,
+        width: u32,
+        height: u32,
+    ) -> Option<Self> {
+        let instance = wgpu::Instance::default();
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: Some(&surface),
+            force_fallback_adapter: false,
+        }))
+        .ok()?;
+
+        let wanted = wgpu::Features::TEXTURE_FORMAT_16BIT_NORM;
+        let required_features = adapter.features() & wanted;
+
+        let (device, queue) = pollster::block_on(adapter.request_device(
+            &wgpu::DeviceDescriptor {
+                label: Some("WebRender wgpu device"),
+                required_features,
+                ..Default::default()
+            },
+        ))
+        .ok()?;
+
+        let surface_caps = surface.get_capabilities(&adapter);
+        let surface_format = surface_caps
+            .formats
+            .iter()
+            .find(|f| matches!(f, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Rgba8Unorm))
+            .copied()
+            .unwrap_or(surface_caps.formats[0]);
+
+        let surface_config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: surface_format,
+            width,
+            height,
+            present_mode: wgpu::PresentMode::Fifo,
+            desired_maximum_frame_latency: 2,
+            alpha_mode: surface_caps.alpha_modes[0],
+            view_formats: vec![],
+        };
+        surface.configure(&device, &surface_config);
+
+        let bind_group_layout_0 = create_resource_bind_group_layout(&device);
+        let bind_group_layout_1 = create_sampler_bind_group_layout(&device);
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("WR pipeline layout"),
+            bind_group_layouts: &[&bind_group_layout_0, &bind_group_layout_1],
+            push_constant_ranges: &[],
+        });
+
+        let global_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("global_sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        let dummy_texture_f32 =
+            create_dummy_texture(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        let dummy_texture_i32 =
+            create_dummy_texture(&device, &queue, wgpu::TextureFormat::Rgba32Sint);
+        let pipelines = create_all_pipelines(&device, &pipeline_layout);
+
+        Some(WgpuDevice {
+            device,
+            queue,
+            features: required_features,
+            frame_id: GpuFrameId::new(0),
+            pipelines,
+            pipeline_layout,
+            bind_group_layout_0,
+            bind_group_layout_1,
+            global_sampler,
+            dummy_texture_f32,
+            dummy_texture_i32,
+            surface: Some(surface),
+            surface_config: Some(surface_config),
+        })
+    }
+
+    /// Returns true if this device has a presentation surface.
+    pub fn has_surface(&self) -> bool {
+        self.surface.is_some()
+    }
+
+    /// Acquire the current surface texture for rendering.
+    /// Returns None if no surface is configured or acquisition fails.
+    pub fn acquire_surface_texture(&self) -> Option<wgpu::SurfaceTexture> {
+        let surface = self.surface.as_ref()?;
+        match surface.get_current_texture() {
+            Ok(tex) => Some(tex),
+            Err(e) => {
+                warn!("wgpu: failed to acquire surface texture: {:?}", e);
+                None
+            }
+        }
+    }
+
+    /// Get the surface texture format, if a surface is configured.
+    pub fn surface_format(&self) -> Option<wgpu::TextureFormat> {
+        self.surface_config.as_ref().map(|c| c.format)
+    }
+
+    /// Resize the surface. Called when the window size changes.
+    pub fn resize_surface(&mut self, width: u32, height: u32) {
+        if let Some(ref mut config) = self.surface_config {
+            config.width = width.max(1);
+            config.height = height.max(1);
+            if let Some(ref surface) = self.surface {
+                surface.configure(&self.device, config);
+            }
+        }
     }
 
     pub fn begin_frame(&mut self) -> GpuFrameId {
@@ -695,18 +828,44 @@ impl WgpuDevice {
         config: &str,
         clear: bool,
     ) {
+        let target_view = target
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        self.render_composite_instances_to_view(
+            &target_view,
+            target.width,
+            target.height,
+            source_texture,
+            instance_bytes,
+            instance_count,
+            config,
+            clear,
+        );
+    }
+
+    /// Render composite tile instances to an arbitrary texture view.
+    ///
+    /// This is the core rendering method — `render_composite_instances` delegates
+    /// here. Used directly when rendering to a surface texture view.
+    pub fn render_composite_instances_to_view(
+        &self,
+        target_view: &wgpu::TextureView,
+        target_width: u32,
+        target_height: u32,
+        source_texture: Option<&WgpuTexture>,
+        instance_bytes: &[u8],
+        instance_count: u32,
+        config: &str,
+        clear: bool,
+    ) {
         let pipeline_key = ("composite", config);
         let program = self
             .pipelines
             .get(&pipeline_key)
             .unwrap_or_else(|| panic!("composite pipeline not found for config {:?}", config));
 
-        let target_view = target
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
         // Transform: orthographic projection matching the target dimensions
-        let projection = ortho(target.width as f32, target.height as f32);
+        let projection = ortho(target_width as f32, target_height as f32);
         let mut transform_data = Vec::with_capacity(64);
         for f in &projection {
             transform_data.extend_from_slice(&f.to_le_bytes());
@@ -714,8 +873,8 @@ impl WgpuDevice {
         let transform_buf = self.create_uniform_buffer("composite transform", &transform_data);
 
         let mut tex_size_data = Vec::with_capacity(8);
-        tex_size_data.extend_from_slice(&(target.width as f32).to_le_bytes());
-        tex_size_data.extend_from_slice(&(target.height as f32).to_le_bytes());
+        tex_size_data.extend_from_slice(&(target_width as f32).to_le_bytes());
+        tex_size_data.extend_from_slice(&(target_height as f32).to_le_bytes());
         let tex_size_buf = self.create_uniform_buffer("composite texture size", &tex_size_data);
         let mali_buf =
             self.create_uniform_buffer("composite mali workaround", &0u32.to_le_bytes());
@@ -775,7 +934,7 @@ impl WgpuDevice {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("composite pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &target_view,
+                    view: target_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load,
