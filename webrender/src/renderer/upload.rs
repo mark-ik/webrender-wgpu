@@ -567,7 +567,7 @@ fn copy_from_staging_to_cache_using_draw_calls(
             let draw_target = DrawTarget::from_texture(dest_texture, false);
             renderer.device.as_mut().unwrap().bind_draw_target(draw_target);
 
-            renderer.shaders
+            renderer.shaders.as_ref().unwrap()
                 .borrow_mut()
                 .ps_copy()
                 .bind(

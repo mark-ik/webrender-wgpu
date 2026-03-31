@@ -372,6 +372,11 @@ pub fn create_webrender_instance_with_backend(
     mut options: WebRenderOptions,
     shaders: Option<&SharedShaders>,
 ) -> Result<(Renderer, RenderApiSender), RendererError> {
+    #[cfg(feature = "wgpu_backend")]
+    if matches!(backend, RendererBackend::Wgpu) {
+        return create_webrender_instance_wgpu(notifier, options);
+    }
+
     let device = backend.into_device(&mut options)?;
     create_webrender_instance_with_device(device, notifier, options, shaders)
 }
@@ -759,7 +764,7 @@ fn create_webrender_instance_with_device(
         pending_gpu_cache_updates: Vec::new(),
         pending_gpu_cache_clear: false,
         pending_shader_updates: Vec::new(),
-        shaders,
+        shaders: Some(shaders),
         debug: debug::LazyInitializedDebugRenderer::new(),
         debug_flags: DebugFlags::empty(),
         profile: TransactionProfile::new(),
@@ -867,4 +872,370 @@ fn create_dither_matrix_texture<D: GpuDevice>(device: &mut D) -> D::Texture {
     );
     device.upload_texture_immediate(&texture, &dither_matrix);
     texture
+}
+
+/// Creates a wgpu-only Renderer instance with no GL device.
+///
+/// The GL draw loop is not used; the Renderer's `device` field is `None`.
+/// All subsystems use their wgpu enum variants (no-op stubs for now).
+/// The backend threads (scene builder, render backend) are set up identically
+/// to the GL path — they are device-independent.
+#[cfg(feature = "wgpu_backend")]
+pub fn create_webrender_instance_wgpu(
+    notifier: Box<dyn RenderNotifier>,
+    mut options: WebRenderOptions,
+) -> Result<(Renderer, RenderApiSender), RendererError> {
+    use crate::device::WgpuDevice;
+
+    if !wr_has_been_initialized() {
+        #[cfg(feature = "profiler")]
+        unsafe {
+            if let Ok(ref tracy_path) = std::env::var("WR_TRACY_PATH") {
+                let ok = tracy_rs::load(tracy_path);
+                info!("Load tracy from {} -> {}", tracy_path, ok);
+            }
+        }
+
+        register_thread_with_profiler("Compositor".to_owned());
+    }
+
+    HAS_BEEN_INITIALIZED.store(true, Ordering::SeqCst);
+
+    let (api_tx, api_rx) = unbounded_channel();
+    let (result_tx, result_rx) = unbounded_channel();
+
+    // Create the wgpu device.
+    let wgpu_device = WgpuDevice::new_headless()
+        .ok_or(RendererError::UnsupportedBackend("no wgpu adapter available"))?;
+
+    // Hardcoded capability answers for wgpu — no GL queries needed.
+    let max_texture_size: i32 = 16384;
+    let use_dual_source_blending = false;
+    let ext_blend_equation_advanced = false;
+    let ext_blend_equation_advanced_coherent = false;
+    let enable_clear_scissor = options.enable_clear_scissor.unwrap_or(false);
+    let is_software = false;
+
+    const MIN_TEXTURE_SIZE: i32 = 2048;
+    let mut max_internal_texture_size = max_texture_size;
+    if let Some(internal_limit) = options.max_internal_texture_size {
+        assert!(internal_limit >= MIN_TEXTURE_SIZE);
+        max_internal_texture_size = max_internal_texture_size.min(internal_limit);
+    }
+
+    let image_tiling_threshold = options.image_tiling_threshold
+        .min(max_internal_texture_size);
+
+    // wgpu subsystem variants — no GL resources needed.
+    let vaos = vertex::RendererVaoState::Wgpu(vertex::WgpuRendererVaos);
+    let vertex_data_textures = vertex::RendererVertexData::Wgpu(vertex::WgpuRendererVertexData);
+    let upload_state = RendererUploadState::Wgpu(super::upload::WgpuRendererUploadState);
+    let gpu_cache_texture = gpu_cache::RendererGpuCache::Wgpu(gpu_cache::WgpuGpuCacheTexture);
+    let aux_textures = super::RendererAuxTextures::Wgpu(super::WgpuRendererAuxTextures);
+    let texture_resolver = TextureResolver::new_without_gl();
+    let gpu_profiler = GpuProfiler::new_noop();
+
+    let color_cache_formats = crate::device::TextureFormatPair {
+        internal: ImageFormat::BGRA8,
+        external: ImageFormat::BGRA8,
+    };
+    let swizzle_settings = None; // wgpu handles format conversion natively
+
+    let max_primitive_instance_count =
+        WebRenderOptions::MAX_INSTANCE_BUFFER_SIZE / mem::size_of::<PrimitiveInstanceData>();
+
+    let backend_notifier = notifier.clone();
+
+    let prefer_subpixel_aa = options.enable_subpixel_aa && use_dual_source_blending;
+    let default_font_render_mode = match (options.enable_aa, prefer_subpixel_aa) {
+        (true, true) => FontRenderMode::Subpixel,
+        (true, false) => FontRenderMode::Alpha,
+        (false, _) => FontRenderMode::Mono,
+    };
+
+    let compositor_kind = match options.compositor_config {
+        CompositorConfig::Draw { max_partial_present_rects, draw_previous_partial_present_regions, .. } => {
+            CompositorKind::Draw { max_partial_present_rects, draw_previous_partial_present_regions }
+        }
+        CompositorConfig::Native { .. } => {
+            // Native compositor needs a device ref — not supported in wgpu-only mode yet.
+            return Err(RendererError::UnsupportedBackend(
+                "native compositor not supported in wgpu-only mode",
+            ));
+        }
+        CompositorConfig::Layer { .. } => {
+            CompositorKind::Layer {}
+        }
+    };
+
+    let config = FrameBuilderConfig {
+        default_font_render_mode,
+        dual_source_blending_is_supported: use_dual_source_blending,
+        testing: options.testing,
+        gpu_supports_fast_clears: options.gpu_supports_fast_clears,
+        gpu_supports_advanced_blend: ext_blend_equation_advanced,
+        advanced_blend_is_coherent: ext_blend_equation_advanced_coherent,
+        gpu_supports_render_target_partial_update: true,
+        external_images_require_copy: false,
+        batch_lookback_count: WebRenderOptions::BATCH_LOOKBACK_COUNT,
+        background_color: Some(options.clear_color),
+        compositor_kind,
+        tile_size_override: None,
+        max_surface_override: None,
+        max_depth_ids: 64, // reasonable default, no GL query needed
+        max_target_size: max_internal_texture_size,
+        force_invalidation: false,
+        is_software,
+        low_quality_pinch_zoom: options.low_quality_pinch_zoom,
+        max_shared_surface_size: options.max_shared_surface_size,
+        enable_dithering: options.enable_dithering,
+        precise_linear_gradients: options.precise_linear_gradients,
+        precise_radial_gradients: options.precise_radial_gradients,
+        precise_conic_gradients: options.precise_conic_gradients,
+    };
+    info!("WR (wgpu) {:?}", config);
+
+    let debug_flags = options.debug_flags;
+    let size_of_op = options.size_of_op;
+    let enclosing_size_of_op = options.enclosing_size_of_op;
+    let make_size_of_ops =
+        move || size_of_op.map(|o| MallocSizeOfOps::new(o, enclosing_size_of_op));
+    let workers = options
+        .workers
+        .take()
+        .unwrap_or_else(|| {
+            let worker = ThreadPoolBuilder::new()
+                .thread_name(|idx| format!("WRWorker#{}", idx))
+                .start_handler(move |idx| {
+                    register_thread_with_profiler(format!("WRWorker#{}", idx));
+                    profiler::register_thread(&format!("WRWorker#{}", idx));
+                })
+                .exit_handler(move |_idx| {
+                    profiler::unregister_thread();
+                })
+                .build();
+            Arc::new(worker.unwrap())
+        });
+    let sampler = options.sampler;
+    let namespace_alloc_by_client = options.namespace_alloc_by_client;
+
+    let font_namespace = if namespace_alloc_by_client {
+        options.shared_font_namespace.expect("Shared font namespace must be allocated by client")
+    } else {
+        RenderBackend::next_namespace_id()
+    };
+    let fonts = SharedFontResources::new(font_namespace);
+
+    let blob_image_handler = options.blob_image_handler.take();
+    let scene_builder_hooks = options.scene_builder_hooks;
+    let rb_thread_name = format!("WRRenderBackend#{}", options.renderer_id.unwrap_or(0));
+    let scene_thread_name = format!("WRSceneBuilder#{}", options.renderer_id.unwrap_or(0));
+    let lp_scene_thread_name = format!("WRSceneBuilderLP#{}", options.renderer_id.unwrap_or(0));
+
+    let glyph_rasterizer = GlyphRasterizer::new(
+        workers,
+        options.dedicated_glyph_raster_thread,
+        true, // wgpu supports R8 texture upload
+    );
+
+    let (scene_builder_channels, scene_tx) =
+        SceneBuilderThreadChannels::new(api_tx.clone());
+
+    let sb_fonts = fonts.clone();
+
+    thread::Builder::new().name(scene_thread_name.clone()).spawn(move || {
+        register_thread_with_profiler(scene_thread_name.clone());
+        profiler::register_thread(&scene_thread_name);
+
+        let mut scene_builder = SceneBuilderThread::new(
+            config,
+            sb_fonts,
+            make_size_of_ops(),
+            scene_builder_hooks,
+            scene_builder_channels,
+        );
+        scene_builder.run();
+
+        profiler::unregister_thread();
+    })?;
+
+    let low_priority_scene_tx = if options.support_low_priority_transactions {
+        let (low_priority_scene_tx, low_priority_scene_rx) = unbounded_channel();
+        let lp_builder = LowPrioritySceneBuilderThread {
+            rx: low_priority_scene_rx,
+            tx: scene_tx.clone(),
+            tile_pool: api::BlobTilePool::new(),
+        };
+
+        thread::Builder::new().name(lp_scene_thread_name.clone()).spawn(move || {
+            register_thread_with_profiler(lp_scene_thread_name.clone());
+            profiler::register_thread(&lp_scene_thread_name);
+
+            let mut scene_builder = lp_builder;
+            scene_builder.run();
+
+            profiler::unregister_thread();
+        })?;
+
+        low_priority_scene_tx
+    } else {
+        scene_tx.clone()
+    };
+
+    let rb_blob_handler = blob_image_handler
+        .as_ref()
+        .map(|handler| handler.create_similar());
+
+    let texture_cache_config = options.texture_cache_config.clone();
+    let mut picture_tile_size = options.picture_tile_size.unwrap_or(picture::TILE_SIZE_DEFAULT);
+    picture_tile_size.width = picture_tile_size.width.max(128).min(4096);
+    picture_tile_size.height = picture_tile_size.height.max(128).min(4096);
+
+    let picture_texture_filter = if options.low_quality_pinch_zoom {
+        TextureFilter::Linear
+    } else {
+        TextureFilter::Nearest
+    };
+
+    let render_backend_hooks = options.render_backend_hooks.take();
+
+    let chunk_pool = options.chunk_pool.take().unwrap_or_else(|| {
+        Arc::new(ChunkPool::new())
+    });
+
+    let rb_scene_tx = scene_tx.clone();
+    let rb_fonts = fonts.clone();
+    let enable_multithreading = options.enable_multithreading;
+    thread::Builder::new().name(rb_thread_name.clone()).spawn(move || {
+        if let Some(hooks) = render_backend_hooks {
+            hooks.init_thread();
+        }
+        register_thread_with_profiler(rb_thread_name.clone());
+        profiler::register_thread(&rb_thread_name);
+
+        let texture_cache = TextureCache::new(
+            max_internal_texture_size,
+            image_tiling_threshold,
+            color_cache_formats,
+            swizzle_settings,
+            &texture_cache_config,
+        );
+
+        let picture_textures = PictureTextures::new(
+            picture_tile_size,
+            picture_texture_filter,
+        );
+
+        let glyph_cache = GlyphCache::new();
+
+        let mut resource_cache = ResourceCache::new(
+            texture_cache,
+            picture_textures,
+            glyph_rasterizer,
+            glyph_cache,
+            rb_fonts,
+            rb_blob_handler,
+        );
+
+        resource_cache.enable_multithreading(enable_multithreading);
+
+        let mut backend = RenderBackend::new(
+            api_rx,
+            result_tx,
+            rb_scene_tx,
+            resource_cache,
+            chunk_pool,
+            backend_notifier,
+            config,
+            sampler,
+            make_size_of_ops(),
+            debug_flags,
+            namespace_alloc_by_client,
+        );
+        backend.run();
+        profiler::unregister_thread();
+    })?;
+
+    let mut renderer = Renderer {
+        result_rx,
+        api_tx: api_tx.clone(),
+        device: None,
+        active_documents: FastHashMap::default(),
+        pending_texture_updates: Vec::new(),
+        pending_texture_cache_updates: false,
+        pending_native_surface_updates: Vec::new(),
+        pending_gpu_cache_updates: Vec::new(),
+        pending_gpu_cache_clear: false,
+        pending_shader_updates: Vec::new(),
+        shaders: None,
+        debug: debug::LazyInitializedDebugRenderer::new(),
+        debug_flags: DebugFlags::empty(),
+        profile: TransactionProfile::new(),
+        frame_counter: 0,
+        resource_upload_time: 0.0,
+        gpu_cache_upload_time: 0.0,
+        profiler: Profiler::new(),
+        max_recorded_profiles: options.max_recorded_profiles,
+        clear_color: options.clear_color,
+        enable_clear_scissor,
+        enable_advanced_blend_barriers: !ext_blend_equation_advanced_coherent,
+        clear_caches_with_quads: options.clear_caches_with_quads,
+        clear_alpha_targets_with_quads: false,
+        last_time: 0,
+        gpu_profiler,
+        vaos,
+        vertex_data_textures,
+        pipeline_info: PipelineInfo::default(),
+        aux_textures,
+        external_image_handler: None,
+        size_of_ops: make_size_of_ops(),
+        cpu_profiles: VecDeque::new(),
+        gpu_profiles: VecDeque::new(),
+        gpu_cache_texture,
+        gpu_cache_debug_chunks: Vec::new(),
+        gpu_cache_frame_id: FrameId::INVALID,
+        gpu_cache_overflow: false,
+        upload_state,
+        texture_resolver,
+        renderer_errors: Vec::new(),
+        async_frame_recorder: None,
+        async_screenshots: None,
+        #[cfg(feature = "capture")]
+        read_fbo: crate::device::FBOId(0),
+        #[cfg(feature = "replay")]
+        owned_external_images: FastHashMap::default(),
+        notifications: Vec::new(),
+        device_size: None,
+        cursor_position: DeviceIntPoint::zero(),
+        shared_texture_cache_cleared: false,
+        documents_seen: FastHashSet::default(),
+        force_redraw: true,
+        compositor_config: options.compositor_config,
+        current_compositor_kind: compositor_kind,
+        allocated_native_surfaces: FastHashSet::default(),
+        debug_overlay_state: DebugOverlayState::new(),
+        buffer_damage_tracker: BufferDamageTracker::default(),
+        max_primitive_instance_count,
+        enable_instancing: options.enable_instancing,
+        consecutive_oom_frames: 0,
+        target_frame_publish_id: None,
+        pending_result_msg: None,
+        layer_compositor_frame_state_in_prev_frame: None,
+        #[cfg(feature = "debugger")]
+        debugger: Debugger::new(),
+        wgpu_device: Some(wgpu_device),
+    };
+
+    renderer.set_debug_flags(debug_flags);
+    renderer.profiler.set_ui("Default");
+
+    let sender = RenderApiSender::new(
+        api_tx,
+        scene_tx,
+        low_priority_scene_tx,
+        blob_image_handler,
+        fonts,
+    );
+
+    Ok((renderer, sender))
 }

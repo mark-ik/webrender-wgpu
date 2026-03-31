@@ -67,7 +67,7 @@ impl<T> QuerySet<T> {
 }
 
 pub struct GpuFrameProfile {
-    gl: Rc<dyn gl::Gl>,
+    gl: Option<Rc<dyn gl::Gl>>,
     timers: QuerySet<GpuTimer>,
     samplers: QuerySet<GpuSampler>,
     frame_id: GpuFrameId,
@@ -78,7 +78,7 @@ pub struct GpuFrameProfile {
 impl GpuFrameProfile {
     fn new(gl: Rc<dyn gl::Gl>, debug_method: GpuDebugMethod) -> Self {
         GpuFrameProfile {
-            gl,
+            gl: Some(gl),
             timers: QuerySet::new(),
             samplers: QuerySet::new(),
             frame_id: GpuFrameId::new(0),
@@ -87,24 +87,43 @@ impl GpuFrameProfile {
         }
     }
 
+    fn new_noop() -> Self {
+        GpuFrameProfile {
+            gl: None,
+            timers: QuerySet::new(),
+            samplers: QuerySet::new(),
+            frame_id: GpuFrameId::new(0),
+            inside_frame: false,
+            debug_method: GpuDebugMethod::None,
+        }
+    }
+
     fn enable_timers(&mut self, count: i32) {
-        self.timers.set = self.gl.gen_queries(count);
+        if let Some(ref gl) = self.gl {
+            self.timers.set = gl.gen_queries(count);
+        }
     }
 
     fn disable_timers(&mut self) {
-        if !self.timers.set.is_empty() {
-            self.gl.delete_queries(&self.timers.set);
+        if let Some(ref gl) = self.gl {
+            if !self.timers.set.is_empty() {
+                gl.delete_queries(&self.timers.set);
+            }
         }
         self.timers.set = Vec::new();
     }
 
     fn enable_samplers(&mut self, count: i32) {
-        self.samplers.set = self.gl.gen_queries(count);
+        if let Some(ref gl) = self.gl {
+            self.samplers.set = gl.gen_queries(count);
+        }
     }
 
     fn disable_samplers(&mut self) {
-        if !self.samplers.set.is_empty() {
-            self.gl.delete_queries(&self.samplers.set);
+        if let Some(ref gl) = self.gl {
+            if !self.samplers.set.is_empty() {
+                gl.delete_queries(&self.samplers.set);
+            }
         }
         self.samplers.set = Vec::new();
     }
@@ -125,7 +144,9 @@ impl GpuFrameProfile {
     fn finish_timer(&mut self) {
         debug_assert!(self.inside_frame);
         if self.timers.pending != 0 {
-            self.gl.end_query(gl::TIME_ELAPSED);
+            if let Some(ref gl) = self.gl {
+                gl.end_query(gl::TIME_ELAPSED);
+            }
             self.timers.pending = 0;
         }
     }
@@ -133,7 +154,9 @@ impl GpuFrameProfile {
     fn finish_sampler(&mut self) {
         debug_assert!(self.inside_frame);
         if self.samplers.pending != 0 {
-            self.gl.end_query(gl::SAMPLES_PASSED);
+            if let Some(ref gl) = self.gl {
+                gl.end_query(gl::SAMPLES_PASSED);
+            }
             self.samplers.pending = 0;
         }
     }
@@ -141,10 +164,15 @@ impl GpuFrameProfile {
     fn start_timer(&mut self, tag: GpuProfileTag) -> GpuTimeQuery {
         self.finish_timer();
 
-        let marker = GpuMarker::new(&self.gl, tag.label, self.debug_method);
+        let marker = match self.gl {
+            Some(ref gl) => GpuMarker::new(gl, tag.label, self.debug_method),
+            None => GpuMarker { gl: None },
+        };
 
-        if let Some(query) = self.timers.add(GpuTimer { tag, time_ns: 0 }) {
-            self.gl.begin_query(gl::TIME_ELAPSED, query);
+        if let Some(ref gl) = self.gl {
+            if let Some(query) = self.timers.add(GpuTimer { tag, time_ns: 0 }) {
+                gl.begin_query(gl::TIME_ELAPSED, query);
+            }
         }
 
         GpuTimeQuery(marker)
@@ -153,8 +181,10 @@ impl GpuFrameProfile {
     fn start_sampler(&mut self, tag: GpuProfileTag) -> GpuSampleQuery {
         self.finish_sampler();
 
-        if let Some(query) = self.samplers.add(GpuSampler { tag, count: 0 }) {
-            self.gl.begin_query(gl::SAMPLES_PASSED, query);
+        if let Some(ref gl) = self.gl {
+            if let Some(query) = self.samplers.add(GpuSampler { tag, count: 0 }) {
+                gl.begin_query(gl::SAMPLES_PASSED, query);
+            }
         }
 
         GpuSampleQuery
@@ -162,17 +192,22 @@ impl GpuFrameProfile {
 
     fn build_samples(&mut self) -> (GpuFrameId, Vec<GpuTimer>, Vec<GpuSampler>) {
         debug_assert!(!self.inside_frame);
-        let gl = &self.gl;
 
-        (
-            self.frame_id,
-            self.timers.take(|timer, query| {
-                timer.time_ns = gl.get_query_object_ui64v(query, gl::QUERY_RESULT)
-            }),
-            self.samplers.take(|sampler, query| {
-                sampler.count = gl.get_query_object_ui64v(query, gl::QUERY_RESULT)
-            }),
-        )
+        match self.gl {
+            Some(ref gl) => {
+                let gl = gl;
+                (
+                    self.frame_id,
+                    self.timers.take(|timer, query| {
+                        timer.time_ns = gl.get_query_object_ui64v(query, gl::QUERY_RESULT)
+                    }),
+                    self.samplers.take(|sampler, query| {
+                        sampler.count = gl.get_query_object_ui64v(query, gl::QUERY_RESULT)
+                    }),
+                )
+            }
+            None => (self.frame_id, Vec::new(), Vec::new()),
+        }
     }
 }
 
@@ -186,7 +221,7 @@ impl Drop for GpuFrameProfile {
 const NUM_PROFILE_FRAMES: usize = 4;
 
 pub struct GpuProfiler {
-    gl: Rc<dyn gl::Gl>,
+    gl: Option<Rc<dyn gl::Gl>>,
     frames: [GpuFrameProfile; NUM_PROFILE_FRAMES],
     next_frame: usize,
     debug_method: GpuDebugMethod
@@ -198,10 +233,27 @@ impl GpuProfiler {
 
         let frames = [f(), f(), f(), f()];
         GpuProfiler {
-            gl,
+            gl: Some(gl),
             next_frame: 0,
             frames,
             debug_method
+        }
+    }
+
+    /// Creates a no-op profiler that doesn't require a GL context.
+    /// All profiling methods become no-ops that return dummy guards.
+    pub fn new_noop() -> Self {
+        let frames = [
+            GpuFrameProfile::new_noop(),
+            GpuFrameProfile::new_noop(),
+            GpuFrameProfile::new_noop(),
+            GpuFrameProfile::new_noop(),
+        ];
+        GpuProfiler {
+            gl: None,
+            next_frame: 0,
+            frames,
+            debug_method: GpuDebugMethod::None,
         }
     }
 
@@ -262,11 +314,16 @@ impl GpuProfiler {
     }
 
     pub fn start_marker(&mut self, label: &str) -> GpuMarker {
-        GpuMarker::new(&self.gl, label, self.debug_method)
+        match self.gl {
+            Some(ref gl) => GpuMarker::new(gl, label, self.debug_method),
+            None => GpuMarker { gl: None },
+        }
     }
 
     pub fn place_marker(&mut self, label: &str) {
-        GpuMarker::fire(&self.gl, label, self.debug_method)
+        if let Some(ref gl) = self.gl {
+            GpuMarker::fire(gl, label, self.debug_method)
+        }
     }
 }
 

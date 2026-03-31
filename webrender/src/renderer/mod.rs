@@ -577,8 +577,8 @@ struct TextureResolver {
 
     /// A special 1x1 dummy texture used for shaders that expect to work with
     /// the output of the previous pass but are actually running in the first
-    /// pass.
-    dummy_cache_texture: Texture,
+    /// pass. None in wgpu-only mode (GL draw paths are not used).
+    dummy_cache_texture: Option<Texture>,
 }
 
 fn create_dummy_cache_texture<D: GpuDevice<Texture = Texture>>(device: &mut D) -> Texture {
@@ -636,12 +636,22 @@ impl TextureResolver {
         TextureResolver {
             texture_cache_map: FastHashMap::default(),
             external_images: FastHashMap::default(),
-            dummy_cache_texture,
+            dummy_cache_texture: Some(dummy_cache_texture),
+        }
+    }
+
+    fn new_without_gl() -> TextureResolver {
+        TextureResolver {
+            texture_cache_map: FastHashMap::default(),
+            external_images: FastHashMap::default(),
+            dummy_cache_texture: None,
         }
     }
 
     fn deinit(self, device: &mut Device) {
-        device.delete_texture(self.dummy_cache_texture);
+        if let Some(tex) = self.dummy_cache_texture {
+            device.delete_texture(tex);
+        }
 
         for (_id, item) in self.texture_cache_map {
             device.delete_texture(item.texture);
@@ -673,7 +683,7 @@ impl TextureResolver {
             }
             TextureSource::Dummy => {
                 let swizzle = Swizzle::default();
-                device.bind_texture(sampler, &self.dummy_cache_texture, swizzle);
+                device.bind_texture(sampler, self.dummy_cache_texture.as_ref().unwrap(), swizzle);
                 swizzle
             }
             TextureSource::External(TextureSourceExternal { ref index, .. }) => {
@@ -723,7 +733,7 @@ impl TextureResolver {
         match *texture_id {
             TextureSource::Invalid => None,
             TextureSource::Dummy => {
-                Some((&self.dummy_cache_texture, Swizzle::default()))
+                self.dummy_cache_texture.as_ref().map(|t| (t, Swizzle::default()))
             }
             TextureSource::External(..) => {
                 panic!("BUG: External textures cannot be resolved, they can only be bound.");
@@ -1034,7 +1044,7 @@ pub struct Renderer {
     pending_shader_updates: Vec<PathBuf>,
     active_documents: FastHashMap<DocumentId, RenderedDocument>,
 
-    shaders: Rc<RefCell<Shaders>>,
+    shaders: Option<Rc<RefCell<Shaders>>>,
 
     max_recorded_profiles: usize,
 
@@ -2215,7 +2225,7 @@ impl Renderer {
                 let draw_target = DrawTarget::from_texture(dest_texture, false);
                 self.device.as_mut().unwrap().bind_draw_target(draw_target);
 
-                self.shaders
+                self.shaders.as_ref().unwrap()
                     .borrow_mut()
                     .ps_copy()
                     .bind(
@@ -2391,7 +2401,7 @@ impl Renderer {
     where
         F: FnOnce(&mut Shaders) -> &mut LazilyCompiledShader,
     {
-        let mut shaders = self.shaders.borrow_mut();
+        let mut shaders = self.shaders.as_ref().unwrap().borrow_mut();
         let shader = get_shader(&mut shaders);
         shader.bind(
             self.device.as_mut().unwrap(),
@@ -2803,7 +2813,7 @@ impl Renderer {
                 }
                 let pattern = PatternKind::from_u32(pattern_idx as u32);
 
-                self.shaders.borrow_mut().get_quad_shader(pattern).bind(
+                self.shaders.as_ref().unwrap().borrow_mut().get_quad_shader(pattern).bind(
                     self.device.as_mut().unwrap(),
                     projection,
                     None,
@@ -2833,7 +2843,7 @@ impl Renderer {
                 for ((scissor_rect, pattern), prim_instances_map) in prim_instances_with_scissor {
                     if prev_pattern != Some(*pattern) {
                         prev_pattern = Some(*pattern);
-                        self.shaders.borrow_mut().get_quad_shader(*pattern).bind(
+                        self.shaders.as_ref().unwrap().borrow_mut().get_quad_shader(*pattern).bind(
                             self.device.as_mut().unwrap(),
                             projection,
                             None,
@@ -2877,7 +2887,7 @@ impl Renderer {
             self.set_blend_mode_multiply(FramebufferKind::Other);
 
             if !masks.mask_instances_fast.is_empty() {
-                self.shaders.borrow_mut().ps_mask_fast().bind(
+                self.shaders.as_ref().unwrap().borrow_mut().ps_mask_fast().bind(
                     self.device.as_mut().unwrap(),
                     projection,
                     None,
@@ -2894,7 +2904,7 @@ impl Renderer {
             }
 
             if !masks.mask_instances_fast_with_scissor.is_empty() {
-                self.shaders.borrow_mut().ps_mask_fast().bind(
+                self.shaders.as_ref().unwrap().borrow_mut().ps_mask_fast().bind(
                     self.device.as_mut().unwrap(),
                     projection,
                     None,
@@ -2919,7 +2929,7 @@ impl Renderer {
             }
 
             if !masks.image_mask_instances.is_empty() {
-                self.shaders.borrow_mut().ps_quad_textured().bind(
+                self.shaders.as_ref().unwrap().borrow_mut().ps_quad_textured().bind(
                     self.device.as_mut().unwrap(),
                     projection,
                     None,
@@ -2940,7 +2950,7 @@ impl Renderer {
             if !masks.image_mask_instances_with_scissor.is_empty() {
                 self.device.as_mut().unwrap().enable_scissor();
 
-                self.shaders.borrow_mut().ps_quad_textured().bind(
+                self.shaders.as_ref().unwrap().borrow_mut().ps_quad_textured().bind(
                     self.device.as_mut().unwrap(),
                     projection,
                     None,
@@ -2963,7 +2973,7 @@ impl Renderer {
             }
 
             if !masks.mask_instances_slow.is_empty() {
-                self.shaders.borrow_mut().ps_mask().bind(
+                self.shaders.as_ref().unwrap().borrow_mut().ps_mask().bind(
                     self.device.as_mut().unwrap(),
                     projection,
                     None,
@@ -2980,7 +2990,7 @@ impl Renderer {
             }
 
             if !masks.mask_instances_slow_with_scissor.is_empty() {
-                self.shaders.borrow_mut().ps_mask().bind(
+                self.shaders.as_ref().unwrap().borrow_mut().ps_mask().bind(
                     self.device.as_mut().unwrap(),
                     projection,
                     None,
@@ -3090,7 +3100,7 @@ impl Renderer {
                 _ => instances.as_slice()
             };
 
-            self.shaders
+            self.shaders.as_ref().unwrap()
                 .borrow_mut()
                 .get_scale_shader(buffer_kind)
                 .bind(
@@ -3123,7 +3133,7 @@ impl Renderer {
 
         let _timer = self.gpu_profiler.start_timer(GPU_TAG_SVG_FILTER);
 
-        self.shaders.borrow_mut().cs_svg_filter().bind(
+        self.shaders.as_ref().unwrap().borrow_mut().cs_svg_filter().bind(
             self.device.as_mut().unwrap(),
             &projection,
             None,
@@ -3152,7 +3162,7 @@ impl Renderer {
 
         let _timer = self.gpu_profiler.start_timer(GPU_TAG_SVG_FILTER_NODES);
 
-        self.shaders.borrow_mut().cs_svg_filter_node().bind(
+        self.shaders.as_ref().unwrap().borrow_mut().cs_svg_filter_node().bind(
             self.device.as_mut().unwrap(),
             &projection,
             None,
@@ -3311,7 +3321,7 @@ impl Renderer {
                         ],
                         color: clear_color.unwrap_or([0.0; 4]),
                     };
-                    self.shaders.borrow_mut().ps_clear().bind(
+                    self.shaders.as_ref().unwrap().borrow_mut().ps_clear().bind(
                         self.device.as_mut().unwrap(),
                         &projection,
                         None,
@@ -3457,7 +3467,7 @@ impl Renderer {
                 continue;
             }
 
-            self.shaders.borrow_mut()
+            self.shaders.as_ref().unwrap().borrow_mut()
                 .get(&batch.key, batch.features, self.debug_flags, self.device.as_ref().unwrap())
                 .bind(
                     self.device.as_mut().unwrap(), projection, None,
@@ -3539,7 +3549,7 @@ impl Renderer {
         self.set_blend(true, framebuffer_kind);
 
         let mut pass_state = AlphaBatchPassState::new();
-        let shaders_rc = self.shaders.clone();
+        let shaders_rc = self.shaders.clone().unwrap();
 
         for batch in &alpha_batch_container.alpha_batches {
             self.draw_transparent_batch(
@@ -4705,7 +4715,7 @@ impl Renderer {
         }
 
         if !clear_instances.is_empty() {
-            self.shaders.borrow_mut().ps_clear().bind(
+            self.shaders.as_ref().unwrap().borrow_mut().ps_clear().bind(
                 self.device.as_mut().unwrap(),
                 &projection,
                 None,
@@ -6201,8 +6211,10 @@ impl Renderer {
             self.aux_textures.deinit(&mut device);
             self.debug.deinit(&mut device);
 
-            if let Ok(shaders) = Rc::try_unwrap(self.shaders) {
-                shaders.into_inner().deinit(&mut device);
+            if let Some(shaders_rc) = self.shaders.take() {
+                if let Ok(shaders) = Rc::try_unwrap(shaders_rc) {
+                    shaders.into_inner().deinit(&mut device);
+                }
             }
 
             if let Some(async_screenshots) = self.async_screenshots.take() {
