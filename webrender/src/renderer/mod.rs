@@ -2645,6 +2645,32 @@ impl Renderer {
                 }
             }
 
+            // Process copies first (atlas defragmentation).
+            for ((src_id, dst_id), copies) in &update_list.copies {
+                let src_tex = match self.wgpu_texture_cache.get(src_id) {
+                    Some(t) => t,
+                    None => {
+                        warn!("wgpu: copy source texture {:?} not found", src_id);
+                        continue;
+                    }
+                };
+                let dst_tex = match self.wgpu_texture_cache.get(dst_id) {
+                    Some(t) => t,
+                    None => {
+                        warn!("wgpu: copy dest texture {:?} not found", dst_id);
+                        continue;
+                    }
+                };
+                for copy in copies {
+                    wgpu_dev.copy_texture_sub_rect(
+                        src_tex,
+                        copy.src_rect,
+                        dst_tex,
+                        copy.dst_rect,
+                    );
+                }
+            }
+
             // Process uploads: write pixel data to wgpu textures.
             for (texture_id, updates) in update_list.updates {
                 let texture = match self.wgpu_texture_cache.get(&texture_id) {
@@ -2677,12 +2703,6 @@ impl Renderer {
                         update.format_override.unwrap_or(api::ImageFormat::BGRA8),
                     );
                 }
-            }
-
-            // Copies not yet implemented for wgpu.
-            if !update_list.copies.is_empty() {
-                warn!("wgpu: {} texture cache copies skipped (not yet implemented)",
-                    update_list.copies.len());
             }
         }
 

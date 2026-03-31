@@ -383,6 +383,52 @@ impl WgpuDevice {
         }
     }
 
+    /// Copy a sub-rectangle from one wgpu texture to another.
+    /// Used for texture cache atlas defragmentation.
+    pub fn copy_texture_sub_rect(
+        &self,
+        src: &WgpuTexture,
+        src_rect: DeviceIntRect,
+        dst: &WgpuTexture,
+        dst_rect: DeviceIntRect,
+    ) {
+        debug_assert_eq!(src_rect.size(), dst_rect.size());
+        let size = wgpu::Extent3d {
+            width: src_rect.width() as u32,
+            height: src_rect.height() as u32,
+            depth_or_array_layers: 1,
+        };
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("texture cache copy"),
+            });
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &src.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: src_rect.min.x as u32,
+                    y: src_rect.min.y as u32,
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &dst.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: dst_rect.min.x as u32,
+                    y: dst_rect.min.y as u32,
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            size,
+        );
+        self.queue.submit([encoder.finish()]);
+    }
+
     pub fn clear_texture(&self, texture: &WgpuTexture, color: [f64; 4]) {
         let view = texture
             .texture
