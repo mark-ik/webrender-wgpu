@@ -12,9 +12,9 @@ pub use api::DebugFlags;
 use crate::bump_allocator::ChunkPool;
 use crate::render_api::{RenderApiSender, FrameMsg};
 use crate::composite::{CompositorKind, CompositorConfig};
-use crate::device::{
-    UploadMethod, UploadPBOPool, VertexUsageHint, Device, GpuDevice, ProgramCache, TextureFilter
-};
+use crate::device::{GpuDevice, TextureFilter};
+#[cfg(feature = "gl_backend")]
+use crate::device::{UploadMethod, UploadPBOPool, VertexUsageHint, Device, ProgramCache};
 use crate::frame_builder::FrameBuilderConfig;
 use crate::glyph_cache::GlyphCache;
 use glyph_rasterizer::{GlyphRasterThread, GlyphRasterizer, SharedFontResources};
@@ -29,11 +29,16 @@ use crate::scene_builder_thread::{SceneBuilderThread, SceneBuilderThreadChannels
 use crate::texture_cache::{TextureCache, TextureCacheConfig};
 use crate::picture_textures::PictureTextures;
 use crate::renderer::{
+    Renderer, DebugOverlayState, BufferDamageTracker, PipelineInfo,
+    RendererError,
+};
+use crate::renderer::{ShaderPrecacheFlags, SharedShaders};
+#[cfg(feature = "gl_backend")]
+use crate::renderer::{
     debug, gpu_cache, vertex, gl,
-    Renderer, DebugOverlayState, BufferDamageTracker, PipelineInfo, TextureResolver,
-    RendererError, ShaderPrecacheFlags,
+    TextureResolver,
     upload::{RendererUploadState, UploadTexturePool},
-    shade::{Shaders, SharedShaders},
+    shade::Shaders,
 };
 #[cfg(feature = "debugger")]
 use crate::debugger::Debugger;
@@ -55,6 +60,7 @@ use malloc_size_of::MallocSizeOfOps;
 
 /// Use this hint for all vertex data re-initialization. This allows
 /// the driver to better re-use RBOs internally.
+#[cfg(feature = "gl_backend")]
 pub const ONE_TIME_USAGE_HINT: VertexUsageHint = VertexUsageHint::Stream;
 
 /// Is only false if no WR instances have ever been created.
@@ -119,6 +125,7 @@ pub trait RenderBackendHooks {
 }
 
 pub enum RendererBackend {
+    #[cfg(feature = "gl_backend")]
     Gl { gl: Rc<dyn gl::Gl> },
     #[cfg(feature = "wgpu_backend")]
     Wgpu {
@@ -138,13 +145,16 @@ impl RendererBackend {
     fn prepare_options(&self, options: &mut WebRenderOptions) {
         // For now, we assume that native OS compositors are top-left origin.
         match options.compositor_config {
-            CompositorConfig::Draw { .. } | CompositorConfig::Native { .. } => {}
+            CompositorConfig::Draw { .. } => {}
+            #[cfg(feature = "gl_backend")]
+            CompositorConfig::Native { .. } => {}
             CompositorConfig::Layer { .. } => {
                 options.surface_origin_is_top_left = true;
             }
         }
     }
 
+    #[cfg(feature = "gl_backend")]
     fn into_device(self, options: &mut WebRenderOptions) -> Result<Device, RendererError> {
         self.prepare_options(options);
 
@@ -178,6 +188,7 @@ pub struct WebRenderOptions {
     pub enable_aa: bool,
     pub enable_dithering: bool,
     pub max_recorded_profiles: usize,
+    #[cfg(feature = "gl_backend")]
     pub precache_flags: ShaderPrecacheFlags,
     /// Enable sub-pixel anti-aliasing if a fast implementation is available.
     pub enable_subpixel_aa: bool,
@@ -185,6 +196,7 @@ pub struct WebRenderOptions {
     pub enable_clear_scissor: Option<bool>,
     pub max_internal_texture_size: Option<i32>,
     pub image_tiling_threshold: i32,
+    #[cfg(feature = "gl_backend")]
     pub upload_method: UploadMethod,
     /// The default size in bytes for PBOs used to upload texture data.
     pub upload_pbo_default_size: usize,
@@ -200,6 +212,7 @@ pub struct WebRenderOptions {
     pub crash_annotator: Option<Box<dyn CrashAnnotator>>,
     pub size_of_op: Option<VoidPtrToSizeFn>,
     pub enclosing_size_of_op: Option<VoidPtrToSizeFn>,
+    #[cfg(feature = "gl_backend")]
     pub cached_programs: Option<Rc<ProgramCache>>,
     pub debug_flags: DebugFlags,
     pub renderer_id: Option<u64>,
@@ -290,6 +303,7 @@ impl Default for WebRenderOptions {
             enable_dithering: false,
             debug_flags: DebugFlags::empty(),
             max_recorded_profiles: 0,
+            #[cfg(feature = "gl_backend")]
             precache_flags: ShaderPrecacheFlags::empty(),
             enable_subpixel_aa: false,
             clear_color: ColorF::new(1.0, 1.0, 1.0, 1.0),
@@ -298,6 +312,7 @@ impl Default for WebRenderOptions {
             image_tiling_threshold: 4096,
             // This is best as `Immediate` on Angle, or `Pixelbuffer(Dynamic)` on GL,
             // but we are unable to make this decision here, so picking the reasonable medium.
+            #[cfg(feature = "gl_backend")]
             upload_method: UploadMethod::PixelBuffer(ONE_TIME_USAGE_HINT),
             upload_pbo_default_size: 512 * 512 * 4,
             batched_upload_threshold: 512 * 512,
@@ -310,6 +325,7 @@ impl Default for WebRenderOptions {
             size_of_op: None,
             enclosing_size_of_op: None,
             renderer_id: None,
+            #[cfg(feature = "gl_backend")]
             cached_programs: None,
             scene_builder_hooks: None,
             render_backend_hooks: None,
@@ -362,6 +378,7 @@ impl Default for WebRenderOptions {
 /// let (renderer, sender) = Renderer::new(opts);
 /// ```
 /// [WebRenderOptions]: struct.WebRenderOptions.html
+#[cfg(feature = "gl_backend")]
 pub fn create_webrender_instance(
     gl: Rc<dyn gl::Gl>,
     notifier: Box<dyn RenderNotifier>,
@@ -387,10 +404,16 @@ pub fn create_webrender_instance_with_backend(
         return create_webrender_instance_wgpu(notifier, options, instance, surface, width, height);
     }
 
-    let device = backend.into_device(&mut options)?;
-    create_webrender_instance_with_device(device, notifier, options, shaders)
+    #[cfg(feature = "gl_backend")]
+    {
+        let device = backend.into_device(&mut options)?;
+        create_webrender_instance_with_device(device, notifier, options, shaders)
+    }
+    #[cfg(not(feature = "gl_backend"))]
+    Err(RendererError::UnsupportedBackend("GL backend not compiled"))
 }
 
+#[cfg(feature = "gl_backend")]
 fn create_webrender_instance_with_device(
     mut device: Device,
     notifier: Box<dyn RenderNotifier>,
@@ -951,12 +974,18 @@ pub fn create_webrender_instance_wgpu(
     let image_tiling_threshold = options.image_tiling_threshold
         .min(max_internal_texture_size);
 
-    // wgpu subsystem variants — no GL resources needed.
+    // wgpu subsystem — GL resource wrappers only needed when gl_backend is compiled.
+    #[cfg(feature = "gl_backend")]
     let vaos = vertex::RendererVaoState::Wgpu(vertex::WgpuRendererVaos);
+    #[cfg(feature = "gl_backend")]
     let vertex_data_textures = vertex::RendererVertexData::Wgpu(vertex::WgpuRendererVertexData);
+    #[cfg(feature = "gl_backend")]
     let upload_state = RendererUploadState::Wgpu(super::upload::WgpuRendererUploadState);
+    #[cfg(feature = "gl_backend")]
     let gpu_cache_texture = gpu_cache::RendererGpuCache::Wgpu(gpu_cache::WgpuGpuCacheTexture);
+    #[cfg(feature = "gl_backend")]
     let aux_textures = super::RendererAuxTextures::Wgpu(super::WgpuRendererAuxTextures);
+    #[cfg(feature = "gl_backend")]
     let texture_resolver = TextureResolver::new_without_gl();
     let gpu_profiler = GpuProfiler::new_noop();
 
@@ -982,6 +1011,7 @@ pub fn create_webrender_instance_wgpu(
         CompositorConfig::Draw { max_partial_present_rects, draw_previous_partial_present_regions, .. } => {
             CompositorKind::Draw { max_partial_present_rects, draw_previous_partial_present_regions }
         }
+        #[cfg(feature = "gl_backend")]
         CompositorConfig::Native { .. } => {
             // Native compositor needs a device ref — not supported in wgpu-only mode yet.
             return Err(RendererError::UnsupportedBackend(
@@ -1184,6 +1214,7 @@ pub fn create_webrender_instance_wgpu(
     let mut renderer = Renderer {
         result_rx,
         api_tx: api_tx.clone(),
+        #[cfg(feature = "gl_backend")]
         device: None,
         active_documents: FastHashMap::default(),
         pending_texture_updates: Vec::new(),
@@ -1192,7 +1223,9 @@ pub fn create_webrender_instance_wgpu(
         pending_gpu_cache_updates: Vec::new(),
         pending_gpu_cache_clear: false,
         pending_shader_updates: Vec::new(),
+        #[cfg(feature = "gl_backend")]
         shaders: None,
+        #[cfg(feature = "gl_backend")]
         debug: debug::LazyInitializedDebugRenderer::new(),
         debug_flags: DebugFlags::empty(),
         profile: TransactionProfile::new(),
@@ -1208,22 +1241,30 @@ pub fn create_webrender_instance_wgpu(
         clear_alpha_targets_with_quads: false,
         last_time: 0,
         gpu_profiler,
+        #[cfg(feature = "gl_backend")]
         vaos,
+        #[cfg(feature = "gl_backend")]
         vertex_data_textures,
         pipeline_info: PipelineInfo::default(),
+        #[cfg(feature = "gl_backend")]
         aux_textures,
         external_image_handler: None,
         size_of_ops: make_size_of_ops(),
         cpu_profiles: VecDeque::new(),
         gpu_profiles: VecDeque::new(),
+        #[cfg(feature = "gl_backend")]
         gpu_cache_texture,
         gpu_cache_debug_chunks: Vec::new(),
         gpu_cache_frame_id: FrameId::INVALID,
         gpu_cache_overflow: false,
+        #[cfg(feature = "gl_backend")]
         upload_state,
+        #[cfg(feature = "gl_backend")]
         texture_resolver,
         renderer_errors: Vec::new(),
+        #[cfg(feature = "gl_backend")]
         async_frame_recorder: None,
+        #[cfg(feature = "gl_backend")]
         async_screenshots: None,
         #[cfg(feature = "capture")]
         read_fbo: crate::device::FBOId::default(),

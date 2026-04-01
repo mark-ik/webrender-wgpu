@@ -55,19 +55,24 @@ use crate::batch::ClipMaskInstanceList;
 #[cfg(any(feature = "capture", feature = "replay"))]
 use crate::capture::{CaptureConfig, ExternalCaptureImage, PlainExternalImage};
 use crate::composite::{CompositeState, CompositeTile, CompositeTileSurface, CompositorInputLayer, CompositorSurfaceTransform, ResolvedExternalSurface};
-use crate::composite::{CompositorKind, Compositor, NativeTileId, CompositeFeatures, CompositeSurfaceFormat, ResolvedExternalSurfaceColorData};
+use crate::composite::{CompositorKind, NativeTileId, CompositeFeatures, CompositeSurfaceFormat, ResolvedExternalSurfaceColorData};
+#[cfg(feature = "gl_backend")]
+use crate::composite::Compositor;
 use crate::composite::{CompositorConfig, NativeSurfaceOperationDetails, NativeSurfaceId, NativeSurfaceOperation, ClipRadius};
 use crate::composite::TileKind;
 #[cfg(feature = "debugger")]
 use api::debugger::CompositorDebugInfo;
 use crate::segment::SegmentBuilder;
 use crate::{debug_colors, CompositorInputConfig, CompositorSurfaceUsage};
-use crate::device::{DepthFunction, Device, DrawTarget, ExternalTexture, GpuDevice, GpuFrameId};
-use crate::device::{ReadTarget, ShaderError, Texture, TextureFilter, TextureFlags, TextureSlot, Texel};
+use crate::device::{GpuDevice, GpuFrameId, TextureFilter, TextureFlags, TextureSlot, Texel};
+#[cfg(feature = "gl_backend")]
+use crate::device::{DepthFunction, Device, DrawTarget, ExternalTexture};
+#[cfg(feature = "gl_backend")]
+use crate::device::{ReadTarget, ShaderError, Texture};
 #[cfg(feature = "wgpu_backend")]
 use crate::device::WgpuDevice;
 use crate::device::query::{GpuSampler, GpuTimer};
-#[cfg(feature = "capture")]
+#[cfg(all(feature = "capture", feature = "gl_backend"))]
 use crate::device::FBOId;
 use crate::debug_item::DebugItem;
 use crate::frame_builder::Frame;
@@ -90,6 +95,7 @@ use crate::device::query::GpuProfiler;
 use crate::render_target::ResolveOp;
 use crate::render_task_graph::RenderTaskGraph;
 use crate::render_task::{RenderTask, RenderTaskKind, ReadbackTask};
+#[cfg(feature = "gl_backend")]
 use crate::screen_capture::AsyncScreenshotGrabber;
 use crate::render_target::{RenderTarget, PictureCacheTarget, PictureCacheTargetKind};
 use crate::render_target::{RenderTargetKind, BlitJob};
@@ -99,10 +105,12 @@ use crate::util::drain_filter;
 use crate::rectangle_occlusion as occlusion;
 #[cfg(feature = "debugger")]
 use crate::debugger::{Debugger, DebugQueryKind};
+#[cfg(feature = "gl_backend")]
 use upload::{upload_to_texture_cache, RendererUploadState};
 use init::*;
 
 use euclid::{rect, Transform3D, Scale, default};
+#[cfg(feature = "gl_backend")]
 use gleam::gl;
 use malloc_size_of::MallocSizeOfOps;
 
@@ -121,18 +129,31 @@ use std::{
 #[cfg(any(feature = "capture", feature = "replay"))]
 use std::collections::hash_map::Entry;
 
+#[cfg(feature = "gl_backend")]
 mod debug;
 mod gpu_buffer;
+#[cfg(feature = "gl_backend")]
 mod gpu_cache;
+#[cfg(feature = "gl_backend")]
 mod shade;
+#[cfg(feature = "gl_backend")]
 mod vertex;
+#[cfg(feature = "gl_backend")]
 mod upload;
 pub(crate) mod init;
 
+#[cfg(feature = "gl_backend")]
 pub use debug::DebugRenderer;
+#[cfg(feature = "gl_backend")]
 pub use shade::{PendingShadersToPrecache, Shaders, SharedShaders};
+#[cfg(not(feature = "gl_backend"))]
+pub type SharedShaders = ();
+#[cfg(feature = "gl_backend")]
 use shade::LazilyCompiledShader;
+#[cfg(feature = "gl_backend")]
 pub use vertex::{desc, VertexArrayKind, MAX_VERTEX_TEXTURE_WIDTH};
+#[cfg(not(feature = "gl_backend"))]
+pub const MAX_VERTEX_TEXTURE_WIDTH: usize = webrender_build::MAX_VERTEX_TEXTURE_WIDTH;
 pub use gpu_buffer::{GpuBuffer, GpuBufferF, GpuBufferBuilderF, GpuBufferI, GpuBufferBuilderI};
 pub use gpu_buffer::{GpuBufferAddress, GpuBufferBuilder, GpuBufferWriterF};
 
@@ -558,6 +579,7 @@ enum PartialPresentMode {
     },
 }
 
+#[cfg(feature = "gl_backend")]
 struct CacheTexture {
     texture: Texture,
     category: TextureCacheCategory,
@@ -568,6 +590,7 @@ struct CacheTexture {
 /// Manages the mapping between the at-a-distance texture handles used by the
 /// `RenderBackend` (which does not directly interface with the GPU) and actual
 /// device texture handles.
+#[cfg(feature = "gl_backend")]
 struct TextureResolver {
     /// A map to resolve texture cache IDs to native textures.
     texture_cache_map: FastHashMap<CacheTextureId, CacheTexture>,
@@ -581,6 +604,7 @@ struct TextureResolver {
     dummy_cache_texture: Option<Texture>,
 }
 
+#[cfg(feature = "gl_backend")]
 fn create_dummy_cache_texture<D: GpuDevice<Texture = Texture>>(device: &mut D) -> Texture {
     let dummy_cache_texture = device.create_texture(
         ImageBufferKind::Texture2D,
@@ -594,6 +618,7 @@ fn create_dummy_cache_texture<D: GpuDevice<Texture = Texture>>(device: &mut D) -
     dummy_cache_texture
 }
 
+#[cfg(feature = "gl_backend")]
 fn create_gpu_buffer_texture<D: GpuDevice<Texture = Texture>, T: Texel>(
     device: &mut D,
     buffer: &GpuBuffer<T>,
@@ -615,6 +640,7 @@ fn create_gpu_buffer_texture<D: GpuDevice<Texture = Texture>, T: Texel>(
     }
 }
 
+#[cfg(feature = "gl_backend")]
 fn create_cache_texture<D: GpuDevice<Texture = Texture>>(
     device: &mut D,
     info: &TextureCacheAllocInfo,
@@ -629,6 +655,7 @@ fn create_cache_texture<D: GpuDevice<Texture = Texture>>(
     )
 }
 
+#[cfg(feature = "gl_backend")]
 impl TextureResolver {
     fn new(device: &mut Device) -> TextureResolver {
         let dummy_cache_texture = create_dummy_cache_texture(device);
@@ -896,6 +923,7 @@ impl DebugOverlayState {
     }
 }
 
+#[cfg(feature = "gl_backend")]
 struct GlRendererAuxTextures {
     dither_matrix_texture: Option<Texture>,
     zoom_debug_texture: Option<Texture>,
@@ -929,7 +957,7 @@ pub(super) struct WgpuGpuCacheState {
 #[cfg(feature = "wgpu_backend")]
 impl WgpuGpuCacheState {
     fn new() -> Self {
-        let width = crate::renderer::vertex::MAX_VERTEX_TEXTURE_WIDTH as u32;
+        let width = MAX_VERTEX_TEXTURE_WIDTH as u32;
         let initial_height = crate::gpu_cache::GPU_CACHE_INITIAL_HEIGHT as u32;
         WgpuGpuCacheState {
             data: vec![[0.0; 4]; (width * initial_height) as usize],
@@ -1026,11 +1054,13 @@ struct WgpuFrameDataTextures {
 
 #[cfg_attr(feature = "wgpu_backend", allow(dead_code))]
 enum RendererAuxTextures {
+    #[cfg(feature = "gl_backend")]
     Gl(GlRendererAuxTextures),
     #[cfg(feature = "wgpu_backend")]
     Wgpu(WgpuRendererAuxTextures),
 }
 
+#[cfg(feature = "gl_backend")]
 impl RendererAuxTextures {
     fn new_gl(dither_matrix_texture: Option<Texture>) -> Self {
         Self::Gl(GlRendererAuxTextures {
@@ -1153,6 +1183,7 @@ impl BufferDamageTracker {
 pub struct Renderer {
     result_rx: Receiver<ResultMsg>,
     api_tx: Sender<ApiMsg>,
+    #[cfg(feature = "gl_backend")]
     pub device: Option<Device>,
     pending_texture_updates: Vec<TextureUpdateList>,
     /// True if there are any TextureCacheUpdate pending.
@@ -1163,6 +1194,7 @@ pub struct Renderer {
     pending_shader_updates: Vec<PathBuf>,
     active_documents: FastHashMap<DocumentId, RenderedDocument>,
 
+    #[cfg(feature = "gl_backend")]
     shaders: Option<Rc<RefCell<Shaders>>>,
 
     max_recorded_profiles: usize,
@@ -1173,6 +1205,7 @@ pub struct Renderer {
     clear_caches_with_quads: bool,
     clear_alpha_targets_with_quads: bool,
 
+    #[cfg(feature = "gl_backend")]
     debug: debug::LazyInitializedDebugRenderer,
     debug_flags: DebugFlags,
     profile: TransactionProfile,
@@ -1186,9 +1219,12 @@ pub struct Renderer {
     last_time: u64,
 
     pub gpu_profiler: GpuProfiler,
+    #[cfg(feature = "gl_backend")]
     vaos: vertex::RendererVaoState,
 
+    #[cfg(feature = "gl_backend")]
     gpu_cache_texture: gpu_cache::RendererGpuCache,
+    #[cfg(feature = "gl_backend")]
     vertex_data_textures: vertex::RendererVertexData,
 
     /// When the GPU cache debugger is enabled, we keep track of the live blocks
@@ -1202,9 +1238,12 @@ pub struct Renderer {
     pipeline_info: PipelineInfo,
 
     // Manages and resolves source textures IDs to real texture IDs.
+    #[cfg(feature = "gl_backend")]
     texture_resolver: TextureResolver,
 
+    #[cfg(feature = "gl_backend")]
     upload_state: RendererUploadState,
+    #[cfg(feature = "gl_backend")]
     aux_textures: RendererAuxTextures,
 
     /// Optional trait object that allows the client
@@ -1217,7 +1256,9 @@ pub struct Renderer {
 
     pub renderer_errors: Vec<RendererError>,
 
+    #[cfg(feature = "gl_backend")]
     pub(in crate) async_frame_recorder: Option<AsyncScreenshotGrabber>,
+    #[cfg(feature = "gl_backend")]
     pub(in crate) async_screenshots: Option<AsyncScreenshotGrabber>,
 
     /// List of profile results from previous frames. Can be retrieved
@@ -1241,9 +1282,9 @@ pub struct Renderer {
     /// The set of documents which we've seen a publish for since last render.
     documents_seen: FastHashSet<DocumentId>,
 
-    #[cfg(feature = "capture")]
+    #[cfg(all(feature = "capture", feature = "gl_backend"))]
     read_fbo: FBOId,
-    #[cfg(feature = "replay")]
+    #[cfg(all(feature = "replay", feature = "gl_backend"))]
     owned_external_images: FastHashMap<(ExternalImageId, u8), ExternalTexture>,
 
     /// The compositing config, affecting how WR composites into the final scene.
@@ -1304,6 +1345,7 @@ pub struct Renderer {
 
 #[derive(Debug)]
 pub enum RendererError {
+    #[cfg(feature = "gl_backend")]
     Shader(ShaderError),
     Thread(std::io::Error),
     MaxTextureSize,
@@ -1312,6 +1354,7 @@ pub enum RendererError {
     UnsupportedBackend(&'static str),
 }
 
+#[cfg(feature = "gl_backend")]
 impl From<ShaderError> for RendererError {
     fn from(err: ShaderError) -> Self {
         RendererError::Shader(err)
@@ -1325,11 +1368,13 @@ impl From<std::io::Error> for RendererError {
 }
 
 impl Renderer {
+    #[cfg(feature = "gl_backend")]
     /// Returns a reference to the GL device. Panics in wgpu-only mode.
     pub fn gl_device(&self) -> &Device {
         self.device.as_ref().expect("GL device not available in wgpu mode")
     }
 
+    #[cfg(feature = "gl_backend")]
     /// Returns a mutable reference to the GL device. Panics in wgpu-only mode.
     pub fn gl_device_mut(&mut self) -> &mut Device {
         self.device.as_mut().expect("GL device not available in wgpu mode")
@@ -1341,7 +1386,10 @@ impl Renderer {
 
     /// Returns true if this Renderer is in wgpu-only mode (no GL device).
     pub fn is_wgpu_only(&self) -> bool {
-        self.device.is_none()
+        #[cfg(feature = "gl_backend")]
+        { self.device.is_none() }
+        #[cfg(not(feature = "gl_backend"))]
+        { true }
     }
 
     /// wgpu render path.  Processes pending texture cache and GPU cache
@@ -1584,7 +1632,6 @@ impl Renderer {
         dev: &WgpuDevice,
         frame: &Frame,
     ) -> WgpuFrameDataTextures {
-        use crate::renderer::vertex::MAX_VERTEX_TEXTURE_WIDTH;
         let w = MAX_VERTEX_TEXTURE_WIDTH as u32;
 
         let make_f32_tex = |label: &str, data: &[u8], texels_per_item: usize| -> WgpuTexture {
@@ -2496,23 +2543,43 @@ impl Renderer {
     }
 
     pub fn get_max_texture_size(&self) -> i32 {
-        self.device.as_ref().unwrap().max_texture_size()
+        #[cfg(feature = "gl_backend")]
+        { self.device.as_ref().unwrap().max_texture_size() }
+        #[cfg(not(feature = "gl_backend"))]
+        { 8192 } // reasonable default for wgpu-only
     }
 
     pub fn get_graphics_api_info(&self) -> GraphicsApiInfo {
-        GraphicsApiInfo {
-            kind: GraphicsApi::OpenGL,
-            version: self.device.as_ref().unwrap().version_string().to_string(),
-            renderer: self.device.as_ref().unwrap().renderer_name().to_string(),
+        #[cfg(feature = "gl_backend")]
+        {
+            GraphicsApiInfo {
+                kind: GraphicsApi::OpenGL,
+                version: self.device.as_ref().unwrap().version_string().to_string(),
+                renderer: self.device.as_ref().unwrap().renderer_name().to_string(),
+            }
+        }
+        #[cfg(not(feature = "gl_backend"))]
+        {
+            GraphicsApiInfo {
+                kind: GraphicsApi::OpenGL, // TODO: add Wgpu variant
+                version: "wgpu".to_string(),
+                renderer: "wgpu".to_string(),
+            }
         }
     }
 
     pub fn preferred_color_format(&self) -> ImageFormat {
-        self.device.as_ref().unwrap().preferred_color_formats().external
+        #[cfg(feature = "gl_backend")]
+        { self.device.as_ref().unwrap().preferred_color_formats().external }
+        #[cfg(not(feature = "gl_backend"))]
+        { ImageFormat::RGBA8 }
     }
 
     pub fn required_texture_stride_alignment(&self, format: ImageFormat) -> usize {
-        self.device.as_ref().unwrap().required_pbo_stride().num_bytes(format).get()
+        #[cfg(feature = "gl_backend")]
+        { self.device.as_ref().unwrap().required_pbo_stride().num_bytes(format).get() }
+        #[cfg(not(feature = "gl_backend"))]
+        { let _ = format; 1 }
     }
 
     pub fn set_clear_color(&mut self, color: ColorF) {
@@ -2579,7 +2646,8 @@ impl Renderer {
                     let prev_frame_memory = if let Some(mut prev_doc) = self.active_documents.remove(&document_id) {
                         doc.profile.merge(&mut prev_doc.profile);
 
-                        if prev_doc.frame.must_be_drawn() && !self.is_wgpu_only() {
+                        #[cfg(feature = "gl_backend")]
+                    if prev_doc.frame.must_be_drawn() && !self.is_wgpu_only() {
                             prev_doc.render_reasons |= RenderReasons::TEXTURE_CACHE_FLUSH;
                             self.render_impl(
                                 document_id,
@@ -2650,6 +2718,7 @@ impl Renderer {
                     resource_updates,
                     memory_pressure,
                 } => {
+                    #[cfg(feature = "gl_backend")]
                     if memory_pressure && !self.is_wgpu_only() {
                         // If a memory pressure event arrives _after_ a new scene has
                         // been published that writes persistent targets (i.e. cached
@@ -2687,63 +2756,59 @@ impl Renderer {
                             self.update_texture_cache_wgpu();
                         }
                     } else {
-                        self.pending_texture_cache_updates |= !resource_updates.texture_updates.updates.is_empty();
-                        self.pending_texture_updates.push(resource_updates.texture_updates);
-                        self.pending_native_surface_updates.extend(resource_updates.native_surface_updates);
-                        self.device.as_mut().unwrap().begin_frame();
+                        #[cfg(feature = "gl_backend")]
+                        {
+                            self.pending_texture_cache_updates |= !resource_updates.texture_updates.updates.is_empty();
+                            self.pending_texture_updates.push(resource_updates.texture_updates);
+                            self.pending_native_surface_updates.extend(resource_updates.native_surface_updates);
+                            self.device.as_mut().unwrap().begin_frame();
 
-                        self.update_texture_cache();
-                        self.update_native_surfaces();
+                            self.update_texture_cache();
+                            self.update_native_surfaces();
 
-                        // Flush the render target pool on memory pressure.
-                        //
-                        // This needs to be separate from the block below because
-                        // the device module asserts if we delete textures while
-                        // not in a frame.
-                        if memory_pressure {
-                            self.upload_state.on_memory_pressure(self.device.as_mut().unwrap());
+                            if memory_pressure {
+                                self.upload_state.on_memory_pressure(self.device.as_mut().unwrap());
+                            }
+
+                            self.device.as_mut().unwrap().end_frame();
                         }
-
-                        self.device.as_mut().unwrap().end_frame();
                     }
                 }
-                ResultMsg::RenderDocumentOffscreen(document_id, mut offscreen_doc, resources) => {
-                    if self.is_wgpu_only() {
-                        // Skip offscreen rendering in wgpu-only mode (no GL device).
-                        continue;
-                    }
-
-                    // Flush pending operations if needed (See comment in the match arm for
-                    // PublishPipelineInfo).
-
-                    // Borrow-ck dance.
-                    let prev_doc = self.active_documents.remove(&document_id);
-                    if let Some(mut prev_doc) = prev_doc {
-                        if prev_doc.frame.must_be_drawn() {
-                            prev_doc.render_reasons |= RenderReasons::TEXTURE_CACHE_FLUSH;
-                            self.render_impl(
-                                document_id,
-                                &mut prev_doc,
-                                None,
-                                0,
-                            ).ok();
+                ResultMsg::RenderDocumentOffscreen(_document_id, mut _offscreen_doc, _resources) => {
+                    #[cfg(feature = "gl_backend")]
+                    {
+                        if self.is_wgpu_only() {
+                            continue;
                         }
 
-                        self.active_documents.insert(document_id, prev_doc);
+                        let prev_doc = self.active_documents.remove(&_document_id);
+                        if let Some(mut prev_doc) = prev_doc {
+                            if prev_doc.frame.must_be_drawn() {
+                                prev_doc.render_reasons |= RenderReasons::TEXTURE_CACHE_FLUSH;
+                                self.render_impl(
+                                    _document_id,
+                                    &mut prev_doc,
+                                    None,
+                                    0,
+                                ).ok();
+                            }
+
+                            self.active_documents.insert(_document_id, prev_doc);
+                        }
+
+                        self.pending_texture_cache_updates |= !_resources.texture_updates.updates.is_empty();
+                        self.pending_texture_updates.push(_resources.texture_updates);
+                        self.pending_native_surface_updates.extend(_resources.native_surface_updates);
+
+                        self.render_impl(
+                            _document_id,
+                            &mut _offscreen_doc,
+                            None,
+                            0,
+                        ).unwrap();
                     }
-
-                    // Now update resources and render the offscreen frame.
-
-                    self.pending_texture_cache_updates |= !resources.texture_updates.updates.is_empty();
-                    self.pending_texture_updates.push(resources.texture_updates);
-                    self.pending_native_surface_updates.extend(resources.native_surface_updates);
-
-                    self.render_impl(
-                        document_id,
-                        &mut offscreen_doc,
-                        None,
-                        0,
-                    ).unwrap();
+                    #[cfg(not(feature = "gl_backend"))]
+                    { /* skip offscreen rendering in wgpu-only mode */ }
                 }
                 ResultMsg::AppendNotificationRequests(mut notifications) => {
                     // We need to know specifically if there are any pending
@@ -2767,6 +2832,7 @@ impl Renderer {
                     self.pending_shader_updates.push(path);
                 }
                 ResultMsg::SetParameter(ref param) => {
+                    #[cfg(feature = "gl_backend")]
                     if let Some(ref mut device) = self.device {
                         device.set_parameter(param);
                     }
@@ -2845,6 +2911,7 @@ impl Renderer {
             | DebugCommand::EnableNativeCompositor(_)
             | DebugCommand::SetBatchingLookback(_) => {}
             DebugCommand::InvalidateGpuCache => {
+                #[cfg(feature = "gl_backend")]
                 self.gpu_cache_texture.invalidate();
             }
             DebugCommand::SetFlags(flags) => {
@@ -2876,6 +2943,139 @@ impl Renderer {
         (cpu_profiles, gpu_profiles)
     }
 
+    /// Process texture cache updates in wgpu-only mode.
+    /// Creates/deletes wgpu textures, uploads pixel data, and processes copies.
+    #[cfg(feature = "wgpu_backend")]
+    fn update_texture_cache_wgpu(&mut self) {
+        use crate::internal_types::TextureUpdateSource;
+
+        let mut pending_texture_updates = mem::replace(&mut self.pending_texture_updates, vec![]);
+        self.pending_texture_cache_updates = false;
+
+        let wgpu_dev = match self.wgpu_device {
+            Some(ref dev) => dev,
+            None => return,
+        };
+
+        for update_list in pending_texture_updates.drain(..) {
+            // Process allocations: create or free wgpu textures.
+            for allocation in &update_list.allocations {
+                match allocation.kind {
+                    TextureCacheAllocationKind::Free => {
+                        // Remove and drop the wgpu texture.
+                        self.wgpu_texture_cache.remove(&allocation.id);
+                    }
+                    TextureCacheAllocationKind::Alloc(ref info) |
+                    TextureCacheAllocationKind::Reset(ref info) => {
+                        // For Reset, remove old texture first.
+                        if matches!(allocation.kind, TextureCacheAllocationKind::Reset(_)) {
+                            self.wgpu_texture_cache.remove(&allocation.id);
+                        }
+                        let texture = wgpu_dev.create_cache_texture(
+                            info.width,
+                            info.height,
+                            info.format,
+                        );
+                        self.wgpu_texture_cache.insert(allocation.id, texture);
+                    }
+                }
+            }
+
+            // Process copies first (atlas defragmentation).
+            for ((src_id, dst_id), copies) in &update_list.copies {
+                let src_tex = match self.wgpu_texture_cache.get(src_id) {
+                    Some(t) => t,
+                    None => {
+                        warn!("wgpu: copy source texture {:?} not found", src_id);
+                        continue;
+                    }
+                };
+                let dst_tex = match self.wgpu_texture_cache.get(dst_id) {
+                    Some(t) => t,
+                    None => {
+                        warn!("wgpu: copy dest texture {:?} not found", dst_id);
+                        continue;
+                    }
+                };
+                for copy in copies {
+                    wgpu_dev.copy_texture_sub_rect(
+                        src_tex,
+                        copy.src_rect,
+                        dst_tex,
+                        copy.dst_rect,
+                    );
+                }
+            }
+
+            // Process uploads: write pixel data to wgpu textures.
+            for (texture_id, updates) in update_list.updates {
+                let texture = match self.wgpu_texture_cache.get(&texture_id) {
+                    Some(t) => t,
+                    None => {
+                        warn!("wgpu: texture cache upload for unknown texture {:?}", texture_id);
+                        continue;
+                    }
+                };
+                for update in updates {
+                    let dummy_data;
+                    let data = match update.source {
+                        TextureUpdateSource::Bytes { ref data } => {
+                            &data[update.offset as usize ..]
+                        }
+                        TextureUpdateSource::DebugClear => {
+                            // Skip debug clears for now.
+                            continue;
+                        }
+                        TextureUpdateSource::External { id, channel_index } => {
+                            let handler = self.external_image_handler
+                                .as_mut()
+                                .expect("Found external image, but no handler set!");
+                            let ext_image = handler.lock(id, channel_index, false);
+                            let src = match ext_image.source {
+                                ExternalImageSource::RawData(data) => {
+                                    &data[update.offset as usize ..]
+                                }
+                                ExternalImageSource::Invalid => {
+                                    let bpp = texture.bytes_per_pixel();
+                                    let width = update.stride.map(|s| s as u32)
+                                        .unwrap_or(update.rect.width() as u32 * bpp);
+                                    let total_size = width * update.rect.height() as u32;
+                                    dummy_data = vec![0xFFu8; total_size as usize];
+                                    &dummy_data
+                                }
+                                ExternalImageSource::NativeTexture(eid) => {
+                                    panic!("Unexpected external texture {:?} for the texture cache update of {:?}", eid, id);
+                                }
+                            };
+                            wgpu_dev.upload_texture_sub_rect(
+                                texture,
+                                update.rect,
+                                update.stride,
+                                src,
+                                update.format_override.unwrap_or(api::ImageFormat::BGRA8),
+                            );
+                            handler.unlock(id, channel_index);
+                            continue;
+                        }
+                    };
+                    wgpu_dev.upload_texture_sub_rect(
+                        texture,
+                        update.rect,
+                        update.stride,
+                        data,
+                        update.format_override.unwrap_or(api::ImageFormat::BGRA8),
+                    );
+                }
+            }
+        }
+
+        drain_filter(
+            &mut self.notifications,
+            |n| { n.when() == Checkpoint::FrameTexturesUpdated },
+            |n| { n.notify(); },
+        );
+    }
+
     /// Reset the current partial present state. This forces the entire framebuffer
     /// to be refreshed next time `render` is called.
     pub fn force_redraw(&mut self) {
@@ -2900,17 +3100,53 @@ impl Renderer {
             return self.render_wgpu(device_size);
         }
 
-        // TODO(gw): We want to make the active document that is
-        //           being rendered configurable via the public
-        //           API in future. For now, just select the last
-        //           added document as the active one to render
-        //           (Gecko only ever creates a single document
-        //           per renderer right now).
+        #[cfg(feature = "gl_backend")]
+        { self.render_gl(device_size, buffer_age) }
+
+        #[cfg(not(feature = "gl_backend"))]
+        { Err(vec![RendererError::UnsupportedBackend("GL backend not compiled")]) }
+    }
+
+    pub fn get_debug_flags(&self) -> DebugFlags {
+        self.debug_flags
+    }
+
+    pub fn set_debug_flags(&mut self, flags: DebugFlags) {
+        if let Some(enabled) = flag_changed(self.debug_flags, flags, DebugFlags::GPU_TIME_QUERIES) {
+            if enabled {
+                self.gpu_profiler.enable_timers();
+            } else {
+                self.gpu_profiler.disable_timers();
+            }
+        }
+        if let Some(enabled) = flag_changed(self.debug_flags, flags, DebugFlags::GPU_SAMPLE_QUERIES) {
+            if enabled {
+                self.gpu_profiler.enable_samplers();
+            } else {
+                self.gpu_profiler.disable_samplers();
+            }
+        }
+
+        self.debug_flags = flags;
+    }
+
+    pub fn set_profiler_ui(&mut self, ui_str: &str) {
+        self.profiler.set_ui(ui_str);
+    }
+}
+
+// ─── GL-only rendering pipeline ────────────────────────────────────────────
+#[cfg(feature = "gl_backend")]
+impl Renderer {
+    fn render_gl(
+        &mut self,
+        device_size: DeviceIntSize,
+        buffer_age: usize,
+    ) -> Result<RenderResults, Vec<RendererError>> {
         let doc_id = self.active_documents.keys().last().cloned();
 
         let result = match doc_id {
             Some(doc_id) => {
-                // Remove the doc from the map to appease the borrow checker
                 let mut doc = self.active_documents
                     .remove(&doc_id)
                     .unwrap();
@@ -2956,16 +3192,12 @@ impl Renderer {
 
         if oom {
             let _ = self.api_tx.send(ApiMsg::MemoryPressure);
-            // Ensure we don't get stuck in a loop.
             self.consecutive_oom_frames += 1;
             assert!(self.consecutive_oom_frames < 5, "Renderer out of memory");
         } else {
             self.consecutive_oom_frames = 0;
         }
 
-        // This is the end of the rendering pipeline. If some notifications are is still there,
-        // just clear them and they will autimatically fire the Checkpoint::TransactionDropped
-        // event. Otherwise they would just pile up in this vector forever.
         self.notifications.clear();
 
         tracy_frame_marker!();
@@ -3675,139 +3907,6 @@ impl Renderer {
         let t = self.profile.end_time(profiler::TEXTURE_CACHE_UPDATE_TIME);
         self.resource_upload_time += t;
         Telemetry::record_texture_cache_update_time(Duration::from_micros((t * 1000.00) as u64));
-
-        drain_filter(
-            &mut self.notifications,
-            |n| { n.when() == Checkpoint::FrameTexturesUpdated },
-            |n| { n.notify(); },
-        );
-    }
-
-    /// Process texture cache updates in wgpu-only mode.
-    /// Creates/deletes wgpu textures, uploads pixel data, and processes copies.
-    #[cfg(feature = "wgpu_backend")]
-    fn update_texture_cache_wgpu(&mut self) {
-        use crate::internal_types::TextureUpdateSource;
-
-        let mut pending_texture_updates = mem::replace(&mut self.pending_texture_updates, vec![]);
-        self.pending_texture_cache_updates = false;
-
-        let wgpu_dev = match self.wgpu_device {
-            Some(ref dev) => dev,
-            None => return,
-        };
-
-        for update_list in pending_texture_updates.drain(..) {
-            // Process allocations: create or free wgpu textures.
-            for allocation in &update_list.allocations {
-                match allocation.kind {
-                    TextureCacheAllocationKind::Free => {
-                        // Remove and drop the wgpu texture.
-                        self.wgpu_texture_cache.remove(&allocation.id);
-                    }
-                    TextureCacheAllocationKind::Alloc(ref info) |
-                    TextureCacheAllocationKind::Reset(ref info) => {
-                        // For Reset, remove old texture first.
-                        if matches!(allocation.kind, TextureCacheAllocationKind::Reset(_)) {
-                            self.wgpu_texture_cache.remove(&allocation.id);
-                        }
-                        let texture = wgpu_dev.create_cache_texture(
-                            info.width,
-                            info.height,
-                            info.format,
-                        );
-                        self.wgpu_texture_cache.insert(allocation.id, texture);
-                    }
-                }
-            }
-
-            // Process copies first (atlas defragmentation).
-            for ((src_id, dst_id), copies) in &update_list.copies {
-                let src_tex = match self.wgpu_texture_cache.get(src_id) {
-                    Some(t) => t,
-                    None => {
-                        warn!("wgpu: copy source texture {:?} not found", src_id);
-                        continue;
-                    }
-                };
-                let dst_tex = match self.wgpu_texture_cache.get(dst_id) {
-                    Some(t) => t,
-                    None => {
-                        warn!("wgpu: copy dest texture {:?} not found", dst_id);
-                        continue;
-                    }
-                };
-                for copy in copies {
-                    wgpu_dev.copy_texture_sub_rect(
-                        src_tex,
-                        copy.src_rect,
-                        dst_tex,
-                        copy.dst_rect,
-                    );
-                }
-            }
-
-            // Process uploads: write pixel data to wgpu textures.
-            for (texture_id, updates) in update_list.updates {
-                let texture = match self.wgpu_texture_cache.get(&texture_id) {
-                    Some(t) => t,
-                    None => {
-                        warn!("wgpu: texture cache upload for unknown texture {:?}", texture_id);
-                        continue;
-                    }
-                };
-                for update in updates {
-                    let dummy_data;
-                    let data = match update.source {
-                        TextureUpdateSource::Bytes { ref data } => {
-                            &data[update.offset as usize ..]
-                        }
-                        TextureUpdateSource::DebugClear => {
-                            // Skip debug clears for now.
-                            continue;
-                        }
-                        TextureUpdateSource::External { id, channel_index } => {
-                            let handler = self.external_image_handler
-                                .as_mut()
-                                .expect("Found external image, but no handler set!");
-                            let ext_image = handler.lock(id, channel_index, false);
-                            let src = match ext_image.source {
-                                ExternalImageSource::RawData(data) => {
-                                    &data[update.offset as usize ..]
-                                }
-                                ExternalImageSource::Invalid => {
-                                    let bpp = texture.bytes_per_pixel();
-                                    let width = update.stride.map(|s| s as u32)
-                                        .unwrap_or(update.rect.width() as u32 * bpp);
-                                    let total_size = width * update.rect.height() as u32;
-                                    dummy_data = vec![0xFFu8; total_size as usize];
-                                    &dummy_data
-                                }
-                                ExternalImageSource::NativeTexture(eid) => {
-                                    panic!("Unexpected external texture {:?} for the texture cache update of {:?}", eid, id);
-                                }
-                            };
-                            wgpu_dev.upload_texture_sub_rect(
-                                texture,
-                                update.rect,
-                                update.stride,
-                                src,
-                                update.format_override.unwrap_or(api::ImageFormat::BGRA8),
-                            );
-                            handler.unlock(id, channel_index);
-                            continue;
-                        }
-                    };
-                    wgpu_dev.upload_texture_sub_rect(
-                        texture,
-                        update.rect,
-                        update.stride,
-                        data,
-                        update.format_override.unwrap_or(api::ImageFormat::BGRA8),
-                    );
-                }
-            }
-        }
 
         drain_filter(
             &mut self.notifications,
@@ -7193,33 +7292,6 @@ impl Renderer {
         self.debug.get_mut(self.device.as_mut().unwrap())
     }
 
-    pub fn get_debug_flags(&self) -> DebugFlags {
-        self.debug_flags
-    }
-
-    pub fn set_debug_flags(&mut self, flags: DebugFlags) {
-        if let Some(enabled) = flag_changed(self.debug_flags, flags, DebugFlags::GPU_TIME_QUERIES) {
-            if enabled {
-                self.gpu_profiler.enable_timers();
-            } else {
-                self.gpu_profiler.disable_timers();
-            }
-        }
-        if let Some(enabled) = flag_changed(self.debug_flags, flags, DebugFlags::GPU_SAMPLE_QUERIES) {
-            if enabled {
-                self.gpu_profiler.enable_samplers();
-            } else {
-                self.gpu_profiler.disable_samplers();
-            }
-        }
-
-        self.debug_flags = flags;
-    }
-
-    pub fn set_profiler_ui(&mut self, ui_str: &str) {
-        self.profiler.set_ui(ui_str);
-    }
-
     fn draw_frame_debug_items(&mut self, items: &[DebugItem]) {
         if items.is_empty() {
             return;
@@ -8308,6 +8380,7 @@ fn should_skip_batch(kind: &BatchKind, flags: DebugFlags) -> bool {
     }
 }
 
+#[cfg(feature = "gl_backend")]
 impl CompositeState {
     /// Use the client provided native compositor interface to add all picture
     /// cache tiles to the OS compositor
