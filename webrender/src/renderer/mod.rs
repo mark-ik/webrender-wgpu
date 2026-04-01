@@ -905,6 +905,125 @@ struct GlRendererAuxTextures {
 #[allow(dead_code)]
 struct WgpuRendererAuxTextures;
 
+/// Persistent GPU cache state for the wgpu render path.
+///
+/// In the GL path, the GPU cache is a persistent GL texture updated
+/// incrementally each frame.  For the wgpu path, we maintain a CPU-side
+/// mirror of the entire cache and upload it as a wgpu texture.
+#[cfg(feature = "wgpu_backend")]
+use crate::device::WgpuTexture;
+
+#[cfg(feature = "wgpu_backend")]
+pub(super) struct WgpuGpuCacheState {
+    /// CPU mirror of GPU cache contents.  Row-major, `width` texels per row.
+    /// Each texel is `[f32; 4]` (RGBA32F).
+    data: Vec<[f32; 4]>,
+    /// Width of the cache in texels (= MAX_VERTEX_TEXTURE_WIDTH = 1024).
+    width: u32,
+    /// Current height of the cache in rows.
+    height: u32,
+    /// The uploaded wgpu texture, if any.
+    texture: Option<WgpuTexture>,
+}
+
+#[cfg(feature = "wgpu_backend")]
+impl WgpuGpuCacheState {
+    fn new() -> Self {
+        let width = crate::renderer::vertex::MAX_VERTEX_TEXTURE_WIDTH as u32;
+        let initial_height = crate::gpu_cache::GPU_CACHE_INITIAL_HEIGHT as u32;
+        WgpuGpuCacheState {
+            data: vec![[0.0; 4]; (width * initial_height) as usize],
+            width,
+            height: initial_height,
+            texture: None,
+        }
+    }
+
+    /// Apply pending GPU cache update lists (sparse writes into the mirror).
+    fn apply_updates(&mut self, updates: &[crate::gpu_cache::GpuCacheUpdateList]) {
+        use crate::gpu_cache::GpuCacheUpdate;
+
+        for list in updates {
+            // Resize if needed.
+            let new_h = list.height as u32;
+            if new_h > self.height {
+                self.data.resize((self.width * new_h) as usize, [0.0; 4]);
+                self.height = new_h;
+            }
+            if list.clear {
+                for v in self.data.iter_mut() {
+                    *v = [0.0; 4];
+                }
+            }
+            for update in &list.updates {
+                match *update {
+                    GpuCacheUpdate::Copy {
+                        block_index,
+                        block_count,
+                        address,
+                    } => {
+                        let dst_start =
+                            address.v as usize * self.width as usize + address.u as usize;
+                        // GpuBlockData is #[repr(C)] { data: [f32; 4] } —
+                        // safe to reinterpret as [f32; 4].
+                        let block_data: &[[f32; 4]] = unsafe {
+                            std::slice::from_raw_parts(
+                                list.blocks.as_ptr() as *const [f32; 4],
+                                list.blocks.len(),
+                            )
+                        };
+                        for i in 0..block_count {
+                            let dst = dst_start + i;
+                            if dst < self.data.len() {
+                                self.data[dst] = block_data[block_index + i];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Upload the CPU mirror to a wgpu texture, creating or resizing as needed.
+    fn upload(&mut self, device: &WgpuDevice) {
+        let bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(
+                self.data.as_ptr() as *const u8,
+                self.data.len() * 16,
+            )
+        };
+        match self.texture {
+            Some(ref mut tex) => {
+                device.update_data_texture(tex, self.width, self.height, bytes);
+            }
+            None => {
+                self.texture = Some(device.create_data_texture(
+                    "wgpu GPU cache",
+                    self.width,
+                    self.height,
+                    wgpu::TextureFormat::Rgba32Float,
+                    bytes,
+                ));
+            }
+        }
+    }
+
+    fn texture_view(&self) -> Option<wgpu::TextureView> {
+        self.texture.as_ref().map(|t| t.create_view())
+    }
+}
+
+/// Per-frame data textures uploaded to the wgpu device for alpha batch rendering.
+#[cfg(feature = "wgpu_backend")]
+struct WgpuFrameDataTextures {
+    prim_headers_f: WgpuTexture,
+    prim_headers_i: WgpuTexture,
+    transform_palette: WgpuTexture,
+    render_tasks: WgpuTexture,
+    gpu_buffer_f: Option<WgpuTexture>,
+    gpu_buffer_i: Option<WgpuTexture>,
+}
+
 #[cfg_attr(feature = "wgpu_backend", allow(dead_code))]
 enum RendererAuxTextures {
     Gl(GlRendererAuxTextures),
@@ -1177,6 +1296,10 @@ pub struct Renderer {
     /// Only populated when device is None (wgpu-only Renderer).
     #[cfg(feature = "wgpu_backend")]
     wgpu_texture_cache: FastHashMap<CacheTextureId, crate::device::WgpuTexture>,
+
+    /// Persistent GPU cache state for the wgpu render path.
+    #[cfg(feature = "wgpu_backend")]
+    wgpu_gpu_cache: WgpuGpuCacheState,
 }
 
 #[derive(Debug)]
@@ -1221,9 +1344,10 @@ impl Renderer {
         self.device.is_none()
     }
 
-    /// Minimal wgpu render path. Processes pending messages from the backend
-    /// and composites the frame via wgpu. Currently only handles solid-color
-    /// tiles (texture cache tiles are skipped).
+    /// wgpu render path.  Processes pending texture cache and GPU cache
+    /// updates, uploads per-frame data textures, processes render passes
+    /// (drawing alpha batches into picture cache tiles), then composites
+    /// the final frame to the surface.
     #[cfg(feature = "wgpu_backend")]
     fn render_wgpu(
         &mut self,
@@ -1235,6 +1359,56 @@ impl Renderer {
 
         // Process any pending texture cache updates before rendering.
         self.update_texture_cache_wgpu();
+
+        // ── GPU cache: apply pending updates and upload ─────────────
+        {
+            let pending = std::mem::take(&mut self.pending_gpu_cache_updates);
+            if !pending.is_empty() {
+                self.wgpu_gpu_cache.apply_updates(&pending);
+                if let Some(ref dev) = self.wgpu_device {
+                    self.wgpu_gpu_cache.upload(dev);
+                }
+            }
+        }
+
+        // ── Frame data textures ─────────────────────────────────────
+        // Upload the per-frame data arrays as wgpu textures so they can
+        // be bound when drawing alpha batches.
+        let gpu_cache_view = self.wgpu_gpu_cache.texture_view();
+        let frame_textures = {
+            let doc_id = self.active_documents.keys().last().cloned();
+            let doc = doc_id.and_then(|id| self.active_documents.get(&id));
+            let wgpu_dev = self.wgpu_device.as_ref();
+
+            match (doc, wgpu_dev) {
+                (Some(doc), Some(dev)) => {
+                    let frame = &doc.frame;
+                    Some(Self::upload_frame_data_textures(dev, frame))
+                }
+                _ => None,
+            }
+        };
+
+        // ── Process render passes ───────────────────────────────────
+        // Each pass renders into picture cache tiles / texture cache
+        // targets.  We iterate the alpha batch containers and draw them
+        // through wgpu pipelines.
+        if let Some(ref ft) = frame_textures {
+            let doc_id = self.active_documents.keys().last().cloned();
+            if let Some(doc_id) = doc_id {
+                let frame_rendered = self.active_documents.get(&doc_id)
+                    .map(|d| d.frame.has_been_rendered)
+                    .unwrap_or(true);
+
+                if !frame_rendered {
+                    self.draw_passes_wgpu(
+                        &doc_id,
+                        ft,
+                        gpu_cache_view.as_ref(),
+                    );
+                }
+            }
+        }
 
         let doc_id = self.active_documents.keys().last().cloned();
         let Some(doc_id) = doc_id else {
@@ -1399,6 +1573,909 @@ impl Renderer {
         self.notifications.clear();
 
         Ok(results)
+    }
+
+    /// Per-frame data textures uploaded to the wgpu device for alpha batch
+    /// rendering.  These correspond to the `sTransformPalette`, `sRenderTasks`,
+    /// `sPrimitiveHeadersF`, `sPrimitiveHeadersI`, `sGpuBufferF`, and
+    /// `sGpuBufferI` shader bindings.
+    #[cfg(feature = "wgpu_backend")]
+    fn upload_frame_data_textures(
+        dev: &WgpuDevice,
+        frame: &Frame,
+    ) -> WgpuFrameDataTextures {
+        use crate::renderer::vertex::MAX_VERTEX_TEXTURE_WIDTH;
+        let w = MAX_VERTEX_TEXTURE_WIDTH as u32;
+
+        let make_f32_tex = |label: &str, data: &[u8], texels_per_item: usize| -> WgpuTexture {
+            let item_count = data.len() / (texels_per_item * 16);
+            let items_per_row = w as usize / texels_per_item;
+            let height = if item_count == 0 { 1 } else {
+                ((item_count + items_per_row - 1) / items_per_row) as u32
+            };
+            dev.create_data_texture(
+                label, w, height,
+                wgpu::TextureFormat::Rgba32Float,
+                data,
+            )
+        };
+
+        let make_i32_tex = |label: &str, data: &[u8], texels_per_item: usize| -> WgpuTexture {
+            let item_count = data.len() / (texels_per_item * 16);
+            let items_per_row = w as usize / texels_per_item;
+            let height = if item_count == 0 { 1 } else {
+                ((item_count + items_per_row - 1) / items_per_row) as u32
+            };
+            dev.create_data_texture(
+                label, w, height,
+                wgpu::TextureFormat::Rgba32Sint,
+                data,
+            )
+        };
+
+        // PrimitiveHeaderF: LayoutRect + LayoutRect = 32 bytes = 2 texels
+        let prim_f_bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(
+                frame.prim_headers.headers_float.as_ptr() as *const u8,
+                frame.prim_headers.headers_float.len() * std::mem::size_of::<crate::gpu_types::PrimitiveHeaderF>(),
+            )
+        };
+        let prim_headers_f = make_f32_tex("prim_headers_f", prim_f_bytes, 2);
+
+        // PrimitiveHeaderI: 8 x i32 = 32 bytes = 2 texels (i32)
+        let prim_i_bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(
+                frame.prim_headers.headers_int.as_ptr() as *const u8,
+                frame.prim_headers.headers_int.len() * std::mem::size_of::<crate::gpu_types::PrimitiveHeaderI>(),
+            )
+        };
+        let prim_headers_i = make_i32_tex("prim_headers_i", prim_i_bytes, 2);
+
+        // TransformData: two 4x4 matrices = 128 bytes = 8 texels
+        let transforms_bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(
+                frame.transform_palette.as_ptr() as *const u8,
+                frame.transform_palette.len() * std::mem::size_of::<crate::gpu_types::TransformData>(),
+            )
+        };
+        let transform_palette = make_f32_tex("transform_palette", transforms_bytes, 8);
+
+        // RenderTaskData: FLOATS_PER_RENDER_TASK_INFO f32s = 3 texels (12 floats)
+        let tasks_bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(
+                frame.render_tasks.task_data.as_ptr() as *const u8,
+                frame.render_tasks.task_data.len() * std::mem::size_of::<crate::render_task::RenderTaskData>(),
+            )
+        };
+        let render_tasks = make_f32_tex("render_tasks", tasks_bytes, 3);
+
+        // GPU buffer F (float)
+        let gpu_buf_f = if !frame.gpu_buffer_f.is_empty() {
+            let data = &frame.gpu_buffer_f.data;
+            let bytes: &[u8] = unsafe {
+                std::slice::from_raw_parts(
+                    data.as_ptr() as *const u8,
+                    data.len() * 16,
+                )
+            };
+            let sz = frame.gpu_buffer_f.size;
+            Some(dev.create_data_texture(
+                "gpu_buffer_f",
+                sz.width as u32,
+                (sz.height as u32).max(1),
+                wgpu::TextureFormat::Rgba32Float,
+                bytes,
+            ))
+        } else {
+            None
+        };
+
+        // GPU buffer I (sint)
+        let gpu_buf_i = if !frame.gpu_buffer_i.is_empty() {
+            let data = &frame.gpu_buffer_i.data;
+            let bytes: &[u8] = unsafe {
+                std::slice::from_raw_parts(
+                    data.as_ptr() as *const u8,
+                    data.len() * 16,
+                )
+            };
+            let sz = frame.gpu_buffer_i.size;
+            Some(dev.create_data_texture(
+                "gpu_buffer_i",
+                sz.width as u32,
+                (sz.height as u32).max(1),
+                wgpu::TextureFormat::Rgba32Sint,
+                bytes,
+            ))
+        } else {
+            None
+        };
+
+        WgpuFrameDataTextures {
+            prim_headers_f,
+            prim_headers_i,
+            transform_palette,
+            render_tasks,
+            gpu_buffer_f: gpu_buf_f,
+            gpu_buffer_i: gpu_buf_i,
+        }
+    }
+
+    /// Process render passes through wgpu, drawing alpha batch containers
+    /// into picture cache / texture cache render targets.
+    #[cfg(feature = "wgpu_backend")]
+    fn draw_passes_wgpu(
+        &mut self,
+        doc_id: &DocumentId,
+        frame_textures: &WgpuFrameDataTextures,
+        gpu_cache_view: Option<&wgpu::TextureView>,
+    ) {
+        use crate::device::{TextureBindings, WgpuBlendMode, WgpuDepthState};
+
+        if self.wgpu_device.is_none() {
+            return;
+        }
+
+        // Use an immutable borrow for the render loop so the closure can also
+        // access self.wgpu_texture_cache.  We set has_been_rendered after.
+        let frame = match self.active_documents.get(doc_id) {
+            Some(doc) => &doc.frame,
+            None => return,
+        };
+        if frame.has_been_rendered || frame.passes.is_empty() {
+            return;
+        }
+
+        // Build texture views for the frame data textures.
+        let ft_prim_f_view = frame_textures.prim_headers_f.create_view();
+        let ft_prim_i_view = frame_textures.prim_headers_i.create_view();
+        let ft_transforms_view = frame_textures.transform_palette.create_view();
+        let ft_tasks_view = frame_textures.render_tasks.create_view();
+        let ft_gpu_buf_f_view = frame_textures.gpu_buffer_f.as_ref().map(|t| t.create_view());
+        let ft_gpu_buf_i_view = frame_textures.gpu_buffer_i.as_ref().map(|t| t.create_view());
+
+        let mut batches_drawn = 0u32;
+        let mut batches_skipped = 0u32;
+
+        for pass in frame.passes.iter() {
+            // Draw picture cache targets.
+            for picture_target in &pass.picture_cache {
+                let cache_tex_id = match picture_target.surface {
+                    ResolvedSurfaceTexture::TextureCache { ref texture } => {
+                        match *texture {
+                            TextureSource::TextureCache(id, _) => id,
+                            _ => continue,
+                        }
+                    }
+                    _ => continue, // Native surfaces not supported yet.
+                };
+
+                let target_wgpu = match self.wgpu_texture_cache.get(&cache_tex_id) {
+                    Some(t) => t,
+                    None => {
+                        batches_skipped += 1;
+                        continue;
+                    }
+                };
+
+                let target_view = target_wgpu.create_view();
+                let target_w = picture_target.dirty_rect.width() as u32;
+                let target_h = picture_target.dirty_rect.height() as u32;
+                if target_w == 0 || target_h == 0 {
+                    continue;
+                }
+
+                // Draw the alpha batch container in this picture target.
+                let alpha_batch_container = match picture_target.kind {
+                    PictureCacheTargetKind::Draw { ref alpha_batch_container } => {
+                        alpha_batch_container
+                    }
+                    PictureCacheTargetKind::Blit { .. } => continue, // Blits handled separately.
+                };
+
+                let scissor = Self::device_rect_to_scissor(
+                    alpha_batch_container.task_scissor_rect.as_ref(),
+                );
+
+                let has_opaque = !alpha_batch_container.opaque_batches.is_empty();
+
+                // Acquire a depth texture when there are opaque batches.
+                // Depth testing prevents overdraw: opaque draws front-to-back
+                // with depth write, alpha draws test against the depth buffer.
+                let depth_view = if has_opaque {
+                    let wgpu_dev = self.wgpu_device.as_mut().unwrap();
+                    Some(wgpu_dev.acquire_depth_view(target_wgpu.width, target_wgpu.height))
+                } else {
+                    None
+                };
+                let depth_ref = depth_view.as_ref();
+
+                let mut need_clear = true;
+
+                // Helper closure to draw a single batch.
+                macro_rules! draw_batch {
+                    ($batch:expr, $is_alpha:expr, $depth_state:expr) => {{
+                        let (shader_name, config) = Self::batch_key_to_pipeline_key(&$batch.key, $is_alpha);
+                        let instance_bytes: &[u8] = unsafe {
+                            std::slice::from_raw_parts(
+                                $batch.instances.as_ptr() as *const u8,
+                                $batch.instances.len() * std::mem::size_of::<crate::gpu_types::PrimitiveInstanceData>(),
+                            )
+                        };
+
+                        let color_views: [Option<wgpu::TextureView>; 3] = std::array::from_fn(|i| {
+                            match $batch.key.textures.input.colors[i] {
+                                TextureSource::TextureCache(id, _swizzle) => {
+                                    self.wgpu_texture_cache.get(&id).map(|t| t.create_view())
+                                }
+                                _ => None,
+                            }
+                        });
+
+                        let textures = TextureBindings {
+                            color0: color_views[0].as_ref(),
+                            color1: color_views[1].as_ref(),
+                            color2: color_views[2].as_ref(),
+                            gpu_cache: gpu_cache_view,
+                            transform_palette: Some(&ft_transforms_view),
+                            render_tasks: Some(&ft_tasks_view),
+                            prim_headers_f: Some(&ft_prim_f_view),
+                            prim_headers_i: Some(&ft_prim_i_view),
+                            gpu_buffer_f: ft_gpu_buf_f_view.as_ref(),
+                            gpu_buffer_i: ft_gpu_buf_i_view.as_ref(),
+                            ..Default::default()
+                        };
+
+                        let wgpu_blend = Self::blend_mode_to_wgpu(&$batch.key.blend_mode);
+                        let wgpu_dev = self.wgpu_device.as_mut().unwrap();
+                        wgpu_dev.draw_instanced(
+                            shader_name,
+                            config,
+                            wgpu_blend,
+                            $depth_state,
+                            &target_view,
+                            target_w,
+                            target_h,
+                            &textures,
+                            instance_bytes,
+                            $batch.instances.len() as u32,
+                            need_clear,
+                            scissor,
+                            depth_ref,
+                        );
+                        need_clear = false;
+                        batches_drawn += 1;
+                    }};
+                }
+
+                // Opaque batches: front-to-back (reverse order) with depth write.
+                if has_opaque {
+                    for batch in alpha_batch_container.opaque_batches.iter().rev() {
+                        draw_batch!(batch, false, WgpuDepthState::WriteAndTest);
+                    }
+                }
+
+                // Alpha batches: back-to-front (forward order) with depth test only.
+                let alpha_depth = if has_opaque {
+                    WgpuDepthState::TestOnly
+                } else {
+                    WgpuDepthState::None
+                };
+                for batch in alpha_batch_container.alpha_batches.iter() {
+                    draw_batch!(batch, true, alpha_depth);
+                }
+            }
+
+            // Draw cs_* cache tasks, clip masks, and quad batches in
+            // texture_cache/alpha/color targets.
+            let all_targets = pass.texture_cache.values()
+                .chain(pass.alpha.targets.iter())
+                .chain(pass.color.targets.iter());
+            for target in all_targets {
+                let has_primary = !target.clip_batcher.primary_clips.is_empty();
+                let has_secondary = !target.clip_batcher.secondary_clips.is_empty();
+                let has_quads = target.prim_instances.iter().any(|m| !m.is_empty())
+                    || !target.prim_instances_with_scissor.is_empty();
+                let has_cs_tasks = !target.border_segments_solid.is_empty()
+                    || !target.border_segments_complex.is_empty()
+                    || !target.line_decorations.is_empty()
+                    || !target.fast_linear_gradients.is_empty()
+                    || !target.linear_gradients.is_empty()
+                    || !target.radial_gradients.is_empty()
+                    || !target.conic_gradients.is_empty()
+                    || !target.horizontal_blurs.is_empty()
+                    || !target.vertical_blurs.is_empty()
+                    || !target.scalings.is_empty();
+
+                if !has_primary && !has_secondary && !has_quads && !has_cs_tasks {
+                    continue;
+                }
+
+                let target_wgpu = match self.wgpu_texture_cache.get(&target.texture_id) {
+                    Some(t) => t,
+                    None => {
+                        batches_skipped += 1;
+                        continue;
+                    }
+                };
+                let target_view = target_wgpu.create_view();
+                let target_w = target_wgpu.width;
+                let target_h = target_wgpu.height;
+
+                // cs_* cache target tasks: borders, gradients, blurs, etc.
+                if has_cs_tasks {
+                    Self::draw_cache_target_tasks_wgpu(
+                        self.wgpu_device.as_mut().unwrap(),
+                        &self.wgpu_texture_cache,
+                        target,
+                        &target_view,
+                        target_w,
+                        target_h,
+                        gpu_cache_view,
+                        &mut batches_drawn,
+                    );
+                }
+
+                // Clip masks: primary (overwrite), then secondary (multiplicative).
+                if has_primary {
+                    let wgpu_dev = self.wgpu_device.as_mut().unwrap();
+                    Self::draw_clip_batch_list_wgpu(
+                        wgpu_dev,
+                        &target.clip_batcher.primary_clips,
+                        &target_view,
+                        target_w,
+                        target_h,
+                        &ft_transforms_view,
+                        gpu_cache_view,
+                        WgpuBlendMode::None,
+                        &mut batches_drawn,
+                    );
+                }
+                if has_secondary {
+                    let wgpu_dev = self.wgpu_device.as_mut().unwrap();
+                    Self::draw_clip_batch_list_wgpu(
+                        wgpu_dev,
+                        &target.clip_batcher.secondary_clips,
+                        &target_view,
+                        target_w,
+                        target_h,
+                        &ft_transforms_view,
+                        gpu_cache_view,
+                        WgpuBlendMode::MultiplyClipMask,
+                        &mut batches_drawn,
+                    );
+                }
+
+                // Quad batches (prim_instances indexed by PatternKind).
+                if has_quads {
+                    Self::draw_quad_batches_wgpu(
+                        self.wgpu_device.as_mut().unwrap(),
+                        &self.wgpu_texture_cache,
+                        &target.prim_instances,
+                        &target.prim_instances_with_scissor,
+                        &target_view,
+                        target_w,
+                        target_h,
+                        &ft_transforms_view,
+                        &ft_tasks_view,
+                        &ft_prim_f_view,
+                        &ft_prim_i_view,
+                        gpu_cache_view,
+                        ft_gpu_buf_f_view.as_ref(),
+                        ft_gpu_buf_i_view.as_ref(),
+                        &mut batches_drawn,
+                    );
+                }
+            }
+        }
+
+        if batches_drawn > 0 || batches_skipped > 0 {
+            info!(
+                "wgpu: drew {} batches, skipped {} in render passes",
+                batches_drawn, batches_skipped,
+            );
+        }
+
+        // Mark the frame as rendered (requires a separate mutable borrow).
+        if let Some(doc) = self.active_documents.get_mut(doc_id) {
+            doc.frame.has_been_rendered = true;
+        }
+    }
+
+    /// Map a WebRender batch key to a (shader_name, config) pipeline key
+    /// for the wgpu shader pipeline lookup.
+    ///
+    /// The `is_alpha` flag selects the ALPHA_PASS variant for batches from
+    /// the alpha (transparent) list.
+    #[cfg(feature = "wgpu_backend")]
+    fn batch_key_to_pipeline_key(
+        key: &crate::batch::BatchKey,
+        is_alpha: bool,
+    ) -> (&'static str, &'static str) {
+        use crate::batch::BatchKind;
+        use crate::batch::BrushBatchKind;
+
+        match key.kind {
+            BatchKind::Brush(BrushBatchKind::Solid) => {
+                ("brush_solid", if is_alpha { "ALPHA_PASS" } else { "" })
+            }
+            BatchKind::Brush(BrushBatchKind::Image(..)) => {
+                ("brush_image", if is_alpha { "ALPHA_PASS,TEXTURE_2D" } else { "TEXTURE_2D" })
+            }
+            BatchKind::Brush(BrushBatchKind::Blend) => {
+                ("brush_blend", if is_alpha { "ALPHA_PASS" } else { "" })
+            }
+            BatchKind::Brush(BrushBatchKind::MixBlend { .. }) => {
+                ("brush_mix_blend", if is_alpha { "ALPHA_PASS" } else { "" })
+            }
+            BatchKind::Brush(BrushBatchKind::LinearGradient) => {
+                ("brush_linear_gradient", if is_alpha { "ALPHA_PASS" } else { "" })
+            }
+            BatchKind::Brush(BrushBatchKind::Opacity) => {
+                ("brush_opacity", if is_alpha { "ALPHA_PASS" } else { "" })
+            }
+            BatchKind::Brush(BrushBatchKind::YuvImage(..)) => {
+                ("brush_yuv_image", if is_alpha { "ALPHA_PASS,TEXTURE_2D,YUV" } else { "TEXTURE_2D,YUV" })
+            }
+            BatchKind::TextRun(..) => ("ps_text_run", "ALPHA_PASS,TEXTURE_2D"),
+            _ => ("brush_solid", if is_alpha { "ALPHA_PASS" } else { "" }),
+        }
+    }
+
+    /// Convert a WebRender `BlendMode` to its wgpu equivalent.
+    ///
+    /// Dual-source and advanced blend modes that have no direct wgpu mapping
+    /// fall back to `PremultipliedAlpha`, which gives correct compositing for
+    /// the common case.  Proper advanced blend support will require shader-side
+    /// emulation or wgpu extensions.
+    #[cfg(feature = "wgpu_backend")]
+    fn blend_mode_to_wgpu(blend_mode: &BlendMode) -> crate::device::WgpuBlendMode {
+        use crate::device::WgpuBlendMode;
+        match *blend_mode {
+            BlendMode::None => WgpuBlendMode::None,
+            BlendMode::Alpha => WgpuBlendMode::Alpha,
+            BlendMode::PremultipliedAlpha => WgpuBlendMode::PremultipliedAlpha,
+            BlendMode::PremultipliedDestOut => WgpuBlendMode::PremultipliedDestOut,
+            BlendMode::Screen => WgpuBlendMode::Screen,
+            BlendMode::Exclusion => WgpuBlendMode::Exclusion,
+            BlendMode::PlusLighter => WgpuBlendMode::PlusLighter,
+            // Dual-source and advanced modes don't have direct wgpu equivalents.
+            // Fall back to premultiplied alpha for now.
+            BlendMode::SubpixelDualSource
+            | BlendMode::MultiplyDualSource
+            | BlendMode::Advanced(..) => WgpuBlendMode::PremultipliedAlpha,
+        }
+    }
+
+    /// Convert a `DeviceIntRect` to a wgpu scissor rect `(x, y, w, h)`.
+    ///
+    /// wgpu uses top-left origin, same as WebRender's device space for
+    /// offscreen render targets, so no Y-flip is needed.  Negative
+    /// origins or zero-area rects are clamped to valid values.
+    #[cfg(feature = "wgpu_backend")]
+    fn device_rect_to_scissor(
+        rect: Option<&DeviceIntRect>,
+    ) -> Option<(u32, u32, u32, u32)> {
+        rect.and_then(|r| {
+            let x = r.min.x.max(0) as u32;
+            let y = r.min.y.max(0) as u32;
+            let w = r.width().max(0) as u32;
+            let h = r.height().max(0) as u32;
+            if w == 0 || h == 0 { None } else { Some((x, y, w, h)) }
+        })
+    }
+
+    /// Draw a `ClipBatchList` through the wgpu device.
+    ///
+    /// Clip shaders use their own instance layouts (ClipMaskInstanceRect for
+    /// rectangles, ClipMaskInstanceBoxShadow for box shadows).
+    #[cfg(feature = "wgpu_backend")]
+    fn draw_clip_batch_list_wgpu(
+        wgpu_dev: &mut crate::device::WgpuDevice,
+        list: &ClipBatchList,
+        target_view: &wgpu::TextureView,
+        target_w: u32,
+        target_h: u32,
+        transform_palette_view: &wgpu::TextureView,
+        gpu_cache_view: Option<&wgpu::TextureView>,
+        blend_mode: crate::device::WgpuBlendMode,
+        batches_drawn: &mut u32,
+    ) {
+        use crate::device::TextureBindings;
+
+        // Slow clip rectangles → cs_clip_rectangle (no FAST_PATH)
+        if !list.slow_rectangles.is_empty() {
+            let instance_bytes: &[u8] = unsafe {
+                std::slice::from_raw_parts(
+                    list.slow_rectangles.as_ptr() as *const u8,
+                    list.slow_rectangles.len()
+                        * std::mem::size_of::<crate::gpu_types::ClipMaskInstanceRect>(),
+                )
+            };
+            let textures = TextureBindings {
+                transform_palette: Some(transform_palette_view),
+                gpu_cache: gpu_cache_view,
+                ..Default::default()
+            };
+            wgpu_dev.draw_instanced(
+                "cs_clip_rectangle",
+                "",
+                blend_mode,
+                crate::device::WgpuDepthState::None,
+                target_view,
+                target_w,
+                target_h,
+                &textures,
+                instance_bytes,
+                list.slow_rectangles.len() as u32,
+                false, // don't clear — clip masks are pre-cleared
+                None,  // no scissor for clip masks
+                None,  // no depth
+            );
+            *batches_drawn += 1;
+        }
+
+        // Fast clip rectangles → cs_clip_rectangle with FAST_PATH
+        if !list.fast_rectangles.is_empty() {
+            let instance_bytes: &[u8] = unsafe {
+                std::slice::from_raw_parts(
+                    list.fast_rectangles.as_ptr() as *const u8,
+                    list.fast_rectangles.len()
+                        * std::mem::size_of::<crate::gpu_types::ClipMaskInstanceRect>(),
+                )
+            };
+            let textures = TextureBindings {
+                transform_palette: Some(transform_palette_view),
+                gpu_cache: gpu_cache_view,
+                ..Default::default()
+            };
+            wgpu_dev.draw_instanced(
+                "cs_clip_rectangle",
+                "FAST_PATH",
+                blend_mode,
+                crate::device::WgpuDepthState::None,
+                target_view,
+                target_w,
+                target_h,
+                &textures,
+                instance_bytes,
+                list.fast_rectangles.len() as u32,
+                false,
+                None, // no scissor for clip masks
+                None, // no depth
+            );
+            *batches_drawn += 1;
+        }
+
+        // Box shadow clips → cs_clip_box_shadow
+        for (_mask_texture_source, items) in list.box_shadows.iter() {
+            let instance_bytes: &[u8] = unsafe {
+                std::slice::from_raw_parts(
+                    items.as_ptr() as *const u8,
+                    items.len()
+                        * std::mem::size_of::<crate::gpu_types::ClipMaskInstanceBoxShadow>(),
+                )
+            };
+            // TODO: resolve mask_texture_source to a wgpu texture view for sColor0
+            let textures = TextureBindings {
+                transform_palette: Some(transform_palette_view),
+                gpu_cache: gpu_cache_view,
+                ..Default::default()
+            };
+            wgpu_dev.draw_instanced(
+                "cs_clip_box_shadow",
+                "TEXTURE_2D",
+                blend_mode,
+                crate::device::WgpuDepthState::None,
+                target_view,
+                target_w,
+                target_h,
+                &textures,
+                instance_bytes,
+                items.len() as u32,
+                false,
+                None, // no scissor for clip masks
+                None, // no depth
+            );
+            *batches_drawn += 1;
+        }
+    }
+
+    /// Draw quad batches (ps_quad_* shaders) for a single render target.
+    ///
+    /// Maps `PatternKind` to the correct shader name and dispatches instances
+    /// for both non-scissored and scissored batches.
+    #[cfg(feature = "wgpu_backend")]
+    fn draw_quad_batches_wgpu(
+        wgpu_dev: &mut crate::device::WgpuDevice,
+        wgpu_texture_cache: &FastHashMap<CacheTextureId, crate::device::WgpuTexture>,
+        prim_instances: &[FastHashMap<TextureSource, FrameVec<crate::gpu_types::PrimitiveInstanceData>>],
+        prim_instances_with_scissor: &FastHashMap<
+            (DeviceIntRect, PatternKind),
+            FastHashMap<TextureSource, FrameVec<crate::gpu_types::PrimitiveInstanceData>>,
+        >,
+        target_view: &wgpu::TextureView,
+        target_w: u32,
+        target_h: u32,
+        transform_palette_view: &wgpu::TextureView,
+        render_tasks_view: &wgpu::TextureView,
+        prim_headers_f_view: &wgpu::TextureView,
+        prim_headers_i_view: &wgpu::TextureView,
+        gpu_cache_view: Option<&wgpu::TextureView>,
+        gpu_buffer_f_view: Option<&wgpu::TextureView>,
+        gpu_buffer_i_view: Option<&wgpu::TextureView>,
+        batches_drawn: &mut u32,
+    ) {
+        use crate::device::{TextureBindings, WgpuBlendMode};
+
+        let pattern_to_shader = |pattern: PatternKind| -> (&'static str, &'static str) {
+            match pattern {
+                PatternKind::ColorOrTexture => ("ps_quad_textured", ""),
+                PatternKind::Gradient => ("ps_quad_gradient", "DITHERING"),
+                PatternKind::RadialGradient => ("ps_quad_radial_gradient", "DITHERING"),
+                PatternKind::ConicGradient => ("ps_quad_conic_gradient", "DITHERING"),
+                PatternKind::Mask => ("ps_quad_mask", ""),
+            }
+        };
+
+        // Non-scissored quad batches: blend disabled (opaque).
+        for (pattern_idx, prim_instances_map) in prim_instances.iter().enumerate() {
+            if prim_instances_map.is_empty() {
+                continue;
+            }
+            let pattern = PatternKind::from_u32(pattern_idx as u32);
+            let (shader_name, config) = pattern_to_shader(pattern);
+
+            for (texture_source, instances) in prim_instances_map {
+                let color0_view = match *texture_source {
+                    TextureSource::TextureCache(id, _) => {
+                        wgpu_texture_cache.get(&id).map(|t| t.create_view())
+                    }
+                    _ => None,
+                };
+                let instance_bytes: &[u8] = unsafe {
+                    std::slice::from_raw_parts(
+                        instances.as_ptr() as *const u8,
+                        instances.len()
+                            * std::mem::size_of::<crate::gpu_types::PrimitiveInstanceData>(),
+                    )
+                };
+                let textures = TextureBindings {
+                    color0: color0_view.as_ref(),
+                    gpu_cache: gpu_cache_view,
+                    transform_palette: Some(transform_palette_view),
+                    render_tasks: Some(render_tasks_view),
+                    prim_headers_f: Some(prim_headers_f_view),
+                    prim_headers_i: Some(prim_headers_i_view),
+                    gpu_buffer_f: gpu_buffer_f_view,
+                    gpu_buffer_i: gpu_buffer_i_view,
+                    ..Default::default()
+                };
+                wgpu_dev.draw_instanced(
+                    shader_name,
+                    config,
+                    WgpuBlendMode::None, // opaque quads
+                    crate::device::WgpuDepthState::None,
+                    target_view,
+                    target_w,
+                    target_h,
+                    &textures,
+                    instance_bytes,
+                    instances.len() as u32,
+                    false,
+                    None, // no scissor for opaque quads
+                    None, // no depth
+                );
+                *batches_drawn += 1;
+            }
+        }
+
+        // Scissored quad batches: premultiplied alpha blend.
+        for ((scissor_rect, pattern), prim_instances_map) in prim_instances_with_scissor {
+            let (shader_name, config) = pattern_to_shader(*pattern);
+            let scissor = Self::device_rect_to_scissor(Some(scissor_rect));
+
+            for (texture_source, instances) in prim_instances_map {
+                let color0_view = match *texture_source {
+                    TextureSource::TextureCache(id, _) => {
+                        wgpu_texture_cache.get(&id).map(|t| t.create_view())
+                    }
+                    _ => None,
+                };
+                let instance_bytes: &[u8] = unsafe {
+                    std::slice::from_raw_parts(
+                        instances.as_ptr() as *const u8,
+                        instances.len()
+                            * std::mem::size_of::<crate::gpu_types::PrimitiveInstanceData>(),
+                    )
+                };
+                let textures = TextureBindings {
+                    color0: color0_view.as_ref(),
+                    gpu_cache: gpu_cache_view,
+                    transform_palette: Some(transform_palette_view),
+                    render_tasks: Some(render_tasks_view),
+                    prim_headers_f: Some(prim_headers_f_view),
+                    prim_headers_i: Some(prim_headers_i_view),
+                    gpu_buffer_f: gpu_buffer_f_view,
+                    gpu_buffer_i: gpu_buffer_i_view,
+                    ..Default::default()
+                };
+                wgpu_dev.draw_instanced(
+                    shader_name,
+                    config,
+                    WgpuBlendMode::PremultipliedAlpha,
+                    crate::device::WgpuDepthState::None,
+                    target_view,
+                    target_w,
+                    target_h,
+                    &textures,
+                    instance_bytes,
+                    instances.len() as u32,
+                    false,
+                    scissor,
+                    None, // no depth
+                );
+                *batches_drawn += 1;
+            }
+        }
+    }
+
+    /// Draw cs_* cache target tasks (borders, line decorations, gradients,
+    /// blurs, scaling) through the wgpu device for a single render target.
+    #[cfg(feature = "wgpu_backend")]
+    fn draw_cache_target_tasks_wgpu(
+        wgpu_dev: &mut crate::device::WgpuDevice,
+        wgpu_texture_cache: &FastHashMap<CacheTextureId, crate::device::WgpuTexture>,
+        target: &crate::render_target::RenderTarget,
+        target_view: &wgpu::TextureView,
+        target_w: u32,
+        target_h: u32,
+        gpu_cache_view: Option<&wgpu::TextureView>,
+        batches_drawn: &mut u32,
+    ) {
+        use crate::device::{TextureBindings, WgpuBlendMode};
+
+        let base_textures = TextureBindings {
+            gpu_cache: gpu_cache_view,
+            ..Default::default()
+        };
+
+        // Helper: marshal instance data to bytes and draw with explicit blend mode.
+        macro_rules! draw_cs_blend {
+            ($shader:expr, $config:expr, $instances:expr, $textures:expr, $blend:expr) => {
+                if !$instances.is_empty() {
+                    let instance_bytes: &[u8] = unsafe {
+                        std::slice::from_raw_parts(
+                            $instances.as_ptr() as *const u8,
+                            $instances.len() * std::mem::size_of_val(&$instances[0]),
+                        )
+                    };
+                    wgpu_dev.draw_instanced(
+                        $shader,
+                        $config,
+                        $blend,
+                        crate::device::WgpuDepthState::None,
+                        target_view,
+                        target_w,
+                        target_h,
+                        &$textures,
+                        instance_bytes,
+                        $instances.len() as u32,
+                        false,
+                        None,
+                        None, // no depth
+                    );
+                    *batches_drawn += 1;
+                }
+            };
+        }
+
+        // Shorthand: draw with no blend (opaque cache writes).
+        macro_rules! draw_cs {
+            ($shader:expr, $config:expr, $instances:expr, $textures:expr) => {
+                draw_cs_blend!($shader, $config, $instances, $textures, WgpuBlendMode::None);
+            };
+        }
+
+        // Borders: premultiplied alpha blend (solid, then complex segments).
+        draw_cs_blend!("cs_border_solid", "", target.border_segments_solid,
+            base_textures, WgpuBlendMode::PremultipliedAlpha);
+        draw_cs_blend!("cs_border_segment", "", target.border_segments_complex,
+            base_textures, WgpuBlendMode::PremultipliedAlpha);
+
+        // Line decorations: premultiplied alpha blend.
+        draw_cs_blend!("cs_line_decoration", "", target.line_decorations,
+            base_textures, WgpuBlendMode::PremultipliedAlpha);
+
+        // Gradients: no blend (opaque cache writes).
+        draw_cs!("cs_fast_linear_gradient", "", target.fast_linear_gradients, base_textures);
+        draw_cs!("cs_linear_gradient", "DITHERING", target.linear_gradients, base_textures);
+        draw_cs!("cs_radial_gradient", "DITHERING", target.radial_gradients, base_textures);
+        draw_cs!("cs_conic_gradient", "DITHERING", target.conic_gradients, base_textures);
+
+        // Blurs: iterate per texture source.
+        for (texture_source, blurs) in target.vertical_blurs.iter()
+            .chain(target.horizontal_blurs.iter())
+        {
+            if blurs.is_empty() {
+                continue;
+            }
+            let color0_view = match *texture_source {
+                TextureSource::TextureCache(id, _) => {
+                    wgpu_texture_cache.get(&id).map(|t| t.create_view())
+                }
+                _ => None,
+            };
+            let textures = TextureBindings {
+                color0: color0_view.as_ref(),
+                gpu_cache: gpu_cache_view,
+                ..Default::default()
+            };
+            let instance_bytes: &[u8] = unsafe {
+                std::slice::from_raw_parts(
+                    blurs.as_ptr() as *const u8,
+                    blurs.len()
+                        * std::mem::size_of::<crate::gpu_types::BlurInstance>(),
+                )
+            };
+            wgpu_dev.draw_instanced(
+                "cs_blur",
+                "COLOR_TARGET",
+                WgpuBlendMode::None, // blur writes opaque to cache
+                crate::device::WgpuDepthState::None,
+                target_view,
+                target_w,
+                target_h,
+                &textures,
+                instance_bytes,
+                blurs.len() as u32,
+                false,
+                None,
+                None, // no depth
+            );
+            *batches_drawn += 1;
+        }
+
+        // Scaling: iterate per texture source.
+        for (texture_source, scalings) in target.scalings.iter() {
+            if scalings.is_empty() {
+                continue;
+            }
+            let color0_view = match *texture_source {
+                TextureSource::TextureCache(id, _) => {
+                    wgpu_texture_cache.get(&id).map(|t| t.create_view())
+                }
+                _ => None,
+            };
+            let textures = TextureBindings {
+                color0: color0_view.as_ref(),
+                gpu_cache: gpu_cache_view,
+                ..Default::default()
+            };
+            let instance_bytes: &[u8] = unsafe {
+                std::slice::from_raw_parts(
+                    scalings.as_ptr() as *const u8,
+                    scalings.len()
+                        * std::mem::size_of::<crate::gpu_types::ScalingInstance>(),
+                )
+            };
+            wgpu_dev.draw_instanced(
+                "cs_scale",
+                "TEXTURE_2D",
+                WgpuBlendMode::None, // scaling writes opaque to cache
+                crate::device::WgpuDepthState::None,
+                target_view,
+                target_w,
+                target_h,
+                &textures,
+                instance_bytes,
+                scalings.len() as u32,
+                false,
+                None,
+                None, // no depth
+            );
+            *batches_drawn += 1;
+        }
     }
 
     /// Resize the wgpu surface when the window size changes.

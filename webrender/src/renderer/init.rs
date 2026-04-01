@@ -834,6 +834,8 @@ fn create_webrender_instance_with_device(
         wgpu_device,
         #[cfg(feature = "wgpu_backend")]
         wgpu_texture_cache: FastHashMap::default(),
+        #[cfg(feature = "wgpu_backend")]
+        wgpu_gpu_cache: super::WgpuGpuCacheState::new(),
     };
 
     // We initially set the flags to default and then now call set_debug_flags
@@ -1248,6 +1250,7 @@ pub fn create_webrender_instance_wgpu(
         debugger: Debugger::new(),
         wgpu_device: Some(wgpu_device),
         wgpu_texture_cache: FastHashMap::default(),
+        wgpu_gpu_cache: super::WgpuGpuCacheState::new(),
     };
 
     renderer.set_debug_flags(debug_flags);

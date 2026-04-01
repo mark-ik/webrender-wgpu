@@ -22,8 +22,8 @@ use crate::shader_source::WGSL_SHADERS;
 pub struct WgpuTexture {
     texture: wgpu::Texture,
     format: wgpu::TextureFormat,
-    width: u32,
-    height: u32,
+    pub width: u32,
+    pub height: u32,
 }
 
 impl WgpuTexture {
@@ -43,13 +43,188 @@ pub struct WgpuProgram {
     pipeline: wgpu::RenderPipeline,
 }
 
+/// Blend mode key for wgpu pipeline cache.
+///
+/// This is a simplified version of the WebRender `BlendMode` enum, used as a
+/// pipeline cache key. Each variant maps to a specific `wgpu::BlendState`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WgpuBlendMode {
+    /// Blending disabled — writes RGB directly.
+    None,
+    /// Standard alpha: src*alpha + dst*(1-alpha).
+    Alpha,
+    /// Pre-multiplied alpha: src + dst*(1-src_alpha).
+    PremultipliedAlpha,
+    /// Pre-multiplied dest-out: dst*(1-src_alpha).
+    PremultipliedDestOut,
+    /// Screen: src + dst*(1-src_color) for color, premultiplied alpha for alpha.
+    Screen,
+    /// Exclusion: src*(1-dst) + dst*(1-src) for color, premultiplied alpha for alpha.
+    Exclusion,
+    /// Plus-lighter: src + dst (clamped).
+    PlusLighter,
+    /// Multiplicative clip mask: dst * src (for accumulating secondary clip masks).
+    MultiplyClipMask,
+}
+
+impl WgpuBlendMode {
+    /// Convert to the corresponding `wgpu::BlendState`.
+    fn to_wgpu_blend_state(self) -> Option<wgpu::BlendState> {
+        use wgpu::BlendComponent;
+        use wgpu::BlendFactor::*;
+        use wgpu::BlendOperation::Add;
+
+        match self {
+            WgpuBlendMode::None => None,
+            WgpuBlendMode::Alpha => Some(wgpu::BlendState {
+                color: BlendComponent {
+                    src_factor: SrcAlpha,
+                    dst_factor: OneMinusSrcAlpha,
+                    operation: Add,
+                },
+                alpha: BlendComponent {
+                    src_factor: One,
+                    dst_factor: OneMinusSrcAlpha,
+                    operation: Add,
+                },
+            }),
+            WgpuBlendMode::PremultipliedAlpha => {
+                Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING)
+            }
+            WgpuBlendMode::PremultipliedDestOut => Some(wgpu::BlendState {
+                color: BlendComponent {
+                    src_factor: Zero,
+                    dst_factor: OneMinusSrcAlpha,
+                    operation: Add,
+                },
+                alpha: BlendComponent {
+                    src_factor: Zero,
+                    dst_factor: OneMinusSrcAlpha,
+                    operation: Add,
+                },
+            }),
+            WgpuBlendMode::Screen => Some(wgpu::BlendState {
+                color: BlendComponent {
+                    src_factor: One,
+                    dst_factor: OneMinusSrc,
+                    operation: Add,
+                },
+                alpha: BlendComponent {
+                    src_factor: One,
+                    dst_factor: OneMinusSrcAlpha,
+                    operation: Add,
+                },
+            }),
+            WgpuBlendMode::Exclusion => Some(wgpu::BlendState {
+                color: BlendComponent {
+                    src_factor: OneMinusDst,
+                    dst_factor: OneMinusSrc,
+                    operation: Add,
+                },
+                alpha: BlendComponent {
+                    src_factor: One,
+                    dst_factor: OneMinusSrcAlpha,
+                    operation: Add,
+                },
+            }),
+            WgpuBlendMode::PlusLighter => Some(wgpu::BlendState {
+                color: BlendComponent {
+                    src_factor: One,
+                    dst_factor: One,
+                    operation: Add,
+                },
+                alpha: BlendComponent {
+                    src_factor: One,
+                    dst_factor: One,
+                    operation: Add,
+                },
+            }),
+            WgpuBlendMode::MultiplyClipMask => Some(wgpu::BlendState {
+                color: BlendComponent {
+                    src_factor: Zero,
+                    dst_factor: Src,
+                    operation: Add,
+                },
+                alpha: BlendComponent {
+                    src_factor: Zero,
+                    dst_factor: SrcAlpha,
+                    operation: Add,
+                },
+            }),
+        }
+    }
+}
+
+/// Depth testing mode for wgpu pipeline cache.
+///
+/// In wgpu, depth/stencil state is baked into the pipeline at creation time.
+/// This enum is part of the pipeline cache key alongside blend mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WgpuDepthState {
+    /// No depth testing or writing.
+    None,
+    /// Depth test (LessEqual) + depth write — for opaque batches drawn front-to-back.
+    WriteAndTest,
+    /// Depth test (LessEqual) + no depth write — for alpha batches behind opaque geometry.
+    TestOnly,
+}
+
+impl WgpuDepthState {
+    /// Convert to the corresponding `wgpu::DepthStencilState`.
+    fn to_wgpu_depth_stencil(self) -> Option<wgpu::DepthStencilState> {
+        match self {
+            WgpuDepthState::None => None,
+            WgpuDepthState::WriteAndTest => Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            WgpuDepthState::TestOnly => Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+        }
+    }
+}
+
+/// Cached shader modules and vertex layout info for a shader variant.
+struct ShaderEntry {
+    vs_module: wgpu::ShaderModule,
+    fs_module: wgpu::ShaderModule,
+    vertex_layouts: ShaderVertexLayouts,
+}
+
+/// Pre-computed vertex layout data for a shader variant.
+enum ShaderVertexLayouts {
+    /// Single per-vertex buffer (debug_color, debug_font, cs_* fallback).
+    SingleBuffer {
+        attrs: Vec<wgpu::VertexAttribute>,
+        stride: u64,
+    },
+    /// Two buffers: unit quad vertex + instance data (brush_*, ps_text_run, composite, quad).
+    Instanced {
+        vertex_attrs: Vec<wgpu::VertexAttribute>,
+        vertex_stride: u64,
+        instance_attrs: Vec<wgpu::VertexAttribute>,
+        instance_stride: u64,
+    },
+}
+
 pub struct WgpuDevice {
     device: wgpu::Device,
     queue: wgpu::Queue,
     #[allow(dead_code)]
     features: wgpu::Features,
     frame_id: GpuFrameId,
-    pipelines: HashMap<(&'static str, &'static str), WgpuProgram>,
+    /// Compiled shader modules + vertex layout info, keyed by (name, config).
+    shaders: HashMap<(&'static str, &'static str), ShaderEntry>,
+    /// Render pipelines, keyed by (name, config, blend_mode, depth_state).
+    pipelines: HashMap<(&'static str, &'static str, WgpuBlendMode, WgpuDepthState), WgpuProgram>,
     #[allow(dead_code)]
     pipeline_layout: wgpu::PipelineLayout,
     bind_group_layout_0: wgpu::BindGroupLayout,
@@ -57,9 +232,46 @@ pub struct WgpuDevice {
     global_sampler: wgpu::Sampler,
     dummy_texture_f32: wgpu::TextureView,
     dummy_texture_i32: wgpu::TextureView,
+    /// Maximum depth IDs for orthographic z mapping (matches scene config).
+    max_depth_ids: i32,
+    /// Pooled depth textures keyed by (width, height).
+    depth_textures: HashMap<(u32, u32), wgpu::Texture>,
     /// Window surface for presentation. None in headless mode.
     surface: Option<wgpu::Surface<'static>>,
     surface_config: Option<wgpu::SurfaceConfiguration>,
+}
+
+/// Texture bindings for a general-purpose draw call.
+///
+/// Each field corresponds to a fixed binding slot in the WGSL shader binding
+/// table (see `FIXED_BINDINGS` in wgsl.rs).  `None` means "use the dummy
+/// texture for that slot".
+#[derive(Default)]
+pub struct TextureBindings<'a> {
+    /// binding 0: sColor0
+    pub color0: Option<&'a wgpu::TextureView>,
+    /// binding 1: sColor1
+    pub color1: Option<&'a wgpu::TextureView>,
+    /// binding 2: sColor2
+    pub color2: Option<&'a wgpu::TextureView>,
+    /// binding 3: sGpuCache
+    pub gpu_cache: Option<&'a wgpu::TextureView>,
+    /// binding 4: sTransformPalette
+    pub transform_palette: Option<&'a wgpu::TextureView>,
+    /// binding 5: sRenderTasks
+    pub render_tasks: Option<&'a wgpu::TextureView>,
+    /// binding 6: sDither
+    pub dither: Option<&'a wgpu::TextureView>,
+    /// binding 7: sPrimitiveHeadersF
+    pub prim_headers_f: Option<&'a wgpu::TextureView>,
+    /// binding 8: sPrimitiveHeadersI (sint)
+    pub prim_headers_i: Option<&'a wgpu::TextureView>,
+    /// binding 9: sClipMask
+    pub clip_mask: Option<&'a wgpu::TextureView>,
+    /// binding 10: sGpuBufferF
+    pub gpu_buffer_f: Option<&'a wgpu::TextureView>,
+    /// binding 11: sGpuBufferI (sint)
+    pub gpu_buffer_i: Option<&'a wgpu::TextureView>,
 }
 
 impl WgpuDevice {
@@ -104,13 +316,14 @@ impl WgpuDevice {
             create_dummy_texture(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         let dummy_texture_i32 =
             create_dummy_texture(&device, &queue, wgpu::TextureFormat::Rgba32Sint);
-        let pipelines = create_all_pipelines(&device, &pipeline_layout);
+        let (shaders, pipelines) = create_all_pipelines(&device, &pipeline_layout);
 
         Some(WgpuDevice {
             device,
             queue,
             features: required_features,
             frame_id: GpuFrameId::new(0),
+            shaders,
             pipelines,
             pipeline_layout,
             bind_group_layout_0,
@@ -118,6 +331,8 @@ impl WgpuDevice {
             global_sampler,
             dummy_texture_f32,
             dummy_texture_i32,
+            max_depth_ids: 1 << 22,
+            depth_textures: HashMap::new(),
             surface: None,
             surface_config: None,
         })
@@ -192,13 +407,14 @@ impl WgpuDevice {
             create_dummy_texture(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         let dummy_texture_i32 =
             create_dummy_texture(&device, &queue, wgpu::TextureFormat::Rgba32Sint);
-        let pipelines = create_all_pipelines(&device, &pipeline_layout);
+        let (shaders, pipelines) = create_all_pipelines(&device, &pipeline_layout);
 
         Some(WgpuDevice {
             device,
             queue,
             features: required_features,
             frame_id: GpuFrameId::new(0),
+            shaders,
             pipelines,
             pipeline_layout,
             bind_group_layout_0,
@@ -206,6 +422,8 @@ impl WgpuDevice {
             global_sampler,
             dummy_texture_f32,
             dummy_texture_i32,
+            max_depth_ids: 1 << 22,
+            depth_textures: HashMap::new(),
             surface: Some(surface),
             surface_config: Some(surface_config),
         })
@@ -243,6 +461,26 @@ impl WgpuDevice {
                 surface.configure(&self.device, config);
             }
         }
+    }
+
+    /// Acquire (or create) a depth texture for the given render target dimensions.
+    /// Returns a view into the depth texture suitable for render pass attachment.
+    pub fn acquire_depth_view(&mut self, width: u32, height: u32) -> wgpu::TextureView {
+        let key = (width, height);
+        if !self.depth_textures.contains_key(&key) {
+            let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("depth target"),
+                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Depth32Float,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            self.depth_textures.insert(key, tex);
+        }
+        self.depth_textures[&key].create_view(&wgpu::TextureViewDescriptor::default())
     }
 
     pub fn begin_frame(&mut self) -> GpuFrameId {
@@ -473,6 +711,126 @@ impl WgpuDevice {
         drop(texture);
     }
 
+    /// Return a reference to the underlying wgpu device.
+    pub fn wgpu_device(&self) -> &wgpu::Device {
+        &self.device
+    }
+
+    /// Return a reference to the wgpu queue.
+    pub fn wgpu_queue(&self) -> &wgpu::Queue {
+        &self.queue
+    }
+
+    /// Create a data texture from raw bytes and upload the data.
+    ///
+    /// WebRender uses "data textures" (RGBA32F, RGBA16F, RGBA32Sint, etc.)
+    /// to pass per-frame data to shaders: GPU cache, transform palette,
+    /// render tasks, primitive headers, and GPU buffers. This method creates
+    /// a texture of the given wgpu format and uploads the data in one call.
+    ///
+    /// The texture is created with TEXTURE_BINDING usage so it can be sampled
+    /// by shaders, and COPY_DST so it can be updated.
+    pub fn create_data_texture(
+        &self,
+        label: &str,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+        data: &[u8],
+    ) -> WgpuTexture {
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width: width.max(1),
+                height: height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        let bpp = wgpu_format_bytes_per_pixel(format);
+        let w = width.max(1);
+        let h = height.max(1);
+        let expected = (w * h * bpp) as usize;
+
+        if !data.is_empty() && data.len() >= expected {
+            self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &data[..expected],
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(w * bpp),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+
+        WgpuTexture {
+            texture,
+            format,
+            width: w,
+            height: h,
+        }
+    }
+
+    /// Update an existing data texture with new data, reallocating if the
+    /// dimensions have changed.
+    pub fn update_data_texture(
+        &self,
+        existing: &mut WgpuTexture,
+        width: u32,
+        height: u32,
+        data: &[u8],
+    ) {
+        let w = width.max(1);
+        let h = height.max(1);
+        if existing.width != w || existing.height != h {
+            // Reallocate — dimensions changed.
+            let label = "data texture (resized)";
+            *existing = self.create_data_texture(label, w, h, existing.format, data);
+            return;
+        }
+
+        let bpp = wgpu_format_bytes_per_pixel(existing.format);
+        let expected = (w * h * bpp) as usize;
+        if !data.is_empty() && data.len() >= expected {
+            self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &existing.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &data[..expected],
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(w * bpp),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+    }
+
     fn create_uniform_buffer(&self, label: &str, data: &[u8]) -> wgpu::Buffer {
         use wgpu::util::DeviceExt;
         self.device
@@ -637,12 +995,16 @@ impl WgpuDevice {
         self.pipelines.len()
     }
 
+    pub fn shader_count(&self) -> usize {
+        self.shaders.len()
+    }
+
     pub fn render_debug_color_quad(&self, target: &WgpuTexture, color: [u8; 4]) {
         let target_view = target
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let projection = ortho(target.width as f32, target.height as f32);
+        let projection = ortho(target.width as f32, target.height as f32, self.max_depth_ids as f32);
         let mut transform_data = Vec::with_capacity(64);
         for f in &projection {
             transform_data.extend_from_slice(&f.to_le_bytes());
@@ -699,7 +1061,7 @@ impl WgpuDevice {
         };
         let ib = self.create_index_buffer("debug_color indices", idx_bytes);
 
-        let pipeline = &self.pipelines[&("debug_color", "")].pipeline;
+        let pipeline = &self.pipelines[&("debug_color", "", WgpuBlendMode::PremultipliedAlpha, WgpuDepthState::None)].pipeline;
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -744,7 +1106,7 @@ impl WgpuDevice {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let projection = ortho(target.width as f32, target.height as f32);
+        let projection = ortho(target.width as f32, target.height as f32, self.max_depth_ids as f32);
         let mut transform_data = Vec::with_capacity(64);
         for f in &projection {
             transform_data.extend_from_slice(&f.to_le_bytes());
@@ -807,7 +1169,7 @@ impl WgpuDevice {
         };
         let ib = self.create_index_buffer("debug_font indices", idx_bytes);
 
-        let pipeline = &self.pipelines[&("debug_font", "")].pipeline;
+        let pipeline = &self.pipelines[&("debug_font", "", WgpuBlendMode::PremultipliedAlpha, WgpuDepthState::None)].pipeline;
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -910,14 +1272,14 @@ impl WgpuDevice {
         config: &str,
         clear: bool,
     ) {
-        let pipeline_key = ("composite", config);
+        let pipeline_key = ("composite", config, WgpuBlendMode::PremultipliedAlpha, WgpuDepthState::None);
         let program = self
             .pipelines
             .get(&pipeline_key)
             .unwrap_or_else(|| panic!("composite pipeline not found for config {:?}", config));
 
         // Transform: orthographic projection matching the target dimensions
-        let projection = ortho(target_width as f32, target_height as f32);
+        let projection = ortho(target_width as f32, target_height as f32, self.max_depth_ids as f32);
         let mut transform_data = Vec::with_capacity(64);
         for f in &projection {
             transform_data.extend_from_slice(&f.to_le_bytes());
@@ -1008,6 +1370,235 @@ impl WgpuDevice {
         }
         self.queue.submit([encoder.finish()]);
     }
+
+    // ── General-purpose instanced draw ──────────────────────────────────
+    //
+    // These methods extend the composite-only rendering to support arbitrary
+    // WebRender shader pipelines (alpha batches, picture cache targets, etc.)
+    // by allowing callers to specify per-binding texture views.
+
+    /// Create bind groups with caller-specified texture views at each slot.
+    pub fn create_bind_groups_full(
+        &self,
+        textures: &TextureBindings<'_>,
+        transform_buf: &wgpu::Buffer,
+        tex_size_buf: &wgpu::Buffer,
+        mali_buf: &wgpu::Buffer,
+    ) -> (wgpu::BindGroup, wgpu::BindGroup) {
+        let df = &self.dummy_texture_f32;
+        let di = &self.dummy_texture_i32;
+
+        let group_0 = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("WR group 0 (full)"),
+            layout: &self.bind_group_layout_0,
+            entries: &[
+                tex_entry(0,  textures.color0.unwrap_or(df)),
+                tex_entry(1,  textures.color1.unwrap_or(df)),
+                tex_entry(2,  textures.color2.unwrap_or(df)),
+                tex_entry(3,  textures.gpu_cache.unwrap_or(df)),
+                tex_entry(4,  textures.transform_palette.unwrap_or(df)),
+                tex_entry(5,  textures.render_tasks.unwrap_or(df)),
+                tex_entry(6,  textures.dither.unwrap_or(df)),
+                tex_entry(7,  textures.prim_headers_f.unwrap_or(df)),
+                tex_entry(8,  textures.prim_headers_i.unwrap_or(di)),
+                tex_entry(9,  textures.clip_mask.unwrap_or(df)),
+                tex_entry(10, textures.gpu_buffer_f.unwrap_or(df)),
+                tex_entry(11, textures.gpu_buffer_i.unwrap_or(di)),
+                wgpu::BindGroupEntry {
+                    binding: 12,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: transform_buf,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(64),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 13,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: tex_size_buf,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(8),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 14,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: mali_buf,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(4),
+                    }),
+                },
+            ],
+        });
+
+        let group_1 = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("WR group 1 (sampler)"),
+            layout: &self.bind_group_layout_1,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Sampler(&self.global_sampler),
+            }],
+        });
+
+        (group_0, group_1)
+    }
+
+    /// Draw instanced quads for a given shader pipeline on a render target.
+    ///
+    /// This is the general-purpose wgpu draw path for WebRender batches.
+    /// The caller supplies:
+    /// - `shader_name` + `config`: pipeline key (e.g. "brush_solid", "ALPHA_PASS")
+    /// - `target_view` / dimensions: where to render
+    /// - `textures`: per-binding texture views (data textures, color sources)
+    /// - `instance_bytes`: raw instance data, same layout as the GL path
+    /// - `instance_count`: number of instances
+    /// - `clear`: whether to clear the color (and depth, if attached) target before drawing
+    /// - `depth_state`: depth testing mode for this draw
+    /// - `depth_view`: depth texture view (required when depth_state is not None)
+    pub fn draw_instanced(
+        &mut self,
+        shader_name: &'static str,
+        config: &'static str,
+        blend_mode: WgpuBlendMode,
+        depth_state: WgpuDepthState,
+        target_view: &wgpu::TextureView,
+        target_width: u32,
+        target_height: u32,
+        textures: &TextureBindings<'_>,
+        instance_bytes: &[u8],
+        instance_count: u32,
+        clear: bool,
+        scissor_rect: Option<(u32, u32, u32, u32)>,
+        depth_view: Option<&wgpu::TextureView>,
+    ) {
+        // Lazily create a pipeline for this (shader, config, blend_mode, depth_state) if needed.
+        let pipeline_key = (shader_name, config, blend_mode, depth_state);
+        if !self.pipelines.contains_key(&pipeline_key) {
+            let shader = match self.shaders.get(&(shader_name, config)) {
+                Some(s) => s,
+                None => {
+                    log::warn!(
+                        "wgpu: shader not found for ({:?}, {:?}), skipping draw",
+                        shader_name, config,
+                    );
+                    return;
+                }
+            };
+            let pipeline = create_pipeline_for_blend(
+                &self.device,
+                &self.pipeline_layout,
+                &shader.vs_module,
+                &shader.fs_module,
+                &shader.vertex_layouts,
+                shader_name,
+                config,
+                blend_mode,
+                depth_state,
+            );
+            self.pipelines.insert(pipeline_key, WgpuProgram { pipeline });
+        }
+
+        let program = self.pipelines.get(&pipeline_key).unwrap();
+
+        let projection = ortho(target_width as f32, target_height as f32, self.max_depth_ids as f32);
+        let mut transform_data = Vec::with_capacity(64);
+        for f in &projection {
+            transform_data.extend_from_slice(&f.to_le_bytes());
+        }
+        let transform_buf = self.create_uniform_buffer("draw transform", &transform_data);
+
+        let mut tex_size_data = Vec::with_capacity(8);
+        tex_size_data.extend_from_slice(&(target_width as f32).to_le_bytes());
+        tex_size_data.extend_from_slice(&(target_height as f32).to_le_bytes());
+        let tex_size_buf = self.create_uniform_buffer("draw texture size", &tex_size_data);
+        let mali_buf =
+            self.create_uniform_buffer("draw mali workaround", &0u32.to_le_bytes());
+
+        let (bg0, bg1) = self.create_bind_groups_full(
+            textures,
+            &transform_buf,
+            &tex_size_buf,
+            &mali_buf,
+        );
+
+        // Unit quad vertex buffer (Unorm8x2, 4-byte stride)
+        let quad_verts: [[u8; 4]; 4] = [
+            [0, 0, 0, 0],
+            [0xFF, 0, 0, 0],
+            [0, 0xFF, 0, 0],
+            [0xFF, 0xFF, 0, 0],
+        ];
+        let quad_bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(
+                quad_verts.as_ptr() as *const u8,
+                std::mem::size_of_val(&quad_verts),
+            )
+        };
+        let vb = self.create_vertex_buffer("draw quad verts", quad_bytes);
+
+        let indices: [u16; 6] = [0, 1, 2, 2, 1, 3];
+        let idx_bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(
+                indices.as_ptr() as *const u8,
+                std::mem::size_of_val(&indices),
+            )
+        };
+        let ib = self.create_index_buffer("draw indices", idx_bytes);
+
+        let instance_buf = self.create_vertex_buffer("draw instances", instance_bytes);
+
+        let color_load = if clear {
+            wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+        } else {
+            wgpu::LoadOp::Load
+        };
+
+        let depth_attachment = if depth_state != WgpuDepthState::None {
+            depth_view.map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                view: dv,
+                depth_ops: Some(wgpu::Operations {
+                    load: if clear {
+                        wgpu::LoadOp::Clear(1.0)
+                    } else {
+                        wgpu::LoadOp::Load
+                    },
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            })
+        } else {
+            None
+        };
+
+        let mut encoder = self.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor { label: Some("draw_instanced") },
+        );
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("draw_instanced pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: color_load, store: wgpu::StoreOp::Store },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: depth_attachment,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&program.pipeline);
+            if let Some((x, y, w, h)) = scissor_rect {
+                pass.set_scissor_rect(x, y, w, h);
+            }
+            pass.set_bind_group(0, &bg0, &[]);
+            pass.set_bind_group(1, &bg1, &[]);
+            pass.set_vertex_buffer(0, vb.slice(..));
+            pass.set_vertex_buffer(1, instance_buf.slice(..));
+            pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint16);
+            pass.draw_indexed(0..6, 0, 0..instance_count);
+        }
+        self.queue.submit([encoder.finish()]);
+    }
 }
 
 impl GpuDevice for WgpuDevice {
@@ -1036,7 +1627,16 @@ impl GpuDevice for WgpuDevice {
     }
 }
 
-fn ortho(w: f32, h: f32) -> [f32; 16] {
+/// Build an orthographic projection matrix for wgpu (NDC z range [0, 1]).
+///
+/// `max_depth` controls the z mapping:
+/// - z=0 → depth=1.0 (back), z=max_depth → depth=0.0 (front)
+/// - With LessEqual depth test, higher z values (closer) win.
+/// - For draws without depth testing, the z value is still mapped into [0,1]
+///   to avoid clipping. z=0 maps to 1.0 which is valid.
+fn ortho(w: f32, h: f32, max_depth: f32) -> [f32; 16] {
+    let z_scale = if max_depth > 0.0 { -1.0 / max_depth } else { 0.0 };
+    let z_offset = if max_depth > 0.0 { 1.0 } else { 0.0 };
     [
         2.0 / w,
         0.0,
@@ -1048,11 +1648,11 @@ fn ortho(w: f32, h: f32) -> [f32; 16] {
         0.0,
         0.0,
         0.0,
-        -1.0,
+        z_scale,
         0.0,
         -1.0,
         1.0,
-        0.0,
+        z_offset,
         1.0,
     ]
 }
@@ -1071,6 +1671,7 @@ fn create_resource_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLa
     };
 
     let vis = ShaderStages::VERTEX_FRAGMENT;
+    // Color/dither/clip textures: sampled with filtering (textureSample).
     let float_tex = |binding: u32| BindGroupLayoutEntry {
         binding,
         visibility: vis,
@@ -1078,6 +1679,19 @@ fn create_resource_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLa
             multisampled: false,
             view_dimension: TextureViewDimension::D2,
             sample_type: TextureSampleType::Float { filterable: true },
+        },
+        count: None,
+    };
+    // Data textures (GPU cache, transforms, render tasks, prim headers,
+    // GPU buffers): accessed with textureLoad, not filtered. Must be
+    // non-filterable to accept Rgba32Float views.
+    let unfilt_tex = |binding: u32| BindGroupLayoutEntry {
+        binding,
+        visibility: vis,
+        ty: BindingType::Texture {
+            multisampled: false,
+            view_dimension: TextureViewDimension::D2,
+            sample_type: TextureSampleType::Float { filterable: false },
         },
         count: None,
     };
@@ -1105,18 +1719,18 @@ fn create_resource_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLa
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("WR resources (group 0)"),
         entries: &[
-            float_tex(0),
-            float_tex(1),
-            float_tex(2),
-            float_tex(3),
-            float_tex(4),
-            float_tex(5),
-            float_tex(6),
-            float_tex(7),
-            sint_tex(8),
-            float_tex(9),
-            float_tex(10),
-            sint_tex(11),
+            float_tex(0),   // sColor0 — filterable (textureSample)
+            float_tex(1),   // sColor1 — filterable (textureSample)
+            float_tex(2),   // sColor2 — filterable (textureSample)
+            unfilt_tex(3),  // sGpuCache — Rgba32Float, textureLoad only
+            unfilt_tex(4),  // sTransformPalette — Rgba32Float, textureLoad only
+            unfilt_tex(5),  // sRenderTasks — Rgba32Float, textureLoad only
+            float_tex(6),   // sDither — Rgba8, textureSample
+            unfilt_tex(7),  // sPrimitiveHeadersF — Rgba32Float, textureLoad only
+            sint_tex(8),    // sPrimitiveHeadersI — Rgba32Sint, textureLoad only
+            float_tex(9),   // sClipMask — R8/Rgba8, textureLoad only (but filterable-compatible)
+            unfilt_tex(10), // sGpuBufferF — Rgba32Float, textureLoad only
+            sint_tex(11),   // sGpuBufferI — Rgba32Sint, textureLoad only
             uniform_buf(12, 64),
             uniform_buf(13, 8),
             uniform_buf(14, 4),
@@ -1202,14 +1816,14 @@ fn vertex_format_from_wgsl_type(ty: &str) -> wgpu::VertexFormat {
 
 fn format_size(fmt: wgpu::VertexFormat) -> u64 {
     match fmt {
-        wgpu::VertexFormat::Float32 | wgpu::VertexFormat::Sint32 => 4,
-        wgpu::VertexFormat::Float32x2 | wgpu::VertexFormat::Sint32x2 => 8,
+        wgpu::VertexFormat::Float32 | wgpu::VertexFormat::Sint32 | wgpu::VertexFormat::Uint32 => 4,
+        wgpu::VertexFormat::Float32x2 | wgpu::VertexFormat::Sint32x2 | wgpu::VertexFormat::Uint32x2 => 8,
         wgpu::VertexFormat::Float32x3 | wgpu::VertexFormat::Sint32x3 => 12,
-        wgpu::VertexFormat::Float32x4 | wgpu::VertexFormat::Sint32x4 => 16,
+        wgpu::VertexFormat::Float32x4 | wgpu::VertexFormat::Sint32x4 | wgpu::VertexFormat::Uint32x4 => 16,
         wgpu::VertexFormat::Unorm8x2 => 2,
         wgpu::VertexFormat::Unorm8x4 => 4,
-        wgpu::VertexFormat::Unorm16x2 | wgpu::VertexFormat::Uint16x2 => 4,
-        wgpu::VertexFormat::Unorm16x4 | wgpu::VertexFormat::Uint16x4 => 8,
+        wgpu::VertexFormat::Unorm16x2 | wgpu::VertexFormat::Uint16x2 | wgpu::VertexFormat::Sint16x2 => 4,
+        wgpu::VertexFormat::Unorm16x4 | wgpu::VertexFormat::Uint16x4 | wgpu::VertexFormat::Sint16x4 => 8,
         _ => unreachable!("format_size: format not in WebRender's set: {:?}", fmt),
     }
 }
@@ -1364,9 +1978,151 @@ const COMPOSITE_INSTANCE_LAYOUT: &[(&str, wgpu::VertexFormat)] = &[
 ];
 
 /// Instance struct layout for `PrimitiveInstanceData` (gpu_types.rs).
-#[allow(dead_code)]
 const PRIMITIVE_INSTANCE_LAYOUT: &[(&str, wgpu::VertexFormat)] = &[
     ("aData", wgpu::VertexFormat::Sint32x4),
+];
+
+/// Instance layout for `ps_quad_mask` (PrimitiveInstanceData + ClipData).
+/// Total stride: 32 bytes.
+const MASK_INSTANCE_LAYOUT: &[(&str, wgpu::VertexFormat)] = &[
+    ("aData",     wgpu::VertexFormat::Sint32x4),   // 16
+    ("aClipData", wgpu::VertexFormat::Sint32x4),   // 16
+];
+
+/// Instance layout for `ClipMaskInstanceRect` (gpu_types.rs).
+/// Used by `cs_clip_rectangle` (both default and FAST_PATH variants).
+/// Total stride: 200 bytes.
+const CLIP_RECT_INSTANCE_LAYOUT: &[(&str, wgpu::VertexFormat)] = &[
+    // ClipMaskInstanceCommon (44 bytes)
+    ("aClipDeviceArea",   wgpu::VertexFormat::Float32x4),   // 16
+    ("aClipOrigins",      wgpu::VertexFormat::Float32x4),   // 16
+    ("aDevicePixelScale", wgpu::VertexFormat::Float32),      // 4
+    ("aTransformIds",     wgpu::VertexFormat::Sint32x2),     // 8
+    // ClipMaskInstanceRect specific (156 bytes)
+    ("aClipLocalPos",     wgpu::VertexFormat::Float32x2),   // 8
+    ("aClipLocalRect",    wgpu::VertexFormat::Float32x4),   // 16
+    ("aClipMode",         wgpu::VertexFormat::Float32),      // 4
+    ("aClipRect_TL",      wgpu::VertexFormat::Float32x4),   // 16
+    ("aClipRadii_TL",     wgpu::VertexFormat::Float32x4),   // 16
+    ("aClipRect_TR",      wgpu::VertexFormat::Float32x4),   // 16
+    ("aClipRadii_TR",     wgpu::VertexFormat::Float32x4),   // 16
+    ("aClipRect_BL",      wgpu::VertexFormat::Float32x4),   // 16
+    ("aClipRadii_BL",     wgpu::VertexFormat::Float32x4),   // 16
+    ("aClipRect_BR",      wgpu::VertexFormat::Float32x4),   // 16
+    ("aClipRadii_BR",     wgpu::VertexFormat::Float32x4),   // 16
+];
+
+/// Instance layout for `ClipMaskInstanceBoxShadow` (gpu_types.rs).
+/// Used by `cs_clip_box_shadow`.
+/// Total stride: 84 bytes.
+const CLIP_BOX_SHADOW_INSTANCE_LAYOUT: &[(&str, wgpu::VertexFormat)] = &[
+    // ClipMaskInstanceCommon (44 bytes)
+    ("aClipDeviceArea",         wgpu::VertexFormat::Float32x4),   // 16
+    ("aClipOrigins",            wgpu::VertexFormat::Float32x4),   // 16
+    ("aDevicePixelScale",       wgpu::VertexFormat::Float32),      // 4
+    ("aTransformIds",           wgpu::VertexFormat::Sint32x2),     // 8
+    // ClipMaskInstanceBoxShadow specific (40 bytes)
+    ("aClipDataResourceAddress", wgpu::VertexFormat::Sint16x2),    // 4
+    ("aClipSrcRectSize",        wgpu::VertexFormat::Float32x2),   // 8
+    ("aClipMode",               wgpu::VertexFormat::Sint32),       // 4
+    ("aStretchMode",            wgpu::VertexFormat::Sint32x2),     // 8
+    ("aClipDestRect",           wgpu::VertexFormat::Float32x4),   // 16
+];
+
+/// Instance layout for `BlurInstance` (gpu_types.rs).
+/// Used by `cs_blur` (both COLOR_TARGET and ALPHA_TARGET variants).
+/// Total stride: 28 bytes.
+const BLUR_INSTANCE_LAYOUT: &[(&str, wgpu::VertexFormat)] = &[
+    ("aBlurRenderTaskAddress", wgpu::VertexFormat::Sint32),    // 4
+    ("aBlurSourceTaskAddress", wgpu::VertexFormat::Sint32),    // 4
+    ("aBlurDirection",         wgpu::VertexFormat::Sint32),    // 4
+    ("aBlurEdgeMode",          wgpu::VertexFormat::Sint32),    // 4
+    ("aBlurParams",            wgpu::VertexFormat::Float32x3), // 12
+];
+
+/// Instance layout for `ScalingInstance` (gpu_types.rs).
+/// Used by `cs_scale`.
+/// Total stride: 36 bytes.
+const SCALE_INSTANCE_LAYOUT: &[(&str, wgpu::VertexFormat)] = &[
+    ("aScaleTargetRect", wgpu::VertexFormat::Float32x4), // 16
+    ("aScaleSourceRect", wgpu::VertexFormat::Float32x4), // 16
+    ("aSourceRectType",  wgpu::VertexFormat::Float32),   // 4
+];
+
+/// Instance layout for `BorderInstance` (gpu_types.rs).
+/// Used by `cs_border_solid` and `cs_border_segment`.
+/// Total stride: 108 bytes.
+const BORDER_INSTANCE_LAYOUT: &[(&str, wgpu::VertexFormat)] = &[
+    ("aTaskOrigin",   wgpu::VertexFormat::Float32x2), // 8
+    ("aRect",         wgpu::VertexFormat::Float32x4), // 16
+    ("aColor0_",      wgpu::VertexFormat::Float32x4), // 16
+    ("aColor1_",      wgpu::VertexFormat::Float32x4), // 16
+    ("aFlags",        wgpu::VertexFormat::Sint32),    // 4
+    ("aWidths",       wgpu::VertexFormat::Float32x2), // 8
+    ("aRadii",        wgpu::VertexFormat::Float32x2), // 8
+    ("aClipParams1_", wgpu::VertexFormat::Float32x4), // 16
+    ("aClipParams2_", wgpu::VertexFormat::Float32x4), // 16
+];
+
+/// Instance layout for `LineDecorationJob` (render_target.rs).
+/// Used by `cs_line_decoration`.
+/// Total stride: 36 bytes.
+const LINE_DECORATION_INSTANCE_LAYOUT: &[(&str, wgpu::VertexFormat)] = &[
+    ("aTaskRect",           wgpu::VertexFormat::Float32x4), // 16
+    ("aLocalSize",          wgpu::VertexFormat::Float32x2), // 8
+    ("aWavyLineThickness",  wgpu::VertexFormat::Float32),   // 4
+    ("aStyle",              wgpu::VertexFormat::Sint32),     // 4
+    ("aAxisSelect",         wgpu::VertexFormat::Float32),    // 4
+];
+
+/// Instance layout for `FastLinearGradientInstance`.
+/// Used by `cs_fast_linear_gradient`.
+/// Total stride: 52 bytes.
+const FAST_LINEAR_GRADIENT_INSTANCE_LAYOUT: &[(&str, wgpu::VertexFormat)] = &[
+    ("aTaskRect",   wgpu::VertexFormat::Float32x4), // 16
+    ("aColor0_",    wgpu::VertexFormat::Float32x4), // 16
+    ("aColor1_",    wgpu::VertexFormat::Float32x4), // 16
+    ("aAxisSelect", wgpu::VertexFormat::Float32),   // 4
+];
+
+/// Instance layout for `LinearGradientInstance`.
+/// Used by `cs_linear_gradient`.
+/// Total stride: 48 bytes.
+const LINEAR_GRADIENT_INSTANCE_LAYOUT: &[(&str, wgpu::VertexFormat)] = &[
+    ("aTaskRect",              wgpu::VertexFormat::Float32x4), // 16
+    ("aStartPoint",            wgpu::VertexFormat::Float32x2), // 8
+    ("aEndPoint",              wgpu::VertexFormat::Float32x2), // 8
+    ("aScale",                 wgpu::VertexFormat::Float32x2), // 8
+    ("aExtendMode",            wgpu::VertexFormat::Sint32),    // 4
+    ("aGradientStopsAddress",  wgpu::VertexFormat::Sint32),    // 4
+];
+
+/// Instance layout for `RadialGradientInstance`.
+/// Used by `cs_radial_gradient`.
+/// Total stride: 52 bytes.
+const RADIAL_GRADIENT_INSTANCE_LAYOUT: &[(&str, wgpu::VertexFormat)] = &[
+    ("aTaskRect",              wgpu::VertexFormat::Float32x4), // 16
+    ("aCenter",                wgpu::VertexFormat::Float32x2), // 8
+    ("aScale",                 wgpu::VertexFormat::Float32x2), // 8
+    ("aStartRadius",           wgpu::VertexFormat::Float32),   // 4
+    ("aEndRadius",             wgpu::VertexFormat::Float32),   // 4
+    ("aXYRatio",               wgpu::VertexFormat::Float32),   // 4
+    ("aExtendMode",            wgpu::VertexFormat::Sint32),    // 4
+    ("aGradientStopsAddress",  wgpu::VertexFormat::Sint32),    // 4
+];
+
+/// Instance layout for `ConicGradientInstance`.
+/// Used by `cs_conic_gradient`.
+/// Total stride: 52 bytes.
+const CONIC_GRADIENT_INSTANCE_LAYOUT: &[(&str, wgpu::VertexFormat)] = &[
+    ("aTaskRect",              wgpu::VertexFormat::Float32x4), // 16
+    ("aCenter",                wgpu::VertexFormat::Float32x2), // 8
+    ("aScale",                 wgpu::VertexFormat::Float32x2), // 8
+    ("aStartOffset",           wgpu::VertexFormat::Float32),   // 4
+    ("aEndOffset",             wgpu::VertexFormat::Float32),   // 4
+    ("aAngle",                 wgpu::VertexFormat::Float32),   // 4
+    ("aExtendMode",            wgpu::VertexFormat::Sint32),    // 4
+    ("aGradientStopsAddress",  wgpu::VertexFormat::Sint32),    // 4
 ];
 
 fn build_debug_color_attrs() -> (Vec<wgpu::VertexAttribute>, u64) {
@@ -1411,10 +2167,97 @@ fn align_vertex_stride(stride: u64) -> u64 {
     stride.div_ceil(align) * align
 }
 
+/// Create a render pipeline for a specific blend mode and depth state from cached shader modules.
+fn create_pipeline_for_blend(
+    device: &wgpu::Device,
+    pipeline_layout: &wgpu::PipelineLayout,
+    vs_module: &wgpu::ShaderModule,
+    fs_module: &wgpu::ShaderModule,
+    vertex_layouts: &ShaderVertexLayouts,
+    name: &str,
+    config: &str,
+    blend_mode: WgpuBlendMode,
+    depth_state: WgpuDepthState,
+) -> wgpu::RenderPipeline {
+    let pipeline_label = format!("{}#{}#{:?}#{:?}", name, config, blend_mode, depth_state);
+
+    // Build wgpu vertex buffer layout references from our cached data.
+    let vbl_single;
+    let vbl_instanced;
+    let buffers: &[wgpu::VertexBufferLayout] = match vertex_layouts {
+        ShaderVertexLayouts::SingleBuffer { attrs, stride } => {
+            vbl_single = [wgpu::VertexBufferLayout {
+                array_stride: *stride,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: attrs,
+            }];
+            &vbl_single
+        }
+        ShaderVertexLayouts::Instanced {
+            vertex_attrs,
+            vertex_stride,
+            instance_attrs,
+            instance_stride,
+        } => {
+            vbl_instanced = [
+                wgpu::VertexBufferLayout {
+                    array_stride: *vertex_stride,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: vertex_attrs,
+                },
+                wgpu::VertexBufferLayout {
+                    array_stride: *instance_stride,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: instance_attrs,
+                },
+            ];
+            &vbl_instanced
+        }
+    };
+
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(&pipeline_label),
+        layout: Some(pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: vs_module,
+            entry_point: Some("main"),
+            buffers,
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: fs_module,
+            entry_point: Some("main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Bgra8Unorm,
+                blend: blend_mode.to_wgpu_blend_state(),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        },
+        depth_stencil: depth_state.to_wgpu_depth_stencil(),
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+        cache: None,
+    })
+}
+
 fn create_all_pipelines(
     device: &wgpu::Device,
     pipeline_layout: &wgpu::PipelineLayout,
-) -> HashMap<(&'static str, &'static str), WgpuProgram> {
+) -> (
+    HashMap<(&'static str, &'static str), ShaderEntry>,
+    HashMap<(&'static str, &'static str, WgpuBlendMode, WgpuDepthState), WgpuProgram>,
+) {
+    let mut shaders = HashMap::new();
     let mut pipelines = HashMap::new();
 
     for (&(name, config), source) in WGSL_SHADERS.iter() {
@@ -1431,111 +2274,79 @@ fn create_all_pipelines(
         });
 
         // Determine buffer layout(s) based on shader kind.
-        // - debug_color / debug_font: single per-vertex buffer (no instancing)
-        // - composite: vertex + instance buffer with CompositeInstance layout
-        // - all others: single per-vertex buffer for now (pipeline creates
-        //   successfully; correct instanced layouts will be added as needed)
         let inputs = parse_wgsl_vertex_inputs(source.vert_source);
+        let is_alpha_batch_shader = name.starts_with("brush_")
+            || name.starts_with("ps_text_run")
+            || name.starts_with("ps_split_composite")
+            || name.starts_with("ps_quad_");
         let instance_layout = match name {
             "composite" => Some(COMPOSITE_INSTANCE_LAYOUT),
+            "cs_clip_rectangle" => Some(CLIP_RECT_INSTANCE_LAYOUT),
+            "cs_clip_box_shadow" => Some(CLIP_BOX_SHADOW_INSTANCE_LAYOUT),
+            "cs_blur" => Some(BLUR_INSTANCE_LAYOUT),
+            "cs_scale" => Some(SCALE_INSTANCE_LAYOUT),
+            "cs_border_solid" | "cs_border_segment" => Some(BORDER_INSTANCE_LAYOUT),
+            "cs_line_decoration" => Some(LINE_DECORATION_INSTANCE_LAYOUT),
+            "cs_fast_linear_gradient" => Some(FAST_LINEAR_GRADIENT_INSTANCE_LAYOUT),
+            "cs_linear_gradient" => Some(LINEAR_GRADIENT_INSTANCE_LAYOUT),
+            "cs_radial_gradient" => Some(RADIAL_GRADIENT_INSTANCE_LAYOUT),
+            "cs_conic_gradient" => Some(CONIC_GRADIENT_INSTANCE_LAYOUT),
+            "ps_quad_mask" => Some(MASK_INSTANCE_LAYOUT),
+            _ if is_alpha_batch_shader => Some(PRIMITIVE_INSTANCE_LAYOUT),
             _ => None,
         };
 
-        // Build the buffer layouts — either one or two buffers.
-        let vertex_buf_attrs;
-        let vertex_buf_stride;
-        let instance_buf_attrs;
-        let instance_buf_stride;
-        let vertex_layouts_1;
-        let vertex_layouts_2;
-        let vertex_layouts: &[wgpu::VertexBufferLayout] = match (name, instance_layout) {
+        // Build the cached vertex layout info.
+        let vertex_layouts = match (name, instance_layout) {
             ("debug_color", _) | ("debug_font", _) => {
                 let (attrs, stride) = match name {
                     "debug_color" => build_debug_color_attrs(),
                     "debug_font" => build_debug_font_attrs(),
                     _ => unreachable!(),
                 };
-                vertex_buf_attrs = attrs;
-                vertex_buf_stride = stride;
-                vertex_layouts_1 = [wgpu::VertexBufferLayout {
-                    array_stride: vertex_buf_stride,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &vertex_buf_attrs,
-                }];
-                &vertex_layouts_1
+                ShaderVertexLayouts::SingleBuffer { attrs, stride }
             }
             (_, Some(inst_layout)) => {
                 let (va, vs, ia, is) = build_instanced_layouts(&inputs, inst_layout);
-                vertex_buf_attrs = va;
-                vertex_buf_stride = vs;
-                instance_buf_attrs = ia;
-                instance_buf_stride = is;
-                vertex_layouts_2 = [
-                    wgpu::VertexBufferLayout {
-                        array_stride: vertex_buf_stride,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &vertex_buf_attrs,
-                    },
-                    wgpu::VertexBufferLayout {
-                        array_stride: instance_buf_stride,
-                        step_mode: wgpu::VertexStepMode::Instance,
-                        attributes: &instance_buf_attrs,
-                    },
-                ];
-                &vertex_layouts_2
+                ShaderVertexLayouts::Instanced {
+                    vertex_attrs: va,
+                    vertex_stride: vs,
+                    instance_attrs: ia,
+                    instance_stride: is,
+                }
             }
             _ => {
-                // Fallback: all inputs as a single per-vertex buffer.
                 let (attrs, stride) = build_all_as_vertex_attrs(&inputs);
-                vertex_buf_attrs = attrs;
-                vertex_buf_stride = stride;
-                vertex_layouts_1 = [wgpu::VertexBufferLayout {
-                    array_stride: vertex_buf_stride,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &vertex_buf_attrs,
-                }];
-                &vertex_layouts_1
+                ShaderVertexLayouts::SingleBuffer { attrs, stride }
             }
         };
-        let pipeline_label = format!("{}#{}", name, config);
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some(&pipeline_label),
-            layout: Some(pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &vs_module,
-                entry_point: Some("main"),
-                buffers: &vertex_layouts,
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &fs_module,
-                entry_point: Some("main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Bgra8Unorm,
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
 
-        pipelines.insert((name, config), WgpuProgram { pipeline });
+        // Create the default pipeline with PremultipliedAlpha blend, no depth.
+        let default_blend = WgpuBlendMode::PremultipliedAlpha;
+        let default_depth = WgpuDepthState::None;
+        let pipeline = create_pipeline_for_blend(
+            device,
+            pipeline_layout,
+            &vs_module,
+            &fs_module,
+            &vertex_layouts,
+            name,
+            config,
+            default_blend,
+            default_depth,
+        );
+
+        pipelines.insert(
+            (name, config, default_blend, default_depth),
+            WgpuProgram { pipeline },
+        );
+        shaders.insert(
+            (name, config),
+            ShaderEntry { vs_module, fs_module, vertex_layouts },
+        );
     }
 
-    pipelines
+    (shaders, pipelines)
 }
 
 fn image_format_to_wgpu(format: ImageFormat, features: wgpu::Features) -> wgpu::TextureFormat {
@@ -1808,5 +2619,359 @@ mod tests {
         assert!(r < 5, "Red channel should be ~0, got {}", r);
         assert!(b < 5, "Blue channel should be ~0, got {}", b);
         assert!(a > 250, "Alpha channel should be ~255, got {}", a);
+    }
+
+    /// Smoke test: `draw_instanced` with `brush_solid` pipeline runs without
+    /// GPU validation errors.  Uses dummy data textures (all zeros) so the
+    /// shader will produce degenerate output — the test only verifies that the
+    /// draw completes and readback works.
+    #[test]
+    fn draw_instanced_brush_solid_smoke() {
+        let Some(mut dev) = try_device() else { return };
+        let size: u32 = 32;
+
+        // Render target
+        let rt = dev.create_data_texture(
+            "brush_solid RT",
+            size,
+            size,
+            wgpu::TextureFormat::Bgra8Unorm,
+            &vec![0u8; (size * size * 4) as usize],
+        );
+        // Ensure it has RENDER_ATTACHMENT usage — create_data_texture only sets
+        // TEXTURE_BINDING | COPY_DST.  Use create_cache_texture instead.
+        drop(rt);
+        let rt = {
+            let tex = dev.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("brush_solid RT"),
+                size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Bgra8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            WgpuTexture { texture: tex, format: wgpu::TextureFormat::Bgra8Unorm, width: size, height: size }
+        };
+        let rt_view = rt.create_view();
+
+        // Minimal data textures (1x1 RGBA32Float, all zeros) for the data
+        // texture slots. The shader will sample address 0 and get zeros — the
+        // draw will produce degenerate output but should not crash.
+        let zero_f32 = [0u8; 16]; // 1 texel of Rgba32Float
+        let gpu_cache = dev.create_data_texture(
+            "gpu_cache", 1, 1, wgpu::TextureFormat::Rgba32Float, &zero_f32,
+        );
+        let transforms = dev.create_data_texture(
+            "transforms", 1, 1, wgpu::TextureFormat::Rgba32Float, &zero_f32,
+        );
+        let render_tasks = dev.create_data_texture(
+            "render_tasks", 1, 1, wgpu::TextureFormat::Rgba32Float, &zero_f32,
+        );
+        let prim_headers_f = dev.create_data_texture(
+            "prim_headers_f", 1, 1, wgpu::TextureFormat::Rgba32Float, &zero_f32,
+        );
+        let zero_i32 = [0u8; 16]; // 1 texel of Rgba32Sint
+        let prim_headers_i = dev.create_data_texture(
+            "prim_headers_i", 1, 1, wgpu::TextureFormat::Rgba32Sint, &zero_i32,
+        );
+
+        let gc_view = gpu_cache.create_view();
+        let tf_view = transforms.create_view();
+        let rt_tasks_view = render_tasks.create_view();
+        let phf_view = prim_headers_f.create_view();
+        let phi_view = prim_headers_i.create_view();
+
+        let textures = TextureBindings {
+            gpu_cache: Some(&gc_view),
+            transform_palette: Some(&tf_view),
+            render_tasks: Some(&rt_tasks_view),
+            prim_headers_f: Some(&phf_view),
+            prim_headers_i: Some(&phi_view),
+            ..Default::default()
+        };
+
+        // PrimitiveInstanceData: aData = ivec4(0, 0, 0, 0)
+        // All addresses zero → samples row 0 of every data texture.
+        let instance_data: [i32; 4] = [0, 0, 0, 0];
+        let instance_bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(
+                instance_data.as_ptr() as *const u8,
+                std::mem::size_of_val(&instance_data),
+            )
+        };
+
+        // This is the critical call: draw through the brush_solid pipeline.
+        dev.draw_instanced(
+            "brush_solid",
+            "",
+            WgpuBlendMode::None,
+            WgpuDepthState::None,
+            &rt_view,
+            size,
+            size,
+            &textures,
+            instance_bytes,
+            1,
+            true, // clear
+            None, // no scissor
+            None, // no depth
+        );
+
+        // Read back — we don't check specific pixel values (degenerate data
+        // means output is undefined), just that readback succeeds without panic.
+        let mut pixels = vec![0u8; (size * size * 4) as usize];
+        dev.read_texture_pixels(&rt, &mut pixels);
+
+        // If we got here without a GPU validation error or panic, the pipeline
+        // layout, vertex format, bind group, and draw submission are all valid.
+    }
+
+    /// Full data test: `draw_instanced` with `brush_solid` rendering a red
+    /// rectangle by constructing valid WebRender data textures (GPU cache,
+    /// prim headers, transforms, render tasks).
+    #[test]
+    fn draw_instanced_brush_solid_red_rect() {
+        let Some(mut dev) = try_device() else { return };
+        let size: u32 = 32;
+
+        // ── Render target ───────────────────────────────────────────────
+        let rt = {
+            let tex = dev.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("brush_solid red RT"),
+                size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Bgra8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            WgpuTexture { texture: tex, format: wgpu::TextureFormat::Bgra8Unorm, width: size, height: size }
+        };
+        let rt_view = rt.create_view();
+
+        // ── GPU cache (Rgba32Float) ─────────────────────────────────────
+        // Address 0 (u=0, v=0): solid red color [1.0, 0.0, 0.0, 1.0].
+        // brush_solid fetches 1 vec4 via fetch_from_gpu_cache_1(prim_address).
+        // The prim_address comes from PrimitiveHeaderI.specific_prim_address.
+        let mut gpu_cache_data = vec![0u8; 1024 * 16]; // 1024 texels × 16 bytes/texel
+        // Texel 0: red color
+        let red: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+        gpu_cache_data[..16].copy_from_slice(unsafe {
+            std::slice::from_raw_parts(red.as_ptr() as *const u8, 16)
+        });
+        let gpu_cache = dev.create_data_texture(
+            "test gpu_cache", 1024, 1, wgpu::TextureFormat::Rgba32Float, &gpu_cache_data,
+        );
+
+        // ── Transform palette (Rgba32Float) ─────────────────────────────
+        // VECS_PER_TRANSFORM = 8 texels per transform.
+        // Transform 0: identity matrix + identity inverse.
+        // get_fetch_uv(0, 8) = ivec2(0, 0), then reads texels (0..7, 0).
+        let identity_4x4: [f32; 16] = [
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        ];
+        let mut transform_data = vec![0u8; 1024 * 16]; // 1024 texels
+        // Forward matrix: texels 0-3
+        let identity_bytes = unsafe {
+            std::slice::from_raw_parts(identity_4x4.as_ptr() as *const u8, 64)
+        };
+        transform_data[..64].copy_from_slice(identity_bytes);
+        // Inverse matrix: texels 4-7
+        transform_data[64..128].copy_from_slice(identity_bytes);
+        let transforms = dev.create_data_texture(
+            "test transforms", 1024, 1, wgpu::TextureFormat::Rgba32Float, &transform_data,
+        );
+
+        // ── Render tasks (Rgba32Float) ──────────────────────────────────
+        // VECS_PER_RENDER_TASK = 2 texels per task.
+        // Task 0 at texels (0,0) and (1,0):
+        //   texel 0: task_rect = (0, 0, size, size)
+        //   texel 1: user_data = (device_pixel_scale=1.0, content_origin=(0,0), 0)
+        let s = size as f32;
+        let task_texel0: [f32; 4] = [0.0, 0.0, s, s];
+        let task_texel1: [f32; 4] = [1.0, 0.0, 0.0, 0.0];
+        let mut render_tasks_data = vec![0u8; 1024 * 16];
+        render_tasks_data[..16].copy_from_slice(unsafe {
+            std::slice::from_raw_parts(task_texel0.as_ptr() as *const u8, 16)
+        });
+        render_tasks_data[16..32].copy_from_slice(unsafe {
+            std::slice::from_raw_parts(task_texel1.as_ptr() as *const u8, 16)
+        });
+        let render_tasks = dev.create_data_texture(
+            "test render_tasks", 1024, 1, wgpu::TextureFormat::Rgba32Float, &render_tasks_data,
+        );
+
+        // ── Primitive headers F (Rgba32Float) ───────────────────────────
+        // VECS_PER_PRIM_HEADER_F = 2 texels per header.
+        // Header 0 at texels (0,0) and (1,0):
+        //   texel 0: local_rect = (0, 0, size, size)
+        //   texel 1: local_clip_rect = (0, 0, size, size)
+        let rect_f: [f32; 4] = [0.0, 0.0, s, s];
+        let mut prim_f_data = vec![0u8; 1024 * 16];
+        let rect_bytes = unsafe {
+            std::slice::from_raw_parts(rect_f.as_ptr() as *const u8, 16)
+        };
+        prim_f_data[..16].copy_from_slice(rect_bytes);
+        prim_f_data[16..32].copy_from_slice(rect_bytes);
+        let prim_headers_f = dev.create_data_texture(
+            "test prim_headers_f", 1024, 1, wgpu::TextureFormat::Rgba32Float, &prim_f_data,
+        );
+
+        // ── Primitive headers I (Rgba32Sint) ────────────────────────────
+        // VECS_PER_PRIM_HEADER_I = 2 texels per header.
+        // Header 0 at texels (0,0) and (1,0):
+        //   texel 0: z=0, specific_prim_address=0, transform_id=0, render_task_address=0
+        //   texel 1: user_data = [65535, 0, 0, 0]
+        //     user_data.x = opacity as i32 (65535 = full opacity, divided by 65535.0 in shader)
+        let prim_i_texel0: [i32; 4] = [0, 0, 0, 0];
+        let prim_i_texel1: [i32; 4] = [65535, 0, 0, 0];
+        let mut prim_i_data = vec![0u8; 1024 * 16];
+        prim_i_data[..16].copy_from_slice(unsafe {
+            std::slice::from_raw_parts(prim_i_texel0.as_ptr() as *const u8, 16)
+        });
+        prim_i_data[16..32].copy_from_slice(unsafe {
+            std::slice::from_raw_parts(prim_i_texel1.as_ptr() as *const u8, 16)
+        });
+        let prim_headers_i = dev.create_data_texture(
+            "test prim_headers_i", 1024, 1, wgpu::TextureFormat::Rgba32Sint, &prim_i_data,
+        );
+
+        // ── Build texture bindings ──────────────────────────────────────
+        let gc_view = gpu_cache.create_view();
+        let tf_view = transforms.create_view();
+        let rt_view2 = render_tasks.create_view();
+        let phf_view = prim_headers_f.create_view();
+        let phi_view = prim_headers_i.create_view();
+
+        let textures = TextureBindings {
+            gpu_cache: Some(&gc_view),
+            transform_palette: Some(&tf_view),
+            render_tasks: Some(&rt_view2),
+            prim_headers_f: Some(&phf_view),
+            prim_headers_i: Some(&phi_view),
+            ..Default::default()
+        };
+
+        // ── Instance data ───────────────────────────────────────────────
+        // PrimitiveInstanceData { data: [prim_header_address, clip_address, packed, resource] }
+        // prim_header_address = 0 (header index 0)
+        // clip_address = 0x7FFFFFFF (CLIP_TASK_EMPTY — no clipping)
+        // packed = segment_index(0xFFFF=INVALID) | flags(0) = 0x0000FFFF
+        // resource_address = 0 (GPU cache address for the brush) | brush_kind(0) = 0
+        let instance_data: [i32; 4] = [
+            0,                // prim_header_address
+            0x7FFF_FFFFi32,   // clip_address = CLIP_TASK_EMPTY
+            0x0000_FFFFi32,   // segment_index = INVALID_SEGMENT_INDEX (0xFFFF)
+            0,                // resource_address=0, brush_kind=0
+        ];
+        let instance_bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(
+                instance_data.as_ptr() as *const u8,
+                std::mem::size_of_val(&instance_data),
+            )
+        };
+
+        // ── Draw! ───────────────────────────────────────────────────────
+        dev.draw_instanced(
+            "brush_solid",
+            "",
+            WgpuBlendMode::None,
+            WgpuDepthState::None,
+            &rt_view,
+            size,
+            size,
+            &textures,
+            instance_bytes,
+            1,
+            true, // clear to black first
+            None, // no scissor
+            None, // no depth
+        );
+
+        // ── Readback and verify ─────────────────────────────────────────
+        let mut pixels = vec![0u8; (size * size * 4) as usize];
+        dev.read_texture_pixels(&rt, &mut pixels);
+
+        // Check the center pixel — should be red (BGRA: 0, 0, 255, 255).
+        let cx = size / 2;
+        let cy = size / 2;
+        let idx = ((cy * size + cx) * 4) as usize;
+        let b = pixels[idx];
+        let g = pixels[idx + 1];
+        let r = pixels[idx + 2];
+        let a = pixels[idx + 3];
+
+        assert!(
+            r > 200 && g < 30 && b < 30 && a > 200,
+            "Expected red pixel at center, got BGRA=({}, {}, {}, {})",
+            b, g, r, a,
+        );
+    }
+
+    /// Smoke test: `draw_instanced` with `brush_solid` ALPHA_PASS pipeline.
+    #[test]
+    fn draw_instanced_brush_solid_alpha_smoke() {
+        let Some(mut dev) = try_device() else { return };
+        let size: u32 = 16;
+
+        let rt = {
+            let tex = dev.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("brush_solid alpha RT"),
+                size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Bgra8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            WgpuTexture { texture: tex, format: wgpu::TextureFormat::Bgra8Unorm, width: size, height: size }
+        };
+        let rt_view = rt.create_view();
+
+        let textures = TextureBindings::default(); // all dummy
+
+        let instance_data: [i32; 4] = [0, 0, 0, 0];
+        let instance_bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(
+                instance_data.as_ptr() as *const u8,
+                std::mem::size_of_val(&instance_data),
+            )
+        };
+
+        dev.draw_instanced(
+            "brush_solid",
+            "ALPHA_PASS",
+            WgpuBlendMode::PremultipliedAlpha,
+            WgpuDepthState::None,
+            &rt_view,
+            size,
+            size,
+            &textures,
+            instance_bytes,
+            1,
+            true,
+            None, // no scissor
+            None, // no depth
+        );
+
+        let mut pixels = vec![0u8; (size * size * 4) as usize];
+        dev.read_texture_pixels(&rt, &mut pixels);
+        // Success = no GPU validation error.
     }
 }

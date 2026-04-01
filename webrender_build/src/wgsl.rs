@@ -1157,6 +1157,90 @@ fn storage_qual(code: &str) -> Option<&'static str> {
 /// whose directive matches `WR_VERTEX_SHADER` or `WR_FRAGMENT_SHADER` at the
 /// outermost ifdef depth are resolved.  Other `#ifdef` / `#endif` pairs inside
 /// the stage block are passed through for naga's preprocessor.
+/// Rewrite `texelFetchOffset(tex, pos, lod, ivec2(x, y))` calls to
+/// `texelFetch(tex, pos + ivec2(x, y), lod)`.
+///
+/// naga translates `texelFetchOffset` to WGSL `textureLoad` but silently
+/// drops the constant offset parameter.  This causes every data-texture
+/// fetch that uses a multi-texel stride (transforms: 8 texels, prim
+/// headers: 2 texels, render tasks: 2 texels, etc.) to read from the
+/// wrong texel — all offsets collapse to the base coordinate.
+///
+/// The `texelFetch(pos + offset, lod)` form makes the addition explicit
+/// in the GLSL AST, so naga preserves it correctly.
+fn rewrite_texel_fetch_offset(src: &str) -> String {
+    let mut result = String::with_capacity(src.len());
+    let needle = "texelFetchOffset(";
+
+    for line in src.lines() {
+        if let Some(start) = line.find(needle) {
+            // Parse: texelFetchOffset(tex, pos, lod, offset)
+            // Rewrite to: texelFetch(tex, pos + offset, lod)
+            let prefix = &line[..start];
+            let after = &line[start + needle.len()..];
+            // Find the matching closing paren, respecting nested parens.
+            let mut depth = 1u32;
+            let mut end = 0;
+            for (i, ch) in after.char_indices() {
+                match ch {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = i;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let args_str = &after[..end];
+            let suffix = &after[end + 1..]; // after the closing ')'
+
+            // Split into 4 arguments at top-level commas.
+            let mut args: Vec<&str> = Vec::new();
+            let mut depth2 = 0u32;
+            let mut arg_start = 0;
+            for (i, ch) in args_str.char_indices() {
+                match ch {
+                    '(' => depth2 += 1,
+                    ')' => depth2 -= 1,
+                    ',' if depth2 == 0 => {
+                        args.push(args_str[arg_start..i].trim());
+                        arg_start = i + 1;
+                    }
+                    _ => {}
+                }
+            }
+            args.push(args_str[arg_start..].trim());
+
+            if args.len() == 4 {
+                let tex = args[0];
+                let pos = args[1];
+                let lod = args[2];
+                let offset = args[3];
+                result.push_str(prefix);
+                result.push_str(&format!(
+                    "texelFetch({}, {} + {}, {})", tex, pos, offset, lod
+                ));
+                result.push_str(suffix);
+            } else {
+                // Unexpected argument count — leave unchanged.
+                result.push_str(line);
+            }
+        } else {
+            result.push_str(line);
+        }
+        result.push('\n');
+    }
+
+    // Remove trailing newline if the original didn't have one.
+    if !src.ends_with('\n') && result.ends_with('\n') {
+        result.pop();
+    }
+    result
+}
+
 fn resolve_stage_ifdefs(src: &str, stage: naga::ShaderStage) -> String {
     let active_define = match stage {
         naga::ShaderStage::Vertex   => "WR_VERTEX_SHADER",
@@ -1691,6 +1775,12 @@ fn preprocess_for_naga(src: &str, stage: naga::ShaderStage) -> String {
         }
     }
 
+    // ── Pass 0d: rewrite texelFetchOffset → texelFetch + offset ────────────
+    // naga translates texelFetchOffset to textureLoad but drops the constant
+    // offset, causing all offset reads to sample from the wrong texel.
+    // Rewrite to the explicit addition form that naga handles correctly.
+    let src = rewrite_texel_fetch_offset(&src);
+
     // ── Pass 1: line-by-line rewriting ───────────────────────────────────────
 
     // Fixed binding table matching GL TextureSampler slot assignments.
@@ -1897,25 +1987,34 @@ fn translate_to_wgsl(
     let name_s = name.to_string();
     let config_s = config.to_string();
 
-    let outcome = std::panic::catch_unwind(move || {
-        let module = glsl::Frontend::default()
-            .parse(&glsl::Options::from(stage), &glsl_owned)
-            .map_err(|e| format!(
-                "GLSL->naga parse failed [shader={} config={:?}]: {:?}", name_s, config_s, e
-            ))?;
+    // Run naga on a thread with an 8 MB stack.  The validator's recursive
+    // flow analysis can exceed the default 1 MB stack on Windows.
+    let outcome = std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || {
+            std::panic::catch_unwind(move || {
+                let module = glsl::Frontend::default()
+                    .parse(&glsl::Options::from(stage), &glsl_owned)
+                    .map_err(|e| format!(
+                        "GLSL->naga parse failed [shader={} config={:?}]: {:?}", name_s, config_s, e
+                    ))?;
 
-        let info = Validator::new(ValidationFlags::all(), Capabilities::all())
-            .validate(&module)
-            .map_err(|e| format!(
-                "naga validation failed [shader={} config={:?}]: {:?}", name_s, config_s, e
-            ))?;
-        wgsl::write_string(&module, &info, wgsl::WriterFlags::empty()).map_err(|e| format!(
-            "WGSL emit failed [shader={} config={:?}]: {:?}", name_s, config_s, e
-        ))
-    });
+                let info = Validator::new(ValidationFlags::all(), Capabilities::all())
+                    .validate(&module)
+                    .map_err(|e| format!(
+                        "naga validation failed [shader={} config={:?}]: {:?}", name_s, config_s, e
+                    ))?;
+                wgsl::write_string(&module, &info, wgsl::WriterFlags::empty()).map_err(|e| format!(
+                    "WGSL emit failed [shader={} config={:?}]: {:?}", name_s, config_s, e
+                ))
+            })
+        })
+        .expect("failed to spawn naga thread")
+        .join()
+        .expect("naga thread panicked at join");
 
     match outcome {
-        Ok(inner) => inner.map(|wgsl| fix_generated_wgsl(&wgsl)),
+        Ok(inner) => inner.map(|wgsl| fix_generated_wgsl(&wgsl, name)),
         Err(panic_val) => {
             let msg = if let Some(s) = panic_val.downcast_ref::<String>() {
                 s.clone()
@@ -1929,8 +2028,89 @@ fn translate_to_wgsl(
     }
 }
 
-fn fix_generated_wgsl(wgsl: &str) -> String {
-    rewrite_set_sat_helpers(wgsl)
+fn fix_generated_wgsl(wgsl: &str, shader_name: &str) -> String {
+    let wgsl = strip_dead_adata_input(wgsl, shader_name);
+    rewrite_set_sat_helpers(&wgsl)
+}
+
+/// Strip the dead `aData: vec4<i32>` vertex input from shaders that inherit
+/// it from `prim_shared.glsl` but never use it in their entry-point logic.
+///
+/// In GL, unbound vertex attributes silently read as zero.  wgpu requires
+/// every declared vertex input to be provided by a vertex buffer, so we
+/// remove the dead parameter before the shader reaches pipeline creation.
+fn strip_dead_adata_input(wgsl: &str, shader_name: &str) -> String {
+    // Only cs_blur, cs_svg_filter, and cs_svg_filter_node have this issue.
+    let dominated = matches!(
+        shader_name,
+        "cs_blur" | "cs_svg_filter" | "cs_svg_filter_node"
+    );
+    if !dominated {
+        return wgsl.to_string();
+    }
+
+    // Remove `@location(1) @interpolate(flat) aData: vec4<i32>, ` from fn main(...)
+    // and renumber subsequent @location(N) → @location(N-1).
+    let Some(main_line_idx) = wgsl.find("fn main(") else {
+        return wgsl.to_string();
+    };
+    let main_end = match wgsl[main_line_idx..].find(") ->") {
+        Some(i) => main_line_idx + i,
+        None => return wgsl.to_string(),
+    };
+    let main_start = main_line_idx + "fn main(".len();
+    let params = &wgsl[main_start..main_end];
+
+    // Split into individual parameters
+    let param_list: Vec<&str> = params.split(", @").collect();
+    let mut new_params = Vec::new();
+    let mut removed_location: Option<u32> = None;
+
+    for (i, param) in param_list.iter().enumerate() {
+        let full = if i == 0 { param.to_string() } else { format!("@{}", param) };
+        if full.contains("aData: vec4<i32>") || full.contains("aData: vec4<i32>,") {
+            // Extract the location number being removed
+            if let Some(loc_start) = full.find("@location(") {
+                let num_start = loc_start + "@location(".len();
+                if let Some(num_end) = full[num_start..].find(')') {
+                    removed_location = full[num_start..num_start + num_end].parse().ok();
+                }
+            }
+            continue; // skip this parameter
+        }
+        // Renumber locations after the removed one
+        if let Some(removed_loc) = removed_location {
+            if let Some(loc_start) = full.find("@location(") {
+                let num_start = loc_start + "@location(".len();
+                if let Some(num_end) = full[num_start..].find(')') {
+                    if let Ok(loc) = full[num_start..num_start + num_end].parse::<u32>() {
+                        if loc > removed_loc {
+                            let new_full = format!(
+                                "{}@location({}){}",
+                                &full[..loc_start],
+                                loc - 1,
+                                &full[num_start + num_end + 1..]
+                            );
+                            new_params.push(new_full);
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+        new_params.push(full);
+    }
+
+    let new_main_params = new_params.join(", ");
+    let mut result = String::with_capacity(wgsl.len());
+    result.push_str(&wgsl[..main_start]);
+    result.push_str(&new_main_params);
+    result.push_str(&wgsl[main_end..]);
+
+    // Also remove the `aData_1 = aData;` assignment in the entry point body
+    result = result.replace("    aData_1 = aData;\n", "");
+
+    result
 }
 
 fn rewrite_set_sat_helpers(wgsl: &str) -> String {
