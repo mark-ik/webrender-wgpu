@@ -863,6 +863,8 @@ fn create_webrender_instance_with_device(
         wgpu_dither_texture: None,
         #[cfg(feature = "wgpu_backend")]
         wgpu_frame_data: None,
+        #[cfg(feature = "wgpu_backend")]
+        wgpu_readback_texture: None,
     };
 
     // We initially set the flags to default and then now call set_debug_flags
@@ -1303,6 +1305,7 @@ pub fn create_webrender_instance_wgpu(
         wgpu_gpu_cache: super::WgpuGpuCacheState::new(),
         wgpu_dither_texture: dither_tex,
         wgpu_frame_data: None,
+        wgpu_readback_texture: None,
     };
 
     renderer.set_debug_flags(debug_flags);

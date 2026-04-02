@@ -243,6 +243,7 @@ impl Wrench {
         dump_shader_source: Option<String>,
         notifier: Option<Box<dyn RenderNotifier>>,
         layer_compositor: Option<Box<dyn LayerCompositor>>,
+        backend: Option<webrender::RendererBackend>,
     ) -> Self {
         println!("Shader override path: {:?}", shader_override_path);
 
@@ -295,12 +296,21 @@ impl Wrench {
             Box::new(Notifier(data))
         });
 
-        let (renderer, sender) = webrender::create_webrender_instance(
-            window.clone_gl(),
-            notifier,
-            opts,
-            None,
-        ).unwrap();
+        let (renderer, sender) = if let Some(backend) = backend {
+            webrender::create_webrender_instance_with_backend(
+                backend,
+                notifier,
+                opts,
+                None,
+            ).unwrap()
+        } else {
+            webrender::create_webrender_instance(
+                window.clone_gl(),
+                notifier,
+                opts,
+                None,
+            ).unwrap()
+        };
 
         let api = sender.create_api();
         let document_id = api.add_document(size);
@@ -647,7 +657,11 @@ impl Wrench {
         ];
 
         let color_and_offset = [(ColorF::BLACK, 2.0), (ColorF::WHITE, 0.0)];
-        self.renderer.device.begin_frame(); // next line might compile shaders:
+        // Debug renderer requires GL device — skip in wgpu-only mode.
+        if self.renderer.device.is_none() {
+            return;
+        }
+        self.renderer.device.as_mut().unwrap().begin_frame();
         let dr = self.renderer.debug_renderer().unwrap();
 
         for co in &color_and_offset {
@@ -658,7 +672,7 @@ impl Wrench {
                 y += dr.line_height();
             }
         }
-        self.renderer.device.end_frame();
+        self.renderer.device.as_mut().unwrap().end_frame();
     }
 
     pub fn shut_down(self, rx: Receiver<NotifierEvent>) {
