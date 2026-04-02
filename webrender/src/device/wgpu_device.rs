@@ -36,6 +36,11 @@ impl WgpuTexture {
     pub fn bytes_per_pixel(&self) -> u32 {
         wgpu_format_bytes_per_pixel(self.format)
     }
+
+    /// The texture format.
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.format
+    }
 }
 
 /// A wgpu-backed shader pipeline.
@@ -224,7 +229,7 @@ pub struct WgpuDevice {
     /// Compiled shader modules + vertex layout info, keyed by (name, config).
     shaders: HashMap<(&'static str, &'static str), ShaderEntry>,
     /// Render pipelines, keyed by (name, config, blend_mode, depth_state).
-    pipelines: HashMap<(&'static str, &'static str, WgpuBlendMode, WgpuDepthState), WgpuProgram>,
+    pipelines: HashMap<(&'static str, &'static str, WgpuBlendMode, WgpuDepthState, wgpu::TextureFormat), WgpuProgram>,
     #[allow(dead_code)]
     pipeline_layout: wgpu::PipelineLayout,
     bind_group_layout_0: wgpu::BindGroupLayout,
@@ -377,7 +382,7 @@ impl WgpuDevice {
             .unwrap_or(surface_caps.formats[0]);
 
         let surface_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             format: surface_format,
             width,
             height,
@@ -758,7 +763,19 @@ impl WgpuDevice {
         let h = height.max(1);
         let expected = (w * h * bpp) as usize;
 
-        if !data.is_empty() && data.len() >= expected {
+        if !data.is_empty() {
+            // Pad data to fill the full texture if needed.  The raw data
+            // is a tightly-packed array of items that may not fill the last
+            // texture row.  Zero-padding is safe because shaders only
+            // access indices within the valid item range.
+            let upload_data: std::borrow::Cow<'_, [u8]> = if data.len() >= expected {
+                std::borrow::Cow::Borrowed(&data[..expected])
+            } else {
+                let mut padded = Vec::with_capacity(expected);
+                padded.extend_from_slice(data);
+                padded.resize(expected, 0u8);
+                std::borrow::Cow::Owned(padded)
+            };
             self.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &texture,
@@ -766,7 +783,7 @@ impl WgpuDevice {
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
                 },
-                &data[..expected],
+                &upload_data,
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(w * bpp),
@@ -808,7 +825,15 @@ impl WgpuDevice {
 
         let bpp = wgpu_format_bytes_per_pixel(existing.format);
         let expected = (w * h * bpp) as usize;
-        if !data.is_empty() && data.len() >= expected {
+        if !data.is_empty() {
+            let upload_data: std::borrow::Cow<'_, [u8]> = if data.len() >= expected {
+                std::borrow::Cow::Borrowed(&data[..expected])
+            } else {
+                let mut padded = Vec::with_capacity(expected);
+                padded.extend_from_slice(data);
+                padded.resize(expected, 0u8);
+                std::borrow::Cow::Owned(padded)
+            };
             self.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &existing.texture,
@@ -816,7 +841,7 @@ impl WgpuDevice {
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
                 },
-                &data[..expected],
+                &upload_data,
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(w * bpp),
@@ -991,6 +1016,66 @@ impl WgpuDevice {
         staging.unmap();
     }
 
+    /// Read back pixels from a `wgpu::Texture` (e.g. a surface texture) into `output`.
+    /// The texture must have COPY_SRC usage.  Output is tightly-packed BGRA rows.
+    pub fn read_surface_texture_pixels(
+        &self,
+        texture: &wgpu::Texture,
+        width: u32,
+        height: u32,
+        output: &mut [u8],
+    ) {
+        let bpp = 4u32; // Bgra8Unorm
+        let bytes_per_row_unaligned = width * bpp;
+        let bytes_per_row = (bytes_per_row_unaligned + 255) & !255;
+
+        let buf_size = (bytes_per_row as u64) * (height as u64);
+        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("surface readback staging"),
+            size: buf_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let mut encoder = self.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor { label: Some("surface readback") },
+        );
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: None,
+                },
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+        self.queue.submit([encoder.finish()]);
+
+        let slice = staging.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        self.device.poll(wgpu::PollType::Wait).unwrap();
+
+        let mapped = slice.get_mapped_range();
+        let dst_stride = (width * bpp) as usize;
+        let src_stride = bytes_per_row as usize;
+        for row in 0..height as usize {
+            let src_start = row * src_stride;
+            let dst_start = row * dst_stride;
+            output[dst_start..dst_start + dst_stride]
+                .copy_from_slice(&mapped[src_start..src_start + dst_stride]);
+        }
+        drop(mapped);
+        staging.unmap();
+    }
+
     pub fn pipeline_count(&self) -> usize {
         self.pipelines.len()
     }
@@ -1061,7 +1146,10 @@ impl WgpuDevice {
         };
         let ib = self.create_index_buffer("debug_color indices", idx_bytes);
 
-        let pipeline = &self.pipelines[&("debug_color", "", WgpuBlendMode::PremultipliedAlpha, WgpuDepthState::None)].pipeline;
+        let surface_fmt = self.surface_config.as_ref()
+            .map(|c| c.format)
+            .unwrap_or(wgpu::TextureFormat::Bgra8Unorm);
+        let pipeline = &self.pipelines[&("debug_color", "", WgpuBlendMode::PremultipliedAlpha, WgpuDepthState::None, surface_fmt)].pipeline;
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1169,7 +1257,10 @@ impl WgpuDevice {
         };
         let ib = self.create_index_buffer("debug_font indices", idx_bytes);
 
-        let pipeline = &self.pipelines[&("debug_font", "", WgpuBlendMode::PremultipliedAlpha, WgpuDepthState::None)].pipeline;
+        let surface_fmt = self.surface_config.as_ref()
+            .map(|c| c.format)
+            .unwrap_or(wgpu::TextureFormat::Bgra8Unorm);
+        let pipeline = &self.pipelines[&("debug_font", "", WgpuBlendMode::PremultipliedAlpha, WgpuDepthState::None, surface_fmt)].pipeline;
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1240,7 +1331,7 @@ impl WgpuDevice {
         instance_bytes: &[u8],
         instance_count: u32,
         config: &str,
-        clear: bool,
+        clear_color: Option<wgpu::Color>,
     ) {
         let target_view = target
             .texture
@@ -1253,7 +1344,7 @@ impl WgpuDevice {
             instance_bytes,
             instance_count,
             config,
-            clear,
+            clear_color,
         );
     }
 
@@ -1270,9 +1361,12 @@ impl WgpuDevice {
         instance_bytes: &[u8],
         instance_count: u32,
         config: &str,
-        clear: bool,
+        clear_color: Option<wgpu::Color>,
     ) {
-        let pipeline_key = ("composite", config, WgpuBlendMode::PremultipliedAlpha, WgpuDepthState::None);
+        let surface_fmt = self.surface_config.as_ref()
+            .map(|c| c.format)
+            .unwrap_or(wgpu::TextureFormat::Bgra8Unorm);
+        let pipeline_key = ("composite", config, WgpuBlendMode::PremultipliedAlpha, WgpuDepthState::None, surface_fmt);
         let program = self
             .pipelines
             .get(&pipeline_key)
@@ -1333,10 +1427,9 @@ impl WgpuDevice {
         // Instance buffer
         let instance_buf = self.create_vertex_buffer("composite instances", instance_bytes);
 
-        let load = if clear {
-            wgpu::LoadOp::Clear(wgpu::Color::BLACK)
-        } else {
-            wgpu::LoadOp::Load
+        let load = match clear_color {
+            Some(c) => wgpu::LoadOp::Clear(c),
+            None => wgpu::LoadOp::Load,
         };
 
         let mut encoder = self
@@ -1464,15 +1557,16 @@ impl WgpuDevice {
         target_view: &wgpu::TextureView,
         target_width: u32,
         target_height: u32,
+        target_format: wgpu::TextureFormat,
         textures: &TextureBindings<'_>,
         instance_bytes: &[u8],
         instance_count: u32,
-        clear: bool,
+        clear_color: Option<wgpu::Color>,
         scissor_rect: Option<(u32, u32, u32, u32)>,
         depth_view: Option<&wgpu::TextureView>,
     ) {
-        // Lazily create a pipeline for this (shader, config, blend_mode, depth_state) if needed.
-        let pipeline_key = (shader_name, config, blend_mode, depth_state);
+        // Lazily create a pipeline for this (shader, config, blend_mode, depth_state, format) if needed.
+        let pipeline_key = (shader_name, config, blend_mode, depth_state, target_format);
         if !self.pipelines.contains_key(&pipeline_key) {
             let shader = match self.shaders.get(&(shader_name, config)) {
                 Some(s) => s,
@@ -1494,6 +1588,7 @@ impl WgpuDevice {
                 config,
                 blend_mode,
                 depth_state,
+                target_format,
             );
             self.pipelines.insert(pipeline_key, WgpuProgram { pipeline });
         }
@@ -1547,17 +1642,16 @@ impl WgpuDevice {
 
         let instance_buf = self.create_vertex_buffer("draw instances", instance_bytes);
 
-        let color_load = if clear {
-            wgpu::LoadOp::Clear(wgpu::Color::BLACK)
-        } else {
-            wgpu::LoadOp::Load
+        let color_load = match clear_color {
+            Some(c) => wgpu::LoadOp::Clear(c),
+            None => wgpu::LoadOp::Load,
         };
 
         let depth_attachment = if depth_state != WgpuDepthState::None {
             depth_view.map(|dv| wgpu::RenderPassDepthStencilAttachment {
                 view: dv,
                 depth_ops: Some(wgpu::Operations {
-                    load: if clear {
+                    load: if clear_color.is_some() {
                         wgpu::LoadOp::Clear(1.0)
                     } else {
                         wgpu::LoadOp::Load
@@ -1769,10 +1863,14 @@ fn create_dummy_texture(
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
-    let bpp = match format {
-        wgpu::TextureFormat::Rgba8Unorm => 4,
-        wgpu::TextureFormat::Rgba32Sint => 16,
-        _ => 4,
+    // Initialize to opaque white for f32 textures (so that the FAST_PATH
+    // composite shader — which outputs the texture sample directly — produces
+    // white when sampling the dummy, and the non-FAST_PATH shader multiplies
+    // by vColor × white = vColor).  Integer textures stay zeroed.
+    let (bpp, pixels): (usize, Vec<u8>) = match format {
+        wgpu::TextureFormat::Rgba8Unorm => (4, vec![255u8; 4]),
+        wgpu::TextureFormat::Rgba32Sint => (16, vec![0u8; 16]),
+        _ => (4, vec![255u8; 4]),
     };
     queue.write_texture(
         wgpu::TexelCopyTextureInfo {
@@ -1781,7 +1879,7 @@ fn create_dummy_texture(
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        &vec![0u8; bpp],
+        &pixels,
         wgpu::TexelCopyBufferLayout {
             offset: 0,
             bytes_per_row: Some(bpp as u32),
@@ -2178,8 +2276,9 @@ fn create_pipeline_for_blend(
     config: &str,
     blend_mode: WgpuBlendMode,
     depth_state: WgpuDepthState,
+    target_format: wgpu::TextureFormat,
 ) -> wgpu::RenderPipeline {
-    let pipeline_label = format!("{}#{}#{:?}#{:?}", name, config, blend_mode, depth_state);
+    let pipeline_label = format!("{}#{}#{:?}#{:?}#{:?}", name, config, blend_mode, depth_state, target_format);
 
     // Build wgpu vertex buffer layout references from our cached data.
     let vbl_single;
@@ -2228,7 +2327,7 @@ fn create_pipeline_for_blend(
             module: fs_module,
             entry_point: Some("main"),
             targets: &[Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::Bgra8Unorm,
+                format: target_format,
                 blend: blend_mode.to_wgpu_blend_state(),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
@@ -2255,7 +2354,7 @@ fn create_all_pipelines(
     pipeline_layout: &wgpu::PipelineLayout,
 ) -> (
     HashMap<(&'static str, &'static str), ShaderEntry>,
-    HashMap<(&'static str, &'static str, WgpuBlendMode, WgpuDepthState), WgpuProgram>,
+    HashMap<(&'static str, &'static str, WgpuBlendMode, WgpuDepthState, wgpu::TextureFormat), WgpuProgram>,
 ) {
     let mut shaders = HashMap::new();
     let mut pipelines = HashMap::new();
@@ -2321,9 +2420,12 @@ fn create_all_pipelines(
             }
         };
 
-        // Create the default pipeline with PremultipliedAlpha blend, no depth.
+        // Create the default pipeline with PremultipliedAlpha blend, no depth,
+        // targeting the surface format (Bgra8Unorm).  Pipelines for other formats
+        // (e.g. R8Unorm for clip masks) are created lazily in draw_instanced.
         let default_blend = WgpuBlendMode::PremultipliedAlpha;
         let default_depth = WgpuDepthState::None;
+        let default_format = wgpu::TextureFormat::Bgra8Unorm;
         let pipeline = create_pipeline_for_blend(
             device,
             pipeline_layout,
@@ -2334,10 +2436,11 @@ fn create_all_pipelines(
             config,
             default_blend,
             default_depth,
+            default_format,
         );
 
         pipelines.insert(
-            (name, config, default_blend, default_depth),
+            (name, config, default_blend, default_depth, default_format),
             WgpuProgram { pipeline },
         );
         shaders.insert(
@@ -2600,7 +2703,7 @@ mod tests {
             instance_bytes,
             1,
             "FAST_PATH,TEXTURE_2D",
-            true,
+            Some(wgpu::Color::BLACK),
         );
 
         // Read back and verify center pixel is green
@@ -2714,10 +2817,11 @@ mod tests {
             &rt_view,
             size,
             size,
+            wgpu::TextureFormat::Bgra8Unorm,
             &textures,
             instance_bytes,
             1,
-            true, // clear
+            Some(wgpu::Color::BLACK), // clear to black
             None, // no scissor
             None, // no depth
         );
@@ -2892,10 +2996,11 @@ mod tests {
             &rt_view,
             size,
             size,
+            wgpu::TextureFormat::Bgra8Unorm,
             &textures,
             instance_bytes,
             1,
-            true, // clear to black first
+            Some(wgpu::Color::BLACK), // clear to black first
             None, // no scissor
             None, // no depth
         );
@@ -2962,10 +3067,11 @@ mod tests {
             &rt_view,
             size,
             size,
+            wgpu::TextureFormat::Bgra8Unorm,
             &textures,
             instance_bytes,
             1,
-            true,
+            Some(wgpu::Color::BLACK),
             None, // no scissor
             None, // no depth
         );

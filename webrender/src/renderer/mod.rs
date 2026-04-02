@@ -1612,7 +1612,7 @@ impl Renderer {
             FastHashMap::default();
         let mut skipped_tiles = 0u32;
 
-        for tile in &composite_state.tiles {
+        for (tile_idx, tile) in composite_state.tiles.iter().enumerate() {
             let tile_rect = composite_state.get_device_rect(
                 &tile.local_rect,
                 tile.transform_index,
@@ -1662,7 +1662,46 @@ impl Renderer {
             }
         }
 
-        let mut need_clear = true;
+        // Use the renderer's configured clear color for the composite surface.
+        let surface_clear = wgpu::Color {
+            r: self.clear_color.r as f64,
+            g: self.clear_color.g as f64,
+            b: self.clear_color.b as f64,
+            a: self.clear_color.a as f64,
+        };
+        let mut pending_surface_clear: Option<wgpu::Color> = Some(surface_clear);
+
+        // Diagnostic: log tile breakdown on first few frames.
+        if !composite_state.tiles.is_empty() || skipped_tiles > 0 {
+            info!(
+                "wgpu composite: {} total tiles, {} color, {} textured batches, {} skipped, surface={}x{}",
+                composite_state.tiles.len(),
+                color_instances.len(),
+                textured_batches.len(),
+                skipped_tiles,
+                w, h,
+            );
+            // Log the surface types of skipped tiles (first frame only via has_been_rendered).
+            if !doc.frame.has_been_rendered {
+                for tile in &composite_state.tiles {
+                    match tile.surface {
+                        CompositeTileSurface::Color { .. } => {},
+                        CompositeTileSurface::Texture {
+                            surface: ResolvedSurfaceTexture::TextureCache { ref texture }
+                        } => {
+                            if let TextureSource::TextureCache(id, _) = texture {
+                                if !self.wgpu_texture_cache.contains_key(&id) {
+                                    info!("  missing texture {:?} in wgpu cache", id);
+                                }
+                            }
+                        }
+                        ref other => {
+                            info!("  skipped tile surface: {:?}", std::mem::discriminant(other));
+                        }
+                    }
+                }
+            }
+        }
 
         if !color_instances.is_empty() {
             // Marshal instances to bytes
@@ -1677,13 +1716,12 @@ impl Renderer {
                 &target_view,
                 w,
                 h,
-                None, // no source texture for solid-color tiles
+                None, // samples white dummy texture; vColor provides tile color
                 instance_bytes,
                 color_instances.len() as u32,
-                "FAST_PATH,TEXTURE_2D",
-                need_clear,
+                "TEXTURE_2D", // non-FAST_PATH: output = vColor * texel (white) = vColor
+                pending_surface_clear.take(),
             );
-            need_clear = false;
         }
 
         // Render texture-backed tile batches.
@@ -1706,9 +1744,8 @@ impl Renderer {
                 instance_bytes,
                 instances.len() as u32,
                 "FAST_PATH,TEXTURE_2D",
-                need_clear,
+                pending_surface_clear.take(),
             );
-            need_clear = false;
         }
 
         let total_textured: usize = textured_batches.values().map(|v| v.len()).sum();
@@ -1785,14 +1822,14 @@ impl Renderer {
         };
         let transform_palette = make_tex("transform_palette", transforms_bytes, 8, wgpu::TextureFormat::Rgba32Float);
 
-        // RenderTaskData: FLOATS_PER_RENDER_TASK_INFO f32s = 3 texels (12 floats)
+        // RenderTaskData: FLOATS_PER_RENDER_TASK_INFO = 8 f32s = 2 texels (32 bytes)
         let tasks_bytes: &[u8] = unsafe {
             std::slice::from_raw_parts(
                 frame.render_tasks.task_data.as_ptr() as *const u8,
                 frame.render_tasks.task_data.len() * std::mem::size_of::<crate::render_task::RenderTaskData>(),
             )
         };
-        let render_tasks = make_tex("render_tasks", tasks_bytes, 3, wgpu::TextureFormat::Rgba32Float);
+        let render_tasks = make_tex("render_tasks", tasks_bytes, 2, wgpu::TextureFormat::Rgba32Float);
 
         // GPU buffer F (float)
         let gpu_buf_f = if !frame.gpu_buffer_f.is_empty() {
@@ -1883,30 +1920,44 @@ impl Renderer {
         let mut batches_skipped = 0u32;
 
         for pass in frame.passes.iter() {
-            // Draw picture cache targets.
             for picture_target in &pass.picture_cache {
                 let cache_tex_id = match picture_target.surface {
                     ResolvedSurfaceTexture::TextureCache { ref texture } => {
                         match *texture {
                             TextureSource::TextureCache(id, _) => id,
-                            _ => continue,
+                            _ => {
+                                info!("wgpu: pic target skipped: non-TextureCache texture source");
+                                continue;
+                            }
                         }
                     }
-                    _ => continue, // Native surfaces not supported yet.
+                    _ => {
+                        info!("wgpu: pic target skipped: native surface");
+                        continue;
+                    }
                 };
 
                 let target_wgpu = match self.wgpu_texture_cache.get(&cache_tex_id) {
                     Some(t) => t,
                     None => {
+                        info!("wgpu: pic target {:?} skipped: not in wgpu_texture_cache", cache_tex_id);
                         batches_skipped += 1;
                         continue;
                     }
                 };
 
                 let target_view = target_wgpu.create_view();
-                let target_w = picture_target.dirty_rect.width() as u32;
-                let target_h = picture_target.dirty_rect.height() as u32;
+                let target_fmt = target_wgpu.format();
+                // Use the full tile texture dimensions for the ortho projection,
+                // NOT the dirty rect.  The dirty rect controls the scissor (which
+                // limits what we actually draw) but the projection must map the
+                // full tile coordinate space so that vertex positions produced by
+                // the shader land in the right place.  The GL path does the same:
+                // it projects over draw_target.dimensions() (full texture size).
+                let target_w = target_wgpu.width;
+                let target_h = target_wgpu.height;
                 if target_w == 0 || target_h == 0 {
+                    info!("wgpu: pic target {:?} skipped: dirty rect {}x{}", cache_tex_id, target_w, target_h);
                     continue;
                 }
 
@@ -1935,7 +1986,18 @@ impl Renderer {
                 };
                 let depth_ref = depth_view.as_ref();
 
-                let mut need_clear = true;
+                // Use the target's clear_color if available, otherwise
+                // transparent black (matching the GL backend's default).
+                let tile_clear_color: wgpu::Color = match picture_target.clear_color {
+                    Some(c) => wgpu::Color {
+                        r: c.r as f64,
+                        g: c.g as f64,
+                        b: c.b as f64,
+                        a: c.a as f64,
+                    },
+                    None => wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
+                };
+                let mut pending_clear: Option<wgpu::Color> = Some(tile_clear_color);
 
                 // Helper closure to draw a single batch.
                 macro_rules! draw_batch {
@@ -1957,6 +2019,7 @@ impl Renderer {
                             }
                         });
 
+                        // One-shot: dump the glyph atlas texture (sColor0) for
                         let textures = TextureBindings {
                             color0: color_views[0].as_ref(),
                             color1: color_views[1].as_ref(),
@@ -1981,14 +2044,14 @@ impl Renderer {
                             &target_view,
                             target_w,
                             target_h,
+                            target_fmt,
                             &textures,
                             instance_bytes,
                             $batch.instances.len() as u32,
-                            need_clear,
+                            pending_clear.take(),
                             scissor,
                             depth_ref,
                         );
-                        need_clear = false;
                         batches_drawn += 1;
                     }};
                 }
@@ -2009,6 +2072,7 @@ impl Renderer {
                 for batch in alpha_batch_container.alpha_batches.iter() {
                     draw_batch!(batch, true, alpha_depth);
                 }
+
             }
 
             // Draw cs_* cache tasks, clip masks, and quad batches in
@@ -2044,6 +2108,7 @@ impl Renderer {
                     }
                 };
                 let target_view = target_wgpu.create_view();
+                let target_fmt = target_wgpu.format();
                 let target_w = target_wgpu.width;
                 let target_h = target_wgpu.height;
 
@@ -2056,6 +2121,7 @@ impl Renderer {
                         &target_view,
                         target_w,
                         target_h,
+                        target_fmt,
                         gpu_cache_view,
                         &mut batches_drawn,
                     );
@@ -2070,6 +2136,7 @@ impl Renderer {
                         &target_view,
                         target_w,
                         target_h,
+                        target_fmt,
                         &ft_transforms_view,
                         gpu_cache_view,
                         WgpuBlendMode::None,
@@ -2084,6 +2151,7 @@ impl Renderer {
                         &target_view,
                         target_w,
                         target_h,
+                        target_fmt,
                         &ft_transforms_view,
                         gpu_cache_view,
                         WgpuBlendMode::MultiplyClipMask,
@@ -2101,6 +2169,7 @@ impl Renderer {
                         &target_view,
                         target_w,
                         target_h,
+                        target_fmt,
                         &ft_transforms_view,
                         &ft_tasks_view,
                         &ft_prim_f_view,
@@ -2139,6 +2208,7 @@ impl Renderer {
     ) -> (&'static str, &'static str) {
         use crate::batch::BatchKind;
         use crate::batch::BrushBatchKind;
+        use glyph_rasterizer::GlyphFormat;
 
         match key.kind {
             BatchKind::Brush(BrushBatchKind::Solid) => {
@@ -2162,7 +2232,15 @@ impl Renderer {
             BatchKind::Brush(BrushBatchKind::YuvImage(..)) => {
                 ("brush_yuv_image", if is_alpha { "ALPHA_PASS,TEXTURE_2D,YUV" } else { "TEXTURE_2D,YUV" })
             }
-            BatchKind::TextRun(..) => ("ps_text_run", "ALPHA_PASS,TEXTURE_2D"),
+            BatchKind::TextRun(glyph_format) => {
+                match glyph_format {
+                    GlyphFormat::TransformedAlpha |
+                    GlyphFormat::TransformedSubpixel => {
+                        ("ps_text_run", "ALPHA_PASS,GLYPH_TRANSFORM,TEXTURE_2D")
+                    }
+                    _ => ("ps_text_run", "ALPHA_PASS,TEXTURE_2D"),
+                }
+            }
             _ => ("brush_solid", if is_alpha { "ALPHA_PASS" } else { "" }),
         }
     }
@@ -2221,6 +2299,7 @@ impl Renderer {
         target_view: &wgpu::TextureView,
         target_w: u32,
         target_h: u32,
+        target_format: wgpu::TextureFormat,
         transform_palette_view: &wgpu::TextureView,
         gpu_cache_view: Option<&wgpu::TextureView>,
         blend_mode: crate::device::WgpuBlendMode,
@@ -2250,10 +2329,11 @@ impl Renderer {
                 target_view,
                 target_w,
                 target_h,
+                target_format,
                 &textures,
                 instance_bytes,
                 list.slow_rectangles.len() as u32,
-                false, // don't clear — clip masks are pre-cleared
+                None,  // don't clear — clip masks are pre-cleared
                 None,  // no scissor for clip masks
                 None,  // no depth
             );
@@ -2282,10 +2362,11 @@ impl Renderer {
                 target_view,
                 target_w,
                 target_h,
+                target_format,
                 &textures,
                 instance_bytes,
                 list.fast_rectangles.len() as u32,
-                false,
+                None,
                 None, // no scissor for clip masks
                 None, // no depth
             );
@@ -2315,10 +2396,11 @@ impl Renderer {
                 target_view,
                 target_w,
                 target_h,
+                target_format,
                 &textures,
                 instance_bytes,
                 items.len() as u32,
-                false,
+                None,
                 None, // no scissor for clip masks
                 None, // no depth
             );
@@ -2342,6 +2424,7 @@ impl Renderer {
         target_view: &wgpu::TextureView,
         target_w: u32,
         target_h: u32,
+        target_format: wgpu::TextureFormat,
         transform_palette_view: &wgpu::TextureView,
         render_tasks_view: &wgpu::TextureView,
         prim_headers_f_view: &wgpu::TextureView,
@@ -2404,10 +2487,11 @@ impl Renderer {
                     target_view,
                     target_w,
                     target_h,
+                    target_format,
                     &textures,
                     instance_bytes,
                     instances.len() as u32,
-                    false,
+                    None,  // no clear for opaque quads
                     None, // no scissor for opaque quads
                     None, // no depth
                 );
@@ -2453,10 +2537,11 @@ impl Renderer {
                     target_view,
                     target_w,
                     target_h,
+                    target_format,
                     &textures,
                     instance_bytes,
                     instances.len() as u32,
-                    false,
+                    None,
                     scissor,
                     None, // no depth
                 );
@@ -2475,6 +2560,7 @@ impl Renderer {
         target_view: &wgpu::TextureView,
         target_w: u32,
         target_h: u32,
+        target_format: wgpu::TextureFormat,
         gpu_cache_view: Option<&wgpu::TextureView>,
         batches_drawn: &mut u32,
     ) {
@@ -2503,10 +2589,11 @@ impl Renderer {
                         target_view,
                         target_w,
                         target_h,
+                        target_format,
                         &$textures,
                         instance_bytes,
                         $instances.len() as u32,
-                        false,
+                        None,
                         None,
                         None, // no depth
                     );
@@ -2571,10 +2658,11 @@ impl Renderer {
                 target_view,
                 target_w,
                 target_h,
+                target_format,
                 &textures,
                 instance_bytes,
                 blurs.len() as u32,
-                false,
+                None,
                 None,
                 None, // no depth
             );
@@ -2612,10 +2700,11 @@ impl Renderer {
                 target_view,
                 target_w,
                 target_h,
+                target_format,
                 &textures,
                 instance_bytes,
                 scalings.len() as u32,
-                false,
+                None,
                 None,
                 None, // no depth
             );
