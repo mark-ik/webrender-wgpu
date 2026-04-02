@@ -36,6 +36,9 @@ args:
   - angle:
       long: angle
       help: Enable ANGLE rendering (on Windows only)
+  - wgpu:
+      long: wgpu
+      help: Use wgpu backend instead of OpenGL (requires wgpu_backend feature)
   - compositor:
       long: compositor
       help: Enable native OS compositor integration

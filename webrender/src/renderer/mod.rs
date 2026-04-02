@@ -1481,6 +1481,11 @@ pub struct Renderer {
     /// Persistent per-frame data textures reused across frames.
     #[cfg(feature = "wgpu_backend")]
     wgpu_frame_data: Option<WgpuFrameDataTextures>,
+
+    /// Offscreen render target holding the last composited frame.
+    /// Used by `read_pixels_rgba8()` for wgpu readback (e.g. wrench reftests).
+    #[cfg(feature = "wgpu_backend")]
+    wgpu_readback_texture: Option<crate::device::WgpuTexture>,
 }
 
 #[derive(Debug)]
@@ -1613,20 +1618,19 @@ impl Renderer {
             None => return Ok(results),
         };
 
-        // Acquire the render target: surface texture for presentation, else offscreen.
+        // Always render to an offscreen RT so pixels survive present() for readback.
         let w = device_size.width as u32;
         let h = device_size.height as u32;
         let surface_texture = wgpu_dev.acquire_surface_texture();
-        let offscreen_rt = if surface_texture.is_none() {
-            Some(wgpu_dev.create_render_target(w, h))
-        } else {
-            None
-        };
-        let target_view = if let Some(ref st) = surface_texture {
-            st.texture.create_view(&wgpu::TextureViewDescriptor::default())
-        } else {
-            offscreen_rt.as_ref().unwrap().create_view()
-        };
+
+        // Reuse the readback texture if dimensions match, else (re)create.
+        let reuse = self.wgpu_readback_texture.as_ref()
+            .map(|t| t.width == w && t.height == h)
+            .unwrap_or(false);
+        if !reuse {
+            self.wgpu_readback_texture = Some(wgpu_dev.create_render_target(w, h));
+        }
+        let target_view = self.wgpu_readback_texture.as_ref().unwrap().create_view();
 
         // Collect composite tiles into batches by type.
         let composite_state = &doc.frame.composite_state;
@@ -1813,11 +1817,35 @@ impl Renderer {
             );
         }
 
-        // Flush any pending GPU commands before presenting.
+        // Flush any pending GPU commands before copying/presenting.
         wgpu_dev.flush_encoder();
 
-        // Present the surface texture if we rendered to one.
+        // Copy offscreen RT to surface texture for display, then present.
         if let Some(st) = surface_texture {
+            if let Some(ref rt) = self.wgpu_readback_texture {
+                let mut encoder = wgpu_dev.take_encoder();
+                encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &rt.texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &st.texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d {
+                        width: w,
+                        height: h,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                wgpu_dev.return_encoder(encoder);
+                wgpu_dev.flush_encoder();
+            }
             st.present();
         }
 
@@ -2832,13 +2860,25 @@ impl Renderer {
     }
 
     pub fn get_max_texture_size(&self) -> i32 {
+        #[cfg(feature = "wgpu_backend")]
+        if self.is_wgpu_only() {
+            return 16384;
+        }
         #[cfg(feature = "gl_backend")]
         { self.device.as_ref().unwrap().max_texture_size() }
         #[cfg(not(feature = "gl_backend"))]
-        { 8192 } // reasonable default for wgpu-only
+        { 8192 }
     }
 
     pub fn get_graphics_api_info(&self) -> GraphicsApiInfo {
+        #[cfg(feature = "wgpu_backend")]
+        if self.is_wgpu_only() {
+            return GraphicsApiInfo {
+                kind: GraphicsApi::OpenGL, // TODO: add Wgpu variant
+                version: "wgpu".to_string(),
+                renderer: "wgpu".to_string(),
+            };
+        }
         #[cfg(feature = "gl_backend")]
         {
             GraphicsApiInfo {
@@ -2850,7 +2890,7 @@ impl Renderer {
         #[cfg(not(feature = "gl_backend"))]
         {
             GraphicsApiInfo {
-                kind: GraphicsApi::OpenGL, // TODO: add Wgpu variant
+                kind: GraphicsApi::OpenGL,
                 version: "wgpu".to_string(),
                 renderer: "wgpu".to_string(),
             }
@@ -2858,6 +2898,10 @@ impl Renderer {
     }
 
     pub fn preferred_color_format(&self) -> ImageFormat {
+        #[cfg(feature = "wgpu_backend")]
+        if self.is_wgpu_only() {
+            return ImageFormat::RGBA8;
+        }
         #[cfg(feature = "gl_backend")]
         { self.device.as_ref().unwrap().preferred_color_formats().external }
         #[cfg(not(feature = "gl_backend"))]
@@ -7968,13 +8012,75 @@ impl Renderer {
 
     /// Pass-through to `Device::read_pixels_into`, used by Gecko's WR bindings.
     pub fn read_pixels_into(&mut self, rect: FramebufferIntRect, format: ImageFormat, output: &mut [u8]) {
+        #[cfg(feature = "wgpu_backend")]
+        if self.is_wgpu_only() {
+            // For wgpu, delegate to read_pixels_rgba8_wgpu and truncate/convert.
+            let rgba = self.read_pixels_rgba8_wgpu(rect);
+            let len = output.len().min(rgba.len());
+            output[..len].copy_from_slice(&rgba[..len]);
+            return;
+        }
         self.device.as_mut().unwrap().read_pixels_into(rect, format, output);
     }
 
     pub fn read_pixels_rgba8(&mut self, rect: FramebufferIntRect) -> Vec<u8> {
+        // wgpu path: read from the offscreen readback texture.
+        #[cfg(feature = "wgpu_backend")]
+        if self.is_wgpu_only() {
+            return self.read_pixels_rgba8_wgpu(rect);
+        }
+
         let mut pixels = vec![0; (rect.area() * 4) as usize];
         self.device.as_mut().unwrap().read_pixels_into(rect, ImageFormat::RGBA8, &mut pixels);
         pixels
+    }
+
+    /// Read back pixels from the wgpu readback texture in RGBA8 format.
+    /// The rect uses GL conventions (origin at bottom-left), so we flip Y.
+    #[cfg(feature = "wgpu_backend")]
+    fn read_pixels_rgba8_wgpu(&mut self, rect: FramebufferIntRect) -> Vec<u8> {
+        if self.wgpu_readback_texture.is_none() || self.wgpu_device.is_none() {
+            return vec![0; (rect.area() * 4) as usize];
+        }
+
+        // Take the readback texture out to avoid borrow conflict with wgpu_device.
+        let rt = self.wgpu_readback_texture.take().unwrap();
+        let wgpu_dev = self.wgpu_device.as_mut().unwrap();
+
+        // Read the full texture in BGRA format.
+        let full_w = rt.width as usize;
+        let full_h = rt.height as usize;
+        let mut full_pixels = vec![0u8; full_w * full_h * 4];
+        wgpu_dev.read_texture_pixels(&rt, &mut full_pixels);
+
+        // Put the readback texture back.
+        self.wgpu_readback_texture = Some(rt);
+
+        // Extract the requested rect, flipping Y (GL has origin at bottom-left,
+        // wgpu texture has origin at top-left).
+        let rx = rect.min.x as usize;
+        let ry = rect.min.y as usize;
+        let rw = rect.width() as usize;
+        let rh = rect.height() as usize;
+        let mut output = vec![0u8; rw * rh * 4];
+
+        for row in 0..rh {
+            // GL rect Y=0 is bottom of framebuffer. In the texture, bottom row
+            // is at index (full_h - 1). So GL row `ry + row` maps to texture
+            // row `full_h - 1 - (ry + row)`.
+            let src_row = full_h - 1 - (ry + row);
+            let src_start = (src_row * full_w + rx) * 4;
+            let dst_start = row * rw * 4;
+            output[dst_start..dst_start + rw * 4]
+                .copy_from_slice(&full_pixels[src_start..src_start + rw * 4]);
+        }
+
+        // Convert BGRA → RGBA in place.
+        for pixel in output.chunks_exact_mut(4) {
+            pixel.swap(0, 2); // swap B and R
+        }
+
+        output
     }
 
     // De-initialize the Renderer safely, assuming the GL is still alive and active.

@@ -729,7 +729,7 @@ impl YamlFrameReader {
 
             let external_image_data =
                 self.external_image_handler.as_mut().unwrap().add_image(
-                    &wrench.renderer.device,
+                    wrench.renderer.device.as_ref().expect("external images require GL device"),
                     descriptor,
                     external_target,
                     image_data

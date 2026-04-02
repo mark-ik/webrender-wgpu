@@ -33,7 +33,7 @@ pub(crate) fn as_byte_slice<T>(data: &[T]) -> &[u8] {
 
 /// A wgpu-backed texture handle.
 pub struct WgpuTexture {
-    texture: wgpu::Texture,
+    pub(crate) texture: wgpu::Texture,
     format: wgpu::TextureFormat,
     pub width: u32,
     pub height: u32,
@@ -655,7 +655,7 @@ impl WgpuDevice {
             .unwrap_or(surface_caps.formats[0]);
 
         let surface_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
             format: surface_format,
             width,
             height,
