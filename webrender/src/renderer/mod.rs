@@ -1505,6 +1505,12 @@ pub struct Renderer {
     /// holds the Arc only while the target is set.
     #[cfg(feature = "wgpu_backend")]
     wgpu_host_render_target: Option<(std::sync::Arc<wgpu::Texture>, u32, u32)>,
+
+    /// Per-frame render target view provided by `render_to_view()`.
+    /// Set immediately before the render call and cleared immediately after.
+    /// Takes priority over `wgpu_host_render_target` and the internal readback texture.
+    #[cfg(feature = "wgpu_backend")]
+    wgpu_frame_view_override: Option<wgpu::TextureView>,
 }
 
 #[derive(Debug)]
@@ -1655,9 +1661,17 @@ impl Renderer {
         let surface_texture = wgpu_dev.acquire_surface_texture();
 
         // Determine the render target view.
-        // Priority: host-provided texture > internal readback texture.
+        // Priority: per-frame view > persistent host texture > internal readback texture.
+        //
+        // For the per-frame case, `.take()` moves the TextureView out of the struct field
+        // into a local owned variable, which lets us borrow `self` mutably again below.
+        // `render_to_view()` will set `wgpu_frame_view_override = None` on return anyway.
+        let frame_view_override = self.wgpu_frame_view_override.take();
         let target_view: wgpu::TextureView;
-        if let Some((ref host_tex, hw, hh)) = self.wgpu_host_render_target {
+        if let Some(fv) = frame_view_override {
+            // Per-frame override: host called render_to_view() with a swap-chain frame.
+            target_view = fv;
+        } else if let Some((ref host_tex, hw, hh)) = self.wgpu_host_render_target {
             // Use host texture directly — zero-copy, no internal allocation needed.
             // If the host resized their texture they must call set_render_target again.
             debug_assert!(
@@ -4582,6 +4596,35 @@ impl Renderer {
     #[cfg(feature = "wgpu_backend")]
     pub fn unset_render_target(&mut self) {
         self.wgpu_host_render_target = None;
+    }
+
+    /// Render a frame directly into a caller-provided [`wgpu::TextureView`].
+    ///
+    /// Use this when the target is a swap-chain frame or any other transient texture
+    /// that can't be stored as an `Arc` — for example:
+    ///
+    /// ```rust,ignore
+    /// let frame = surface.get_current_texture()?;
+    /// let view = frame.texture.create_view(&Default::default());
+    /// renderer.render_to_view(view, device_size, frame_id)?;
+    /// frame.present();
+    /// ```
+    ///
+    /// This takes priority over `set_render_target()` for the duration of this call.
+    /// The view is consumed (dropped) when rendering is complete.
+    #[cfg(feature = "wgpu_backend")]
+    pub fn render_to_view(
+        &mut self,
+        target_view: wgpu::TextureView,
+        framebuffer_size: api::units::DeviceIntSize,
+        frame_id: usize,
+    ) -> Result<RenderResults, Vec<RendererError>> {
+        self.wgpu_frame_view_override = Some(target_view);
+        let result = self.render(framebuffer_size, frame_id);
+        // The view is already `take()`n inside render_wgpu; this clears any
+        // leftover in case render() bailed out before reaching render_wgpu.
+        self.wgpu_frame_view_override = None;
+        result
     }
 
     /// Returns GPU timing data (in milliseconds) for each instrumented begin/end pair in the last frame.

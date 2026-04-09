@@ -535,3 +535,138 @@ fn two_renderers_interleaved_produce_correct_pixels() {
     // A (red) and B (yellow) must differ — interleaved renders don't bleed.
     assert_ne!(pixels_a2, pixels_b1, "A (red) and B (yellow) must differ");
 }
+
+// ──────────────── 5. render_to_view (per-frame surface texture) ──────────────
+
+/// Verify that `render_to_view()` writes into a caller-provided TextureView.
+///
+/// Allocates a `RENDER_ATTACHMENT | COPY_SRC` texture, creates a view, passes
+/// it to `render_to_view()`, then reads back the pixels via a staging buffer
+/// and checks the quadrant colours.
+#[test]
+fn render_to_view_writes_into_caller_texture() {
+    let Some(adapter) = make_adapter() else {
+        eprintln!("render_to_view test: no adapter — skipping");
+        return;
+    };
+    let (device, queue) = make_device(&adapter);
+
+    const W: u32 = 256;
+    const H: u32 = 256;
+
+    // Allocate the "swap-chain-like" target texture on the host device.
+    let target_tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("host frame texture"),
+        size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Bgra8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let target_view = target_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
+    // Build a WebRender instance on the same device.
+    let opts = webrender::WebRenderOptions {
+        clear_color: ColorF::new(0.0, 0.0, 0.0, 1.0),
+        ..Default::default()
+    };
+    let (mut renderer, sender) = webrender::create_webrender_instance_with_backend(
+        RendererBackend::WgpuShared {
+            device: device.clone(),
+            queue: queue.clone(),
+        },
+        Box::new(NoopNotifier),
+        opts,
+        None,
+    )
+    .expect("Failed to create WebRender");
+
+    let device_size = DeviceIntSize::new(W as i32, H as i32);
+    let mut api = sender.create_api();
+    let document = api.add_document(device_size);
+    let pipeline = PipelineId(9, 9);
+
+    let mut builder = DisplayListBuilder::new(pipeline);
+    builder.begin();
+    let sac = SpaceAndClipInfo::root_scroll(pipeline);
+    for (x, y, r, g, b) in [
+        (0.0f32,  0.0,   1.0, 0.0, 0.0), // red
+        (128.0,   0.0,   0.0, 1.0, 0.0), // green
+        (0.0,     128.0, 0.0, 0.0, 1.0), // blue
+        (128.0,   128.0, 1.0, 1.0, 0.0), // yellow
+    ] {
+        let rect = LayoutRect::from_origin_and_size(
+            LayoutPoint::new(x, y), LayoutSize::new(128.0, 128.0),
+        );
+        builder.push_rect(&CommonItemProperties::new(rect, sac), rect, ColorF::new(r, g, b, 1.0));
+    }
+    let mut txn = Transaction::new();
+    txn.set_display_list(Epoch(0), builder.end());
+    txn.set_root_pipeline(pipeline);
+    txn.generate_frame(0, true, false, RenderReasons::empty());
+    api.send_transaction(document, txn);
+    api.flush_scene_builder();
+    renderer.update();
+
+    // Render into the caller-provided view.
+    renderer.render_to_view(target_view, device_size, 0).expect("render_to_view failed");
+
+    // Read back via staging buffer.
+    let bytes_per_row = W * 4;
+    let staging = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("staging"),
+        size: (bytes_per_row * H) as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut enc = device.create_command_encoder(&Default::default());
+    enc.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: &target_tex,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &staging,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(bytes_per_row),
+                rows_per_image: None,
+            },
+        },
+        wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+    );
+    queue.submit(Some(enc.finish()));
+
+    let slice = staging.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+    let _ = device.poll(wgpu::PollType::Wait);
+    rx.recv().expect("map failed").expect("map error");
+
+    let data = slice.get_mapped_range();
+    // Bgra8Unorm: check quadrant centres (B G R A byte order).
+    let pixel = |x: u32, y: u32| -> (u8, u8, u8) {
+        let off = (y * bytes_per_row + x * 4) as usize;
+        // BGRA → (R, G, B)
+        (data[off + 2], data[off + 1], data[off])
+    };
+
+    let (r1, g1, b1) = pixel(64, 64);
+    let (r2, g2, b2) = pixel(192, 64);
+    let (r3, g3, b3) = pixel(64, 192);
+    let (r4, g4, b4) = pixel(192, 192);
+
+    drop(data);
+    staging.unmap();
+    renderer.deinit();
+
+    let close = |a: u8, b: u8| (a as i16 - b as i16).unsigned_abs() < 10;
+    assert!(close(r1, 255) && close(g1, 0) && close(b1, 0),   "TL should be red,    got ({r1},{g1},{b1})");
+    assert!(close(r2, 0) && close(g2, 255) && close(b2, 0),   "TR should be green,  got ({r2},{g2},{b2})");
+    assert!(close(r3, 0) && close(g3, 0) && close(b3, 255),   "BL should be blue,   got ({r3},{g3},{b3})");
+    assert!(close(r4, 255) && close(g4, 255) && close(b4, 0), "BR should be yellow, got ({r4},{g4},{b4})");
+}
