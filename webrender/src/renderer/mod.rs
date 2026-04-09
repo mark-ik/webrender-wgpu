@@ -4346,6 +4346,43 @@ impl Renderer {
         self.wgpu_readback_texture.as_ref()
     }
 
+    /// Return the composited output texture as a raw hal texture handle.
+    ///
+    /// This is the zero-copy entry point for native renderers: instead of
+    /// reading pixels back to the CPU, the host can sample WebRender's output
+    /// directly in its own Vulkan/Metal/DX12 render pass.
+    ///
+    /// # Usage
+    ///
+    /// ```rust,ignore
+    /// // Vulkan example — get the VkImage and wrap it in a semaphore-aware pass.
+    /// use wgpu::wgc::api::Vulkan;
+    /// if let Some(vk_tex) = unsafe { renderer.composite_output_hal::<Vulkan>() } {
+    ///     let raw_image: vk::Image = vk_tex.raw_handle();
+    ///     // bind raw_image to your Vulkan descriptor set...
+    /// }
+    /// ```
+    ///
+    /// # Safety
+    ///
+    /// The returned handle is borrowed from the internal texture.  The caller
+    /// must not use it after the next `render()` call (which may reallocate
+    /// the texture on resize) or after the `Renderer` is dropped.
+    ///
+    /// Only valid when the current backend is `A` (e.g. call with
+    /// `wgpu::wgc::api::Vulkan` only when running on a Vulkan adapter).
+    /// Returns `None` if there is no composited output yet or if the backend
+    /// does not match `A`.
+    #[cfg(feature = "wgpu_backend")]
+    pub unsafe fn composite_output_hal<A: wgpu::wgc::hal_api::HalApi>(
+        &self,
+    ) -> Option<impl std::ops::Deref<Target = <A as wgpu_hal::Api>::Texture> + '_> {
+        let texture = &self.wgpu_readback_texture.as_ref()?.texture;
+        // SAFETY: caller guarantees the backend matches A and the texture
+        // is not reallocated while the returned reference is alive.
+        unsafe { texture.as_hal::<A>() }
+    }
+
     /// Update the current position of the debug cursor.
     pub fn set_cursor_position(
         &mut self,
@@ -4357,7 +4394,9 @@ impl Renderer {
     pub fn get_max_texture_size(&self) -> i32 {
         #[cfg(feature = "wgpu_backend")]
         if self.is_wgpu_only() {
-            return 16384;
+            return self.wgpu_device.as_ref()
+                .map(|d| d.max_texture_size())
+                .unwrap_or(8192);
         }
         #[cfg(feature = "gl_backend")]
         { self.device.as_ref().unwrap().max_texture_size() }
