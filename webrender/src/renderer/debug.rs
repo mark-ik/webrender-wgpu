@@ -24,9 +24,11 @@ fn create_debug_font_texture<D: GpuDevice<Texture = Texture>>(device: &mut D) ->
     font_texture
 }
 
+#[cfg(feature = "gl_backend")]
 fn draw_indexed_debug_triangles<D: GpuDevice>(device: &mut D, index_count: usize) {
     device.draw_triangles_u32(0, index_count as i32);
 }
+
 
 #[derive(Debug, Copy, Clone)]
 enum DebugSampler {

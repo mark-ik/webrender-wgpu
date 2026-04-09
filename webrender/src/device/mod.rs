@@ -2,78 +2,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-// ── Shared types ─────────────────────────────────────────────────────────────
-//
-// When `gl_backend` is active, GpuFrameId / TextureFilter / TextureFormatPair
-// are already defined inside `device/gl.rs` and re-exported via `pub use
-// self::gl::*`.  We only define them here for non-GL backends.
-
-#[cfg(not(feature = "gl_backend"))]
-mod shared_types {
-    use std::ops::Add;
-
-    /// Sequence number for rendered frames, as tracked by the device layer.
-    #[derive(Debug, Copy, Clone, PartialEq, Ord, Eq, PartialOrd)]
-    #[cfg_attr(feature = "capture", derive(Serialize))]
-    #[cfg_attr(feature = "replay", derive(Deserialize))]
-    pub struct GpuFrameId(usize);
-
-    impl GpuFrameId {
-        pub fn new(value: usize) -> Self {
-            GpuFrameId(value)
-        }
-    }
-
-    impl Add<usize> for GpuFrameId {
-        type Output = GpuFrameId;
-        fn add(self, other: usize) -> GpuFrameId {
-            GpuFrameId(self.0 + other)
-        }
-    }
-
-    /// Texture sampling filter.
-    #[repr(u32)]
-    #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-    #[cfg_attr(feature = "capture", derive(Serialize))]
-    #[cfg_attr(feature = "replay", derive(Deserialize))]
-    pub enum TextureFilter {
-        Nearest,
-        Linear,
-        Trilinear,
-    }
-
-    /// Pair of internal (GPU-native) and external (user-provided) texture formats.
-    #[derive(Clone, Debug)]
-    #[cfg_attr(feature = "capture", derive(Serialize))]
-    #[cfg_attr(feature = "replay", derive(Deserialize))]
-    pub struct TextureFormatPair<T> {
-        pub internal: T,
-        pub external: T,
-    }
-
-    impl<T: Copy> From<T> for TextureFormatPair<T> {
-        fn from(value: T) -> Self {
-            TextureFormatPair {
-                internal: value,
-                external: value,
-            }
-        }
-    }
-}
-
-#[cfg(not(feature = "gl_backend"))]
-pub use self::shared_types::*;
-
-/// Plain old data that can be used to initialize a texture.
-pub unsafe trait Texel: Copy + Default {
-    fn image_format() -> api::ImageFormat;
-}
-
-unsafe impl Texel for u8 {
-    fn image_format() -> api::ImageFormat {
-        api::ImageFormat::R8
-    }
-}
+// Shared types (GpuFrameId, TextureFilter, TextureFormatPair, Texel, …)
+// live in shared.rs and are always re-exported, regardless of which backend
+// features are enabled.
+mod shared;
+pub use self::shared::*;
 
 /// Metadata used when allocating a texture as a render target.
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -84,6 +17,15 @@ pub struct RenderTargetInfo {
 }
 
 // ── GpuDevice trait ───────────────────────────────────────────────────────────
+//
+// A backend-agnostic interface over the GPU device.  Both `Device` (GL) and
+// `WgpuDevice` implement this trait so that generic initialisation helpers
+// (e.g. uploading the dither matrix or debug-font atlas) can be written once
+// and used by either backend.
+//
+// The trait is intentionally narrow: it covers the operations needed during
+// Renderer construction and for texture-cache bootstrap.  Higher-level drawing
+// is backend-specific and lives in `renderer/mod.rs`.
 
 pub trait GpuDevice {
     type Texture;
@@ -116,24 +58,71 @@ pub trait GpuDevice {
     );
 }
 
+// ── RendererBackend enum ──────────────────────────────────────────────────────
+//
+// The top-level discriminant used by `create_webrender_instance_with_backend`.
+// All three variants (GL, wgpu with owned device, wgpu with shared/hal device)
+// ultimately produce a renderer that satisfies the same contract; they only
+// differ in how the GPU context is acquired.
+
 #[cfg(feature = "gl_backend")]
 use std::rc::Rc;
-
-#[cfg(feature = "gl_backend")]
-use crate::renderer::init::WebRenderOptions;
 #[cfg(feature = "gl_backend")]
 use gleam::gl::Gl as GlApi;
-
 #[cfg(feature = "gl_backend")]
+use crate::renderer::init::WebRenderOptions;
+
 pub enum RendererBackend {
+    /// OpenGL backend.  WebRender owns the GL context via the provided gleam
+    /// handle.
+    #[cfg(feature = "gl_backend")]
     Gl { gl: Rc<dyn GlApi> },
+
+    /// wgpu backend.  WebRender creates its own adapter + device, optionally
+    /// targeting a window surface for presentation.  Pass `None` for both
+    /// `instance` and `surface` for headless mode.
+    #[cfg(feature = "wgpu_backend")]
+    Wgpu {
+        instance: Option<wgpu::Instance>,
+        surface: Option<wgpu::Surface<'static>>,
+        width: u32,
+        height: u32,
+    },
+
+    /// Shared-device wgpu backend.  The host application owns the
+    /// `wgpu::Device` + `wgpu::Queue` (e.g. created by egui or another
+    /// framework).  WebRender renders to offscreen textures and the host
+    /// composites using `Renderer::composite_output()`.
+    #[cfg(feature = "wgpu_backend")]
+    WgpuShared {
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+    },
+
+    /// wgpu-hal backend.  The host provides a factory closure that produces a
+    /// `(wgpu::Device, wgpu::Queue)` pair — typically wrapping a raw
+    /// Vulkan / DX12 / Metal device via
+    /// `wgpu::Adapter::create_device_from_hal()`.  After device creation this
+    /// is functionally identical to `WgpuShared`.
+    #[cfg(feature = "wgpu_backend")]
+    WgpuHal {
+        device_factory: Box<dyn FnOnce() -> (wgpu::Device, wgpu::Queue) + Send>,
+    },
 }
 
 #[cfg(feature = "gl_backend")]
 impl RendererBackend {
-    pub fn create_device(self, options: &mut WebRenderOptions) -> Device {
+    /// Consume the backend descriptor and construct a GL `Device`.
+    /// Called from `create_webrender_instance_with_backend` for the GL path.
+    pub fn create_gl_device(self, options: &mut WebRenderOptions) -> Device {
         options.prepare_for_device_creation();
-        self.into_device(options.take_device_config())
+        match self {
+            RendererBackend::Gl { gl } => {
+                Device::new(gl, options.take_device_config())
+            }
+            #[cfg(feature = "wgpu_backend")]
+            _ => panic!("create_gl_device called on a non-GL RendererBackend"),
+        }
     }
 }
 
@@ -152,4 +141,8 @@ pub use self::query_gl as query;
 #[cfg(feature = "wgpu_backend")]
 mod wgpu_device;
 #[cfg(feature = "wgpu_backend")]
-pub use self::wgpu_device::WgpuDevice;
+pub use self::wgpu_device::{
+    WgpuDevice, WgpuTexture, WgpuBlendMode, WgpuDepthState, WgpuShaderVariant, TextureBindings,
+};
+#[cfg(feature = "wgpu_backend")]
+pub(crate) use self::wgpu_device::as_byte_slice;

@@ -875,8 +875,10 @@ impl Profiler {
     pub fn get(&self, id: usize) -> Option<f64> {
         self.counters[id].get()
     }
+}
 
-    #[cfg(feature = "gl_backend")]
+#[cfg(feature = "gl_backend")]
+impl Profiler {
     fn draw_counters(
         counters: &[Counter],
         selected: &[usize],
@@ -1469,7 +1471,9 @@ impl Profiler {
             }
         }
     }
+}
 
+impl Profiler {
     #[cfg(feature = "capture")]
     pub fn dump_stats(&self, sink: &mut dyn std::io::Write) -> std::io::Result<()> {
         for counter in &self.counters {

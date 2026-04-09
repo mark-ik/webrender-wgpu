@@ -3953,6 +3953,7 @@ dependencies = [
  "euclid",
  "gleam",
  "glutin",
+ "pollster",
  "rayon",
  "webrender",
  "winit",
@@ -3982,6 +3983,7 @@ version = "0.68.0"
 dependencies = [
  "bitflags 2.11.0",
  "lazy_static",
+ "naga",
  "serde",
 ]
 
@@ -4485,6 +4487,7 @@ dependencies = [
  "tracy-rs",
  "webrender",
  "webrender_build",
+ "wgpu",
  "winit",
  "yaml-rust2",
 ]

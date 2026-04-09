@@ -9,10 +9,10 @@ use api::{CrashAnnotator, CrashAnnotation, CrashAnnotatorGuard};
 use api::units::*;
 use euclid::default::Transform3D;
 use gleam::gl;
-use crate::device::Texel;
 use crate::device::query::{GpuDebugMethod, GpuProfiler};
 use crate::render_api::MemoryReport;
-use crate::internal_types::{FastHashMap, RenderTargetInfo, Swizzle, SwizzleSettings};
+use crate::internal_types::{FastHashMap, Swizzle, SwizzleSettings};
+use super::RenderTargetInfo;
 use crate::util::round_up_to_multiple;
 use crate::profiler;
 use log::Level;
@@ -26,7 +26,6 @@ use std::{
     mem,
     num::NonZeroUsize,
     os::raw::c_void,
-    ops::Add,
     path::PathBuf,
     ptr,
     rc::Rc,
@@ -41,27 +40,7 @@ use webrender_build::shader::{
 };
 use malloc_size_of::MallocSizeOfOps;
 
-/// Sequence number for frames, as tracked by the device layer.
-#[derive(Debug, Copy, Clone, PartialEq, Ord, Eq, PartialOrd)]
-#[cfg_attr(feature = "capture", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
-pub struct GpuFrameId(usize);
-
-impl GpuFrameId {
-    pub fn new(value: usize) -> Self {
-        GpuFrameId(value)
-    }
-}
-
-impl Add<usize> for GpuFrameId {
-    type Output = GpuFrameId;
-
-    fn add(self, other: usize) -> GpuFrameId {
-        GpuFrameId(self.0 + other)
-    }
-}
-
-pub struct TextureSlot(pub usize);
+use super::shared::{GpuFrameId, TextureSlot, TextureFilter, TextureFormatPair, Texel, TextureFlags};
 
 // In some places we need to temporarily bind a texture to any slot.
 const DEFAULT_TEXTURE: TextureSlot = TextureSlot(0);
@@ -71,36 +50,6 @@ pub enum DepthFunction {
     Always = gl::ALWAYS,
     Less = gl::LESS,
     LessEqual = gl::LEQUAL,
-}
-
-#[repr(u32)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "capture", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
-pub enum TextureFilter {
-    Nearest,
-    Linear,
-    Trilinear,
-}
-
-/// A structure defining a particular workflow of texture transfers.
-#[derive(Clone, Debug)]
-#[cfg_attr(feature = "capture", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
-pub struct TextureFormatPair<T> {
-    /// Format the GPU natively stores texels in.
-    pub internal: T,
-    /// Format we expect the users to provide the texels in.
-    pub external: T,
-}
-
-impl<T: Copy> From<T> for TextureFormatPair<T> {
-    fn from(value: T) -> Self {
-        TextureFormatPair {
-            internal: value,
-            external: value,
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -409,14 +358,6 @@ impl ExternalTexture {
     }
 }
 
-bitflags! {
-    #[derive(Default, Debug, Copy, PartialEq, Eq, Clone, PartialOrd, Ord, Hash)]
-    pub struct TextureFlags: u32 {
-        /// This texture corresponds to one of the shared texture caches.
-        const IS_SHARED_TEXTURE_CACHE = 1 << 0;
-    }
-}
-
 /// WebRender interface to an OpenGL texture.
 ///
 /// Because freeing a texture requires various device handles that are not
@@ -630,6 +571,12 @@ impl<'a> Drop for BoundPBO<'a> {
 
 #[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
 pub struct FBOId(gl::GLuint);
+
+impl FBOId {
+    pub const fn default() -> Self {
+        FBOId(0)
+    }
+}
 
 #[derive(PartialEq, Eq, Hash, Debug, Copy, Clone)]
 pub struct RBOId(gl::GLuint);
@@ -1449,7 +1396,7 @@ pub struct DeviceConfig {
 }
 
 impl Device {
-    fn new(mut gl: Rc<dyn gl::Gl>, config: DeviceConfig) -> Device {
+    pub(crate) fn new(mut gl: Rc<dyn gl::Gl>, config: DeviceConfig) -> Device {
         let DeviceConfig {
             crash_annotator,
             resource_override_path,
@@ -1478,6 +1425,7 @@ impl Device {
         info!("Renderer: {}", renderer_name);
         let version_string = gl.get_string(gl::VERSION);
         info!("Version: {}", version_string);
+        let gl_type = gl.get_type();
         info!("Max texture size: {}", max_texture_size);
 
         let mut extension_count = [0];
@@ -4254,14 +4202,6 @@ impl Device {
         }
 
         total
-    }
-}
-
-impl super::RendererBackend {
-    pub(super) fn into_device(self, config: DeviceConfig) -> Device {
-        match self {
-            super::RendererBackend::Gl { gl } => Device::new(gl, config),
-        }
     }
 }
 

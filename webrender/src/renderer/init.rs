@@ -12,9 +12,11 @@ pub use api::DebugFlags;
 use crate::bump_allocator::ChunkPool;
 use crate::render_api::{RenderApiSender, FrameMsg};
 use crate::composite::{CompositorKind, CompositorConfig};
-use crate::device::{
-    Device, DeviceConfig, GpuDevice, ProgramCache, RendererBackend, TextureFilter, UploadMethod, UploadPBOPool, VertexUsageHint,
-};
+use crate::device::{GpuDevice, RendererBackend, TextureFilter};
+#[cfg(feature = "gl_backend")]
+use crate::device::{DeviceConfig, UploadMethod, UploadPBOPool, VertexUsageHint, Device, ProgramCache};
+#[cfg(feature = "gl_backend")]
+use crate::device::query::GpuProfiler;
 use crate::frame_builder::FrameBuilderConfig;
 use crate::glyph_cache::GlyphCache;
 use glyph_rasterizer::{GlyphRasterThread, GlyphRasterizer, SharedFontResources};
@@ -28,11 +30,16 @@ use crate::scene_builder_thread::{SceneBuilderThread, SceneBuilderThreadChannels
 use crate::texture_cache::{TextureCache, TextureCacheConfig};
 use crate::picture_textures::PictureTextures;
 use crate::renderer::{
-    debug, gpu_cache, vertex,
-    Renderer, DebugOverlayState, BufferDamageTracker, PipelineInfo, TextureResolver,
-    RendererError, ShaderPrecacheFlags, VERTEX_DATA_TEXTURE_COUNT,
-    upload::UploadTexturePool,
-    shade::{Shaders, SharedShaders},
+    Renderer, DebugOverlayState, BufferDamageTracker, PipelineInfo,
+    RendererError,
+};
+use crate::renderer::{ShaderPrecacheFlags, SharedShaders};
+#[cfg(feature = "gl_backend")]
+use crate::renderer::{
+    debug, gpu_cache, vertex, gl,
+    TextureResolver,
+    upload::{RendererUploadState, UploadTexturePool},
+    shade::Shaders,
 };
 #[cfg(feature = "debugger")]
 use crate::debugger::Debugger;
@@ -54,6 +61,7 @@ use malloc_size_of::MallocSizeOfOps;
 
 /// Use this hint for all vertex data re-initialization. This allows
 /// the driver to better re-use RBOs internally.
+#[cfg(feature = "gl_backend")]
 pub const ONE_TIME_USAGE_HINT: VertexUsageHint = VertexUsageHint::Stream;
 
 /// Is only false if no WR instances have ever been created.
@@ -149,6 +157,7 @@ pub struct WebRenderOptions {
     pub enable_aa: bool,
     pub enable_dithering: bool,
     pub max_recorded_profiles: usize,
+    #[cfg(feature = "gl_backend")]
     pub precache_flags: ShaderPrecacheFlags,
     /// Enable sub-pixel anti-aliasing if a fast implementation is available.
     pub enable_subpixel_aa: bool,
@@ -156,6 +165,7 @@ pub struct WebRenderOptions {
     pub enable_clear_scissor: Option<bool>,
     pub max_internal_texture_size: Option<i32>,
     pub image_tiling_threshold: i32,
+    #[cfg(feature = "gl_backend")]
     pub upload_method: UploadMethod,
     /// The default size in bytes for PBOs used to upload texture data.
     pub upload_pbo_default_size: usize,
@@ -171,6 +181,7 @@ pub struct WebRenderOptions {
     pub crash_annotator: Option<Box<dyn CrashAnnotator>>,
     pub size_of_op: Option<VoidPtrToSizeFn>,
     pub enclosing_size_of_op: Option<VoidPtrToSizeFn>,
+    #[cfg(feature = "gl_backend")]
     pub cached_programs: Option<Rc<ProgramCache>>,
     pub debug_flags: DebugFlags,
     pub renderer_id: Option<u64>,
@@ -286,6 +297,7 @@ impl Default for WebRenderOptions {
             enable_dithering: false,
             debug_flags: DebugFlags::empty(),
             max_recorded_profiles: 0,
+            #[cfg(feature = "gl_backend")]
             precache_flags: ShaderPrecacheFlags::empty(),
             enable_subpixel_aa: false,
             clear_color: ColorF::new(1.0, 1.0, 1.0, 1.0),
@@ -294,6 +306,7 @@ impl Default for WebRenderOptions {
             image_tiling_threshold: 4096,
             // This is best as `Immediate` on Angle, or `Pixelbuffer(Dynamic)` on GL,
             // but we are unable to make this decision here, so picking the reasonable medium.
+            #[cfg(feature = "gl_backend")]
             upload_method: UploadMethod::PixelBuffer(ONE_TIME_USAGE_HINT),
             upload_pbo_default_size: 512 * 512 * 4,
             batched_upload_threshold: 512 * 512,
@@ -306,6 +319,7 @@ impl Default for WebRenderOptions {
             size_of_op: None,
             enclosing_size_of_op: None,
             renderer_id: None,
+            #[cfg(feature = "gl_backend")]
             cached_programs: None,
             scene_builder_hooks: None,
             render_backend_hooks: None,
@@ -358,17 +372,53 @@ impl Default for WebRenderOptions {
 /// let (renderer, sender) = Renderer::new(opts);
 /// ```
 /// [WebRenderOptions]: struct.WebRenderOptions.html
+#[cfg(feature = "gl_backend")]
 pub fn create_webrender_instance(
+    gl: Rc<dyn gleam::gl::Gl>,
+    notifier: Box<dyn RenderNotifier>,
+    options: WebRenderOptions,
+    shaders: Option<&SharedShaders>,
+) -> Result<(Renderer, RenderApiSender), RendererError> {
+    create_webrender_instance_with_backend(
+        RendererBackend::Gl { gl },
+        notifier,
+        options,
+        shaders,
+    )
+}
+
+pub fn create_webrender_instance_with_backend(
     backend: RendererBackend,
     notifier: Box<dyn RenderNotifier>,
     mut options: WebRenderOptions,
     shaders: Option<&SharedShaders>,
 ) -> Result<(Renderer, RenderApiSender), RendererError> {
-    let device = backend.create_device(&mut options);
+    #[cfg(feature = "wgpu_backend")]
+    if let RendererBackend::Wgpu { instance, surface, width, height } = backend {
+        return create_webrender_instance_wgpu(notifier, options, WgpuInit::CreateDevice { instance, surface, width, height });
+    }
 
-    create_webrender_instance_with_device(device, notifier, options, shaders)
+    #[cfg(feature = "wgpu_backend")]
+    if let RendererBackend::WgpuShared { device, queue } = backend {
+        return create_webrender_instance_wgpu(notifier, options, WgpuInit::SharedDevice { device, queue });
+    }
+
+    #[cfg(feature = "wgpu_backend")]
+    if let RendererBackend::WgpuHal { device_factory } = backend {
+        let (device, queue) = device_factory();
+        return create_webrender_instance_wgpu(notifier, options, WgpuInit::SharedDevice { device, queue });
+    }
+
+    #[cfg(feature = "gl_backend")]
+    {
+        let device = backend.create_gl_device(&mut options);
+        create_webrender_instance_with_device(device, notifier, options, shaders)
+    }
+    #[cfg(not(feature = "gl_backend"))]
+    Err(RendererError::UnsupportedBackend("GL backend not compiled"))
 }
 
+#[cfg(feature = "gl_backend")]
 fn create_webrender_instance_with_device(
     mut device: Device,
     notifier: Box<dyn RenderNotifier>,
@@ -393,6 +443,7 @@ fn create_webrender_instance_with_device(
 
     let (api_tx, api_rx) = unbounded_channel();
     let (result_tx, result_rx) = unbounded_channel();
+    let gl_type = device.gl_type();
 
     let color_cache_formats = device.preferred_color_formats();
     let swizzle_settings = device.swizzle_settings();
@@ -447,22 +498,21 @@ fn create_webrender_instance_with_device(
     } else {
         None
     };
+    let aux_textures = super::RendererAuxTextures::new_gl(dither_matrix_texture);
 
     let max_primitive_instance_count =
         WebRenderOptions::MAX_INSTANCE_BUFFER_SIZE / mem::size_of::<PrimitiveInstanceData>();
-    let vaos = vertex::RendererVAOs::new(
+    let vaos = vertex::RendererVaoState::new_gl(
         &mut device,
         if options.enable_instancing { None } else { NonZeroUsize::new(max_primitive_instance_count) },
     );
 
     let texture_upload_pbo_pool = UploadPBOPool::new(&mut device, options.upload_pbo_default_size);
     let staging_texture_pool = UploadTexturePool::new();
+    let upload_state = RendererUploadState::new_gl(texture_upload_pbo_pool, staging_texture_pool);
     let texture_resolver = TextureResolver::new(&mut device);
 
-    let mut vertex_data_textures = Vec::new();
-    for _ in 0 .. VERTEX_DATA_TEXTURE_COUNT {
-        vertex_data_textures.push(vertex::VertexDataTextures::new());
-    }
+    let vertex_data_textures = vertex::RendererVertexData::new_gl();
 
     // On some (mostly older, integrated) GPUs, the normal GPU texture cache update path
     // doesn't work well when running on ANGLE, causing CPU stalls inside D3D and/or the
@@ -477,8 +527,8 @@ fn create_webrender_instance_with_device(
     // On other GL platforms, like macOS or Android, creating many PBOs is very inefficient.
     // This is what happens in GPU cache updates in PBO path. Instead, we switch everything
     // except software GL to use the GPU scattered updates.
-    let supports_scatter = device.supports_gpu_cache_scatter();
-    let gpu_cache_texture = gpu_cache::GpuCacheTexture::new(
+    let supports_scatter = device.get_capabilities().supports_color_buffer_float;
+    let gpu_cache_texture = gpu_cache::RendererGpuCache::new_gl(
         &mut device,
         supports_scatter && !is_software,
     )?;
@@ -711,7 +761,7 @@ fn create_webrender_instance_with_device(
     let mut renderer = Renderer {
         result_rx,
         api_tx: api_tx.clone(),
-        device,
+        device: Some(device),
         active_documents: FastHashMap::default(),
         pending_texture_updates: Vec::new(),
         pending_texture_cache_updates: false,
@@ -719,7 +769,7 @@ fn create_webrender_instance_with_device(
         pending_gpu_cache_updates: Vec::new(),
         pending_gpu_cache_clear: false,
         pending_shader_updates: Vec::new(),
-        shaders,
+        shaders: Some(shaders),
         debug: debug::LazyInitializedDebugRenderer::new(),
         debug_flags: DebugFlags::empty(),
         profile: TransactionProfile::new(),
@@ -737,9 +787,8 @@ fn create_webrender_instance_with_device(
         gpu_profiler,
         vaos,
         vertex_data_textures,
-        current_vertex_data_textures: 0,
         pipeline_info: PipelineInfo::default(),
-        dither_matrix_texture,
+        aux_textures,
         external_image_handler: None,
         size_of_ops: make_size_of_ops(),
         cpu_profiles: VecDeque::new(),
@@ -748,8 +797,7 @@ fn create_webrender_instance_with_device(
         gpu_cache_debug_chunks: Vec::new(),
         gpu_cache_frame_id: FrameId::INVALID,
         gpu_cache_overflow: false,
-        texture_upload_pbo_pool,
-        staging_texture_pool,
+        upload_state,
         texture_resolver,
         renderer_errors: Vec::new(),
         async_frame_recorder: None,
@@ -760,7 +808,6 @@ fn create_webrender_instance_with_device(
         owned_external_images: FastHashMap::default(),
         notifications: Vec::new(),
         device_size: None,
-        zoom_debug_texture: None,
         cursor_position: DeviceIntPoint::zero(),
         shared_texture_cache_cleared: false,
         documents_seen: FastHashSet::default(),
@@ -778,6 +825,18 @@ fn create_webrender_instance_with_device(
         layer_compositor_frame_state_in_prev_frame: None,
         #[cfg(feature = "debugger")]
         debugger: Debugger::new(),
+        #[cfg(feature = "wgpu_backend")]
+        wgpu_device: None,
+        #[cfg(feature = "wgpu_backend")]
+        wgpu_texture_cache: FastHashMap::default(),
+        #[cfg(feature = "wgpu_backend")]
+        wgpu_gpu_cache: super::WgpuGpuCacheState::new(),
+        #[cfg(feature = "wgpu_backend")]
+        wgpu_dither_texture: None,
+        #[cfg(feature = "wgpu_backend")]
+        wgpu_frame_data: None,
+        #[cfg(feature = "wgpu_backend")]
+        wgpu_readback_texture: None,
     };
 
     // We initially set the flags to default and then now call set_debug_flags
@@ -802,6 +861,432 @@ fn create_webrender_instance_with_device(
         };
         crate::debugger::start(api);
     }
+
+    Ok((renderer, sender))
+}
+
+/// How the wgpu device should be obtained.
+#[cfg(feature = "wgpu_backend")]
+pub(crate) enum WgpuInit {
+    /// WebRender creates its own adapter + device, optionally with a surface.
+    CreateDevice {
+        instance: Option<wgpu::Instance>,
+        surface: Option<wgpu::Surface<'static>>,
+        width: u32,
+        height: u32,
+    },
+    /// The host application provides a pre-existing device + queue.
+    SharedDevice {
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+    },
+}
+
+/// Creates a wgpu-only Renderer instance with no GL device.
+///
+/// The GL draw loop is not used; the Renderer's `device` field is `None`.
+/// All subsystems use their wgpu enum variants (no-op stubs for now).
+/// The backend threads (scene builder, render backend) are set up identically
+/// to the GL path — they are device-independent.
+#[cfg(feature = "wgpu_backend")]
+pub fn create_webrender_instance_wgpu(
+    notifier: Box<dyn RenderNotifier>,
+    mut options: WebRenderOptions,
+    init: WgpuInit,
+) -> Result<(Renderer, RenderApiSender), RendererError> {
+    use crate::device::WgpuDevice;
+
+    if !wr_has_been_initialized() {
+        #[cfg(feature = "profiler")]
+        unsafe {
+            if let Ok(ref tracy_path) = std::env::var("WR_TRACY_PATH") {
+                let ok = tracy_rs::load(tracy_path);
+                info!("Load tracy from {} -> {}", tracy_path, ok);
+            }
+        }
+
+        register_thread_with_profiler("Compositor".to_owned());
+    }
+
+    HAS_BEEN_INITIALIZED.store(true, Ordering::SeqCst);
+
+    let (api_tx, api_rx) = unbounded_channel();
+    let (result_tx, result_rx) = unbounded_channel();
+
+    // Create or adopt the wgpu device.
+    let mut wgpu_device = match init {
+        WgpuInit::CreateDevice { instance, surface, width, height } => {
+            if let Some(surface) = surface {
+                let inst = instance.as_ref()
+                    .expect("wgpu Instance must be provided when surface is Some");
+                WgpuDevice::new_with_surface(inst, surface, width, height)
+                    .ok_or(RendererError::UnsupportedBackend("no wgpu adapter available for surface"))?
+            } else {
+                WgpuDevice::new_headless()
+                    .ok_or(RendererError::UnsupportedBackend("no wgpu adapter available"))?
+            }
+        }
+        WgpuInit::SharedDevice { device, queue } => {
+            WgpuDevice::from_shared_device(device, queue)
+        }
+    };
+
+    // Hardcoded capability answers for wgpu — no GL queries needed.
+    let max_texture_size: i32 = 16384;
+    let use_dual_source_blending = false;
+    let ext_blend_equation_advanced = false;
+    let ext_blend_equation_advanced_coherent = false;
+    let enable_clear_scissor = options.enable_clear_scissor.unwrap_or(false);
+    let is_software = false;
+
+    const MIN_TEXTURE_SIZE: i32 = 2048;
+    let mut max_internal_texture_size = max_texture_size;
+    if let Some(internal_limit) = options.max_internal_texture_size {
+        assert!(internal_limit >= MIN_TEXTURE_SIZE);
+        max_internal_texture_size = max_internal_texture_size.min(internal_limit);
+    }
+
+    let image_tiling_threshold = options.image_tiling_threshold
+        .min(max_internal_texture_size);
+
+    // wgpu subsystem — GL resource wrappers only needed when gl_backend is compiled.
+    #[cfg(feature = "gl_backend")]
+    let vaos = vertex::RendererVaoState::Wgpu(vertex::WgpuRendererVaos);
+    #[cfg(feature = "gl_backend")]
+    let vertex_data_textures = vertex::RendererVertexData::Wgpu(vertex::WgpuRendererVertexData);
+    #[cfg(feature = "gl_backend")]
+    let upload_state = RendererUploadState::Wgpu(super::upload::WgpuRendererUploadState);
+    #[cfg(feature = "gl_backend")]
+    let gpu_cache_texture = gpu_cache::RendererGpuCache::Wgpu(gpu_cache::WgpuGpuCacheTexture);
+    let dither_tex = if options.enable_dithering {
+        Some(create_dither_matrix_texture(&mut wgpu_device))
+    } else {
+        None
+    };
+    #[cfg(feature = "gl_backend")]
+    let aux_textures = super::RendererAuxTextures::Wgpu(super::WgpuRendererAuxTextures);
+    #[cfg(feature = "gl_backend")]
+    let texture_resolver = TextureResolver::new_without_gl();
+    let gpu_profiler = GpuProfiler::new_noop();
+
+    let color_cache_formats = crate::device::TextureFormatPair {
+        internal: ImageFormat::BGRA8,
+        external: ImageFormat::BGRA8,
+    };
+    let swizzle_settings = None; // wgpu handles format conversion natively
+
+    let max_primitive_instance_count =
+        WebRenderOptions::MAX_INSTANCE_BUFFER_SIZE / mem::size_of::<PrimitiveInstanceData>();
+
+    let backend_notifier = notifier.clone();
+
+    let prefer_subpixel_aa = options.enable_subpixel_aa && use_dual_source_blending;
+    let default_font_render_mode = match (options.enable_aa, prefer_subpixel_aa) {
+        (true, true) => FontRenderMode::Subpixel,
+        (true, false) => FontRenderMode::Alpha,
+        (false, _) => FontRenderMode::Mono,
+    };
+
+    let compositor_kind = match options.compositor_config {
+        CompositorConfig::Draw { max_partial_present_rects, draw_previous_partial_present_regions, .. } => {
+            CompositorKind::Draw { max_partial_present_rects, draw_previous_partial_present_regions }
+        }
+        #[cfg(feature = "gl_backend")]
+        CompositorConfig::Native { .. } => {
+            // Native compositor needs a device ref — not supported in wgpu-only mode yet.
+            return Err(RendererError::UnsupportedBackend(
+                "native compositor not supported in wgpu-only mode",
+            ));
+        }
+        CompositorConfig::Layer { .. } => {
+            CompositorKind::Layer {}
+        }
+    };
+
+    let config = FrameBuilderConfig {
+        default_font_render_mode,
+        dual_source_blending_is_supported: use_dual_source_blending,
+        testing: options.testing,
+        gpu_supports_fast_clears: options.gpu_supports_fast_clears,
+        gpu_supports_advanced_blend: ext_blend_equation_advanced,
+        advanced_blend_is_coherent: ext_blend_equation_advanced_coherent,
+        gpu_supports_render_target_partial_update: true,
+        external_images_require_copy: false,
+        batch_lookback_count: WebRenderOptions::BATCH_LOOKBACK_COUNT,
+        background_color: Some(options.clear_color),
+        compositor_kind,
+        tile_size_override: None,
+        max_surface_override: None,
+        max_depth_ids: 1 << 22, // 24-bit depth minus 2 reserve bits, matching GL path
+        max_target_size: max_internal_texture_size,
+        force_invalidation: false,
+        is_software,
+        low_quality_pinch_zoom: options.low_quality_pinch_zoom,
+        max_shared_surface_size: options.max_shared_surface_size,
+        enable_dithering: options.enable_dithering,
+        precise_linear_gradients: options.precise_linear_gradients,
+        precise_radial_gradients: options.precise_radial_gradients,
+        precise_conic_gradients: options.precise_conic_gradients,
+    };
+    info!("WR (wgpu) {:?}", config);
+
+    let debug_flags = options.debug_flags;
+    let size_of_op = options.size_of_op;
+    let enclosing_size_of_op = options.enclosing_size_of_op;
+    let make_size_of_ops =
+        move || size_of_op.map(|o| MallocSizeOfOps::new(o, enclosing_size_of_op));
+    let workers = options
+        .workers
+        .take()
+        .unwrap_or_else(|| {
+            let worker = ThreadPoolBuilder::new()
+                .thread_name(|idx| format!("WRWorker#{}", idx))
+                .start_handler(move |idx| {
+                    register_thread_with_profiler(format!("WRWorker#{}", idx));
+                    profiler::register_thread(&format!("WRWorker#{}", idx));
+                })
+                .exit_handler(move |_idx| {
+                    profiler::unregister_thread();
+                })
+                .build();
+            Arc::new(worker.unwrap())
+        });
+    let sampler = options.sampler;
+    let namespace_alloc_by_client = options.namespace_alloc_by_client;
+
+    let font_namespace = if namespace_alloc_by_client {
+        options.shared_font_namespace.expect("Shared font namespace must be allocated by client")
+    } else {
+        RenderBackend::next_namespace_id()
+    };
+    let fonts = SharedFontResources::new(font_namespace);
+
+    let blob_image_handler = options.blob_image_handler.take();
+    let scene_builder_hooks = options.scene_builder_hooks;
+    let rb_thread_name = format!("WRRenderBackend#{}", options.renderer_id.unwrap_or(0));
+    let scene_thread_name = format!("WRSceneBuilder#{}", options.renderer_id.unwrap_or(0));
+    let lp_scene_thread_name = format!("WRSceneBuilderLP#{}", options.renderer_id.unwrap_or(0));
+
+    let glyph_rasterizer = GlyphRasterizer::new(
+        workers,
+        options.dedicated_glyph_raster_thread,
+        true, // wgpu supports R8 texture upload
+    );
+
+    let (scene_builder_channels, scene_tx) =
+        SceneBuilderThreadChannels::new(api_tx.clone());
+
+    let sb_fonts = fonts.clone();
+
+    thread::Builder::new().name(scene_thread_name.clone()).spawn(move || {
+        register_thread_with_profiler(scene_thread_name.clone());
+        profiler::register_thread(&scene_thread_name);
+
+        let mut scene_builder = SceneBuilderThread::new(
+            config,
+            sb_fonts,
+            make_size_of_ops(),
+            scene_builder_hooks,
+            scene_builder_channels,
+        );
+        scene_builder.run();
+
+        profiler::unregister_thread();
+    })?;
+
+    let low_priority_scene_tx = if options.support_low_priority_transactions {
+        let (low_priority_scene_tx, low_priority_scene_rx) = unbounded_channel();
+        let lp_builder = LowPrioritySceneBuilderThread {
+            rx: low_priority_scene_rx,
+            tx: scene_tx.clone(),
+            tile_pool: api::BlobTilePool::new(),
+        };
+
+        thread::Builder::new().name(lp_scene_thread_name.clone()).spawn(move || {
+            register_thread_with_profiler(lp_scene_thread_name.clone());
+            profiler::register_thread(&lp_scene_thread_name);
+
+            let mut scene_builder = lp_builder;
+            scene_builder.run();
+
+            profiler::unregister_thread();
+        })?;
+
+        low_priority_scene_tx
+    } else {
+        scene_tx.clone()
+    };
+
+    let rb_blob_handler = blob_image_handler
+        .as_ref()
+        .map(|handler| handler.create_similar());
+
+    let texture_cache_config = options.texture_cache_config.clone();
+    let mut picture_tile_size = options.picture_tile_size.unwrap_or(picture::TILE_SIZE_DEFAULT);
+    picture_tile_size.width = picture_tile_size.width.max(128).min(4096);
+    picture_tile_size.height = picture_tile_size.height.max(128).min(4096);
+
+    let picture_texture_filter = if options.low_quality_pinch_zoom {
+        TextureFilter::Linear
+    } else {
+        TextureFilter::Nearest
+    };
+
+    let render_backend_hooks = options.render_backend_hooks.take();
+
+    let chunk_pool = options.chunk_pool.take().unwrap_or_else(|| {
+        Arc::new(ChunkPool::new())
+    });
+
+    let rb_scene_tx = scene_tx.clone();
+    let rb_fonts = fonts.clone();
+    let enable_multithreading = options.enable_multithreading;
+    thread::Builder::new().name(rb_thread_name.clone()).spawn(move || {
+        if let Some(hooks) = render_backend_hooks {
+            hooks.init_thread();
+        }
+        register_thread_with_profiler(rb_thread_name.clone());
+        profiler::register_thread(&rb_thread_name);
+
+        let texture_cache = TextureCache::new(
+            max_internal_texture_size,
+            image_tiling_threshold,
+            color_cache_formats,
+            swizzle_settings,
+            &texture_cache_config,
+        );
+
+        let picture_textures = PictureTextures::new(
+            picture_tile_size,
+            picture_texture_filter,
+        );
+
+        let glyph_cache = GlyphCache::new();
+
+        let mut resource_cache = ResourceCache::new(
+            texture_cache,
+            picture_textures,
+            glyph_rasterizer,
+            glyph_cache,
+            rb_fonts,
+            rb_blob_handler,
+        );
+
+        resource_cache.enable_multithreading(enable_multithreading);
+
+        let mut backend = RenderBackend::new(
+            api_rx,
+            result_tx,
+            rb_scene_tx,
+            resource_cache,
+            chunk_pool,
+            backend_notifier,
+            config,
+            sampler,
+            make_size_of_ops(),
+            debug_flags,
+            namespace_alloc_by_client,
+        );
+        backend.run();
+        profiler::unregister_thread();
+    })?;
+
+    let mut renderer = Renderer {
+        result_rx,
+        api_tx: api_tx.clone(),
+        #[cfg(feature = "gl_backend")]
+        device: None,
+        active_documents: FastHashMap::default(),
+        pending_texture_updates: Vec::new(),
+        pending_texture_cache_updates: false,
+        pending_native_surface_updates: Vec::new(),
+        pending_gpu_cache_updates: Vec::new(),
+        pending_gpu_cache_clear: false,
+        pending_shader_updates: Vec::new(),
+        #[cfg(feature = "gl_backend")]
+        shaders: None,
+        #[cfg(feature = "gl_backend")]
+        debug: debug::LazyInitializedDebugRenderer::new(),
+        debug_flags: DebugFlags::empty(),
+        profile: TransactionProfile::new(),
+        frame_counter: 0,
+        resource_upload_time: 0.0,
+        gpu_cache_upload_time: 0.0,
+        profiler: Profiler::new(),
+        max_recorded_profiles: options.max_recorded_profiles,
+        clear_color: options.clear_color,
+        enable_clear_scissor,
+        enable_advanced_blend_barriers: !ext_blend_equation_advanced_coherent,
+        clear_caches_with_quads: options.clear_caches_with_quads,
+        clear_alpha_targets_with_quads: false,
+        last_time: 0,
+        gpu_profiler,
+        #[cfg(feature = "gl_backend")]
+        vaos,
+        #[cfg(feature = "gl_backend")]
+        vertex_data_textures,
+        pipeline_info: PipelineInfo::default(),
+        #[cfg(feature = "gl_backend")]
+        aux_textures,
+        external_image_handler: None,
+        size_of_ops: make_size_of_ops(),
+        cpu_profiles: VecDeque::new(),
+        gpu_profiles: VecDeque::new(),
+        #[cfg(feature = "gl_backend")]
+        gpu_cache_texture,
+        gpu_cache_debug_chunks: Vec::new(),
+        gpu_cache_frame_id: FrameId::INVALID,
+        gpu_cache_overflow: false,
+        #[cfg(feature = "gl_backend")]
+        upload_state,
+        #[cfg(feature = "gl_backend")]
+        texture_resolver,
+        renderer_errors: Vec::new(),
+        #[cfg(feature = "gl_backend")]
+        async_frame_recorder: None,
+        #[cfg(feature = "gl_backend")]
+        async_screenshots: None,
+        #[cfg(feature = "capture")]
+        read_fbo: crate::device::FBOId::default(),
+        #[cfg(feature = "replay")]
+        owned_external_images: FastHashMap::default(),
+        notifications: Vec::new(),
+        device_size: None,
+        cursor_position: DeviceIntPoint::zero(),
+        shared_texture_cache_cleared: false,
+        documents_seen: FastHashSet::default(),
+        force_redraw: true,
+        compositor_config: options.compositor_config,
+        current_compositor_kind: compositor_kind,
+        allocated_native_surfaces: FastHashSet::default(),
+        debug_overlay_state: DebugOverlayState::new(),
+        buffer_damage_tracker: BufferDamageTracker::default(),
+        max_primitive_instance_count,
+        enable_instancing: options.enable_instancing,
+        consecutive_oom_frames: 0,
+        target_frame_publish_id: None,
+        pending_result_msg: None,
+        layer_compositor_frame_state_in_prev_frame: None,
+        #[cfg(feature = "debugger")]
+        debugger: Debugger::new(),
+        wgpu_device: Some(wgpu_device),
+        wgpu_texture_cache: FastHashMap::default(),
+        wgpu_gpu_cache: super::WgpuGpuCacheState::new(),
+        wgpu_dither_texture: dither_tex,
+        wgpu_frame_data: None,
+        wgpu_readback_texture: None,
+    };
+
+    renderer.set_debug_flags(debug_flags);
+    renderer.profiler.set_ui("Default");
+
+    let sender = RenderApiSender::new(
+        api_tx,
+        scene_tx,
+        low_priority_scene_tx,
+        blob_image_handler,
+        fonts,
+    );
 
     Ok((renderer, sender))
 }

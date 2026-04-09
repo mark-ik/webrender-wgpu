@@ -2384,14 +2384,11 @@ fn write_wgsl_shaders(
 }
 
 fn main() -> Result<(), std::io::Error> {
-    // Enforce that exactly one rendering backend is selected.
+    // Require at least one rendering backend; both can coexist in one build.
     let gl_backend = std::env::var("CARGO_FEATURE_GL_BACKEND").is_ok();
     let wgpu_backend = std::env::var("CARGO_FEATURE_WGPU_BACKEND").is_ok();
-    if gl_backend && wgpu_backend {
-        panic!("gl_backend and wgpu_backend are mutually exclusive; enable exactly one");
-    }
     if !gl_backend && !wgpu_backend {
-        panic!("exactly one of gl_backend or wgpu_backend must be enabled");
+        panic!("at least one of gl_backend or wgpu_backend must be enabled");
     }
 
     let out_dir = env::var("OUT_DIR").unwrap_or("out".to_owned());
@@ -2425,23 +2422,28 @@ fn main() -> Result<(), std::io::Error> {
     writeln!(shader_file, "    pub frag_source: &'static str,")?;
     writeln!(shader_file, "    pub digest: &'static str,")?;
     writeln!(shader_file, "}}\n")?;
-    if !gl_backend {
-        writeln!(shader_file, "pub struct WgslShaderSource {{")?;
-        writeln!(shader_file, "    pub vert_source: &'static str,")?;
-        writeln!(shader_file, "    pub frag_source: &'static str,")?;
-        writeln!(shader_file, "}}\n")?;
-    }
+    writeln!(shader_file, "pub struct WgslShaderSource {{")?;
+    writeln!(shader_file, "    pub vert_source: &'static str,")?;
+    writeln!(shader_file, "    pub frag_source: &'static str,")?;
+    writeln!(shader_file, "}}\n")?;
+
     writeln!(shader_file, "lazy_static! {{")?;
 
-    if gl_backend {
-        write_unoptimized_shaders(glsl_files, &mut shader_file)?;
-        writeln!(shader_file, "")?;
-        write_optimized_shaders(&res_dir, &mut shader_file, &out_dir)?;
-    } else {
-        // wgpu_backend: emit empty GL maps; generate WGSL shaders via naga.
-        writeln!(shader_file, "  pub static ref UNOPTIMIZED_SHADERS: HashMap<&'static str, SourceWithDigest> = HashMap::new();")?;
-        writeln!(shader_file, "  pub static ref OPTIMIZED_SHADERS: HashMap<(ShaderVersion, &'static str), OptimizedSourceWithDigest> = HashMap::new();")?;
-        write_wgsl_shaders(&res_dir, &out_dir, &mut shader_file)?;
+    // Always emit GL shaders — both backends can coexist in one build.
+    write_unoptimized_shaders(glsl_files, &mut shader_file)?;
+    writeln!(shader_file, "")?;
+    write_optimized_shaders(&res_dir, &mut shader_file, &out_dir)?;
+
+    #[cfg(feature = "wgpu_backend")]
+    webrender_build::wgsl::write_wgsl_shaders(&res_dir, &out_dir, &mut shader_file)?;
+
+    #[cfg(not(feature = "wgpu_backend"))]
+    {
+        // Emit an empty WGSL_SHADERS map so shader_source.rs compiles
+        // regardless of backend.
+        writeln!(shader_file, "  pub static ref WGSL_SHADERS: HashMap<(&'static str, &'static str), WgslShaderSource> = {{")?;
+        writeln!(shader_file, "    HashMap::new()")?;
+        writeln!(shader_file, "  }};")?;
     }
     writeln!(shader_file, "}}")?;
 

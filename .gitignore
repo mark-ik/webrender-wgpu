@@ -4,6 +4,8 @@ target/
 
 # WR internals
 captures
+notes/
+wr-wgpu_notes/
 wrench/json_frames
 wrench/ron_frames
 

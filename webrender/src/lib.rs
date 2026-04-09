@@ -183,6 +183,15 @@ mod picture_textures;
 mod frame_allocator;
 mod bump_allocator;
 
+#[cfg(feature = "wgpu_backend")]
+pub use crate::device::{TextureFilter, WgpuDevice, WgpuTexture};
+#[cfg(feature = "wgpu_backend")]
+pub use crate::internal_types::RenderTargetInfo;
+/// Re-export wgpu so downstream consumers can use the same version
+/// for creating surfaces to pass to `RendererBackend::Wgpu`.
+#[cfg(feature = "wgpu_backend")]
+pub use wgpu;
+
 ///
 pub mod intern;
 ///
@@ -217,12 +226,13 @@ extern crate webrender_build;
 #[cfg(feature = "gl_backend")]
 #[doc(hidden)]
 pub use crate::composite::{LayerCompositor, CompositorInputConfig, CompositorSurfaceUsage, ClipRadius};
+pub use crate::composite::{CompositorConfig, CompositorCapabilities, CompositorSurfaceTransform};
 #[cfg(feature = "gl_backend")]
-pub use crate::composite::{CompositorConfig, Compositor, CompositorCapabilities, CompositorSurfaceTransform};
-#[cfg(feature = "gl_backend")]
+pub use crate::composite::Compositor;
 pub use crate::composite::{NativeSurfaceId, NativeTileId, NativeSurfaceInfo, PartialPresentCompositor};
 #[cfg(feature = "gl_backend")]
-pub use crate::composite::{MappableCompositor, MappedTileInfo, SWGLCompositeSurfaceInfo, WindowVisibility, WindowProperties};
+pub use crate::composite::MappableCompositor;
+pub use crate::composite::{MappedTileInfo, SWGLCompositeSurfaceInfo, WindowVisibility, WindowProperties};
 #[cfg(feature = "gl_backend")]
 pub use crate::device::{UploadMethod, VertexUsageHint, get_gl_target, get_unoptimized_shader_source};
 #[cfg(feature = "gl_backend")]
@@ -233,14 +243,22 @@ pub use crate::profiler::{ProfilerHooks, set_profiler_hooks};
 #[cfg(feature = "gl_backend")]
 pub use crate::renderer::{
     CpuProfile, DebugFlags, GpuProfile, GraphicsApi,
-    GraphicsApiInfo, PendingShadersToPrecache, PipelineInfo, Renderer, RendererError, RenderResults,
-    RendererStats, Shaders, SharedShaders, ShaderPrecacheFlags,
-    MAX_VERTEX_TEXTURE_WIDTH,
+    GraphicsApiInfo, PipelineInfo, Renderer, RendererError, RenderResults,
+    RendererStats, MAX_VERTEX_TEXTURE_WIDTH,
+};
+// RendererBackend and create_webrender_instance_with_backend cover all
+// backends and are always exported.
+pub use crate::device::RendererBackend;
+pub use crate::renderer::init::{
+    WebRenderOptions, create_webrender_instance_with_backend,
+    AsyncPropertySampler, SceneBuilderHooks, RenderBackendHooks,
 };
 #[cfg(feature = "gl_backend")]
-pub use crate::renderer::init::{WebRenderOptions, create_webrender_instance, AsyncPropertySampler, SceneBuilderHooks, RenderBackendHooks, ONE_TIME_USAGE_HINT};
+pub use crate::renderer::{
+    PendingShadersToPrecache, Shaders, SharedShaders, ShaderPrecacheFlags,
+};
 #[cfg(feature = "gl_backend")]
-pub use crate::device::RendererBackend;
+pub use crate::renderer::init::{create_webrender_instance, ONE_TIME_USAGE_HINT};
 #[cfg(feature = "gl_backend")]
 pub use crate::hit_test::SharedHitTester;
 pub use crate::internal_types::FastHashMap;

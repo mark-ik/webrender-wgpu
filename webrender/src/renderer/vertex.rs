@@ -16,6 +16,7 @@ use crate::{
     frame_builder::Frame,
     gpu_types::{PrimitiveHeaderI, PrimitiveHeaderF, TransformData},
     internal_types::Swizzle,
+    render_api::MemoryReport,
     render_task::RenderTaskData,
 };
 
@@ -920,10 +921,10 @@ impl<T> VertexDataTexture<T> {
         texture_uploader: &mut TextureUploader<'a>,
         data: &mut FrameVec<T>,
     ) {
-        debug_assert!(mem::size_of::<T>() % 16 == 0);
-        let texels_per_item = mem::size_of::<T>() / 16;
-        let items_per_row = MAX_VERTEX_TEXTURE_WIDTH / texels_per_item;
-        debug_assert_ne!(items_per_row, 0);
+        use super::data_texture_layout as layout;
+
+        let texels_per_item = layout::texels_per_item::<T>();
+        let items_per_row = layout::items_per_row(texels_per_item);
 
         // Ensure we always end up with a texture when leaving this method.
         let mut len = data.len();
@@ -963,11 +964,7 @@ impl<T> VertexDataTexture<T> {
         // (like Intel iGPUs) that prefers power-of-two sizes of textures ([1]).
         //
         // [1] https://software.intel.com/en-us/articles/opengl-performance-tips-power-of-two-textures-have-better-performance
-        let logical_width = if needed_height == 1 {
-            data.len() * texels_per_item
-        } else {
-            MAX_VERTEX_TEXTURE_WIDTH - (MAX_VERTEX_TEXTURE_WIDTH % texels_per_item)
-        };
+        let logical_width = layout::logical_width(data.len(), texels_per_item, needed_height as usize);
 
         let rect = DeviceIntRect::from_size(
             DeviceIntSize::new(logical_width as i32, needed_height),
@@ -1070,6 +1067,81 @@ impl VertexDataTextures {
     }
 }
 
+pub(super) struct GlRendererVertexData {
+    textures: Vec<VertexDataTextures>,
+    current: usize,
+}
+
+#[cfg(feature = "wgpu_backend")]
+#[allow(dead_code)]
+pub struct WgpuRendererVertexData;
+
+#[cfg_attr(feature = "wgpu_backend", allow(dead_code))]
+pub(super) enum RendererVertexData {
+    Gl(GlRendererVertexData),
+    #[cfg(feature = "wgpu_backend")]
+    Wgpu(WgpuRendererVertexData),
+}
+
+impl RendererVertexData {
+    pub fn new_gl() -> Self {
+        let mut textures = Vec::new();
+        for _ in 0 .. super::VERTEX_DATA_TEXTURE_COUNT {
+            textures.push(VertexDataTextures::new());
+        }
+
+        Self::Gl(GlRendererVertexData {
+            textures,
+            current: 0,
+        })
+    }
+
+    fn gl(&self) -> &GlRendererVertexData {
+        match self {
+            Self::Gl(state) => state,
+            #[cfg(feature = "wgpu_backend")]
+            Self::Wgpu(..) => unreachable!("wgpu vertex data backend is not wired yet"),
+        }
+    }
+
+    fn gl_mut(&mut self) -> &mut GlRendererVertexData {
+        match self {
+            Self::Gl(state) => state,
+            #[cfg(feature = "wgpu_backend")]
+            Self::Wgpu(..) => unreachable!("wgpu vertex data backend is not wired yet"),
+        }
+    }
+
+    pub fn bind_frame_data(
+        &mut self,
+        device: &mut Device,
+        pbo_pool: &mut UploadPBOPool,
+        frame: &mut Frame,
+    ) {
+        let state = self.gl_mut();
+        state.textures[state.current].update(device, pbo_pool, frame);
+        state.current = (state.current + 1) % super::VERTEX_DATA_TEXTURE_COUNT;
+    }
+
+    pub fn deinit(self, device: &mut Device) {
+        match self {
+            Self::Gl(state) => {
+                for textures in state.textures {
+                    textures.deinit(device);
+                }
+            }
+            #[cfg(feature = "wgpu_backend")]
+            Self::Wgpu(..) => {}
+        }
+    }
+
+    pub fn report_memory_to(&self, report: &mut MemoryReport) {
+        for textures in &self.gl().textures {
+            report.vertex_data_textures += textures.size_in_bytes();
+        }
+    }
+}
+
 pub struct RendererVAOs {
     prim_vao: VAO,
     blur_vao: VAO,
@@ -1160,6 +1232,80 @@ impl RendererVAOs {
         device.delete_vao(self.clear_vao);
         device.delete_vao(self.copy_vao);
         device.delete_vao(self.mask_vao);
+    }
+}
+
+pub(super) struct GlRendererVaos {
+    vaos: RendererVAOs,
+}
+
+#[cfg(feature = "wgpu_backend")]
+#[allow(dead_code)]
+pub struct WgpuRendererVaos;
+
+#[cfg_attr(feature = "wgpu_backend", allow(dead_code))]
+pub(super) enum RendererVaoState {
+    Gl(GlRendererVaos),
+    #[cfg(feature = "wgpu_backend")]
+    Wgpu(WgpuRendererVaos),
+}
+
+impl RendererVaoState {
+    pub fn new_gl(device: &mut Device, indexed_quads: Option<NonZeroUsize>) -> Self {
+        Self::Gl(GlRendererVaos {
+            vaos: RendererVAOs::new(device, indexed_quads),
+        })
+    }
+
+    fn gl(&self) -> &GlRendererVaos {
+        match self {
+            Self::Gl(state) => state,
+            #[cfg(feature = "wgpu_backend")]
+            Self::Wgpu(..) => unreachable!("wgpu vao state is not wired yet"),
+        }
+    }
+
+    pub fn vao(&self, kind: VertexArrayKind) -> &VAO {
+        &self.gl().vaos[kind]
+    }
+
+    pub fn draw_instanced_batch<T: Clone>(
+        &self,
+        device: &mut Device,
+        data: &[T],
+        kind: VertexArrayKind,
+        enable_instancing: bool,
+        chunk_size: usize,
+    ) -> usize {
+        let vao = self.vao(kind);
+        device.bind_vao(vao);
+
+        let mut draw_calls = 0;
+        for chunk in data.chunks(chunk_size) {
+            if enable_instancing {
+                device.update_vao_instances(vao, chunk, VertexUsageHint::Stream, None);
+                device.draw_indexed_triangles_instanced_u16(6, chunk.len() as i32);
+            } else {
+                device.update_vao_instances(
+                    vao,
+                    chunk,
+                    VertexUsageHint::Stream,
+                    NonZeroUsize::new(4),
+                );
+                device.draw_indexed_triangles(6 * chunk.len() as i32);
+            }
+            draw_calls += 1;
+        }
+
+        draw_calls
+    }
+
+    pub fn deinit(self, device: &mut Device) {
+        match self {
+            Self::Gl(state) => state.vaos.deinit(device),
+            #[cfg(feature = "wgpu_backend")]
+            Self::Wgpu(..) => {}
+        }
     }
 }
 

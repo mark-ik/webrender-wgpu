@@ -143,6 +143,10 @@ pub enum WindowWrapper {
     WindowedContext(glutin::WindowedContext<glutin::PossiblyCurrent>, Rc<dyn gl::Gl>, Option<swgl::Context>),
     Angle(winit::window::Window, angle::Context, Rc<dyn gl::Gl>, Option<swgl::Context>),
     Headless(HeadlessContext, Rc<dyn gl::Gl>, Option<swgl::Context>),
+    /// wgpu backend: only a winit window (no GL context).
+    /// The wgpu Instance and Surface are created separately and passed to the Renderer.
+    #[cfg(feature = "wgpu_backend")]
+    Wgpu(winit::window::Window),
 }
 
 pub struct HeadlessEventIterater;
@@ -183,6 +187,10 @@ impl WindowWrapper {
             }
             WindowWrapper::Angle(_, ref context, _, _) => context.swap_buffers().unwrap(),
             WindowWrapper::Headless(_, _, _) => {}
+            #[cfg(feature = "wgpu_backend")]
+            WindowWrapper::Wgpu(_) => {
+                // wgpu presents in Renderer::render_wgpu() — nothing to do here.
+            }
         }
     }
 
@@ -197,6 +205,8 @@ impl WindowWrapper {
             }
             WindowWrapper::Angle(ref window, ..) => inner_size(window),
             WindowWrapper::Headless(ref context, ..) => DeviceIntSize::new(context.width, context.height),
+            #[cfg(feature = "wgpu_backend")]
+            WindowWrapper::Wgpu(ref window) => inner_size(window),
         }
     }
 
@@ -207,6 +217,8 @@ impl WindowWrapper {
             }
             WindowWrapper::Angle(ref window, ..) => window.scale_factor() as f32,
             WindowWrapper::Headless(..) => 1.0,
+            #[cfg(feature = "wgpu_backend")]
+            WindowWrapper::Wgpu(ref window) => window.scale_factor() as f32,
         }
     }
 
@@ -220,6 +232,10 @@ impl WindowWrapper {
                 window.set_inner_size(LogicalSize::new(size.width as f64, size.height as f64))
             },
             WindowWrapper::Headless(..) => unimplemented!(), // requites Glutin update
+            #[cfg(feature = "wgpu_backend")]
+            WindowWrapper::Wgpu(ref window) => {
+                window.set_inner_size(LogicalSize::new(size.width as f64, size.height as f64))
+            },
         }
     }
 
@@ -230,6 +246,8 @@ impl WindowWrapper {
             }
             WindowWrapper::Angle(ref window, ..) => window.set_title(title),
             WindowWrapper::Headless(..) => (),
+            #[cfg(feature = "wgpu_backend")]
+            WindowWrapper::Wgpu(ref window) => window.set_title(title),
         }
     }
 
@@ -238,6 +256,8 @@ impl WindowWrapper {
             WindowWrapper::WindowedContext(_, _, ref swgl) |
             WindowWrapper::Angle(_, _, _, ref swgl) |
             WindowWrapper::Headless(_, _, ref swgl) => swgl.as_ref(),
+            #[cfg(feature = "wgpu_backend")]
+            WindowWrapper::Wgpu(_) => None,
         }
     }
 
@@ -246,6 +266,8 @@ impl WindowWrapper {
             WindowWrapper::WindowedContext(_, ref gl, _) |
             WindowWrapper::Angle(_, _, ref gl, _) |
             WindowWrapper::Headless(_, ref gl, _) => &**gl,
+            #[cfg(feature = "wgpu_backend")]
+            WindowWrapper::Wgpu(_) => panic!("native_gl() not available in wgpu mode"),
         }
     }
 
@@ -280,7 +302,15 @@ impl WindowWrapper {
                     _ => panic!(),
                 }
             }
+            #[cfg(feature = "wgpu_backend")]
+            WindowWrapper::Wgpu(_) => panic!("clone_gl() not available in wgpu mode"),
         }
+    }
+
+    /// Whether this is a wgpu backend window.
+    #[cfg(feature = "wgpu_backend")]
+    pub fn is_wgpu(&self) -> bool {
+        matches!(*self, WindowWrapper::Wgpu(_))
     }
 
 
@@ -301,12 +331,12 @@ impl WindowWrapper {
         wrench.update(dim);
     }
 
+
     #[cfg(target_os = "windows")]
     pub fn get_d3d11_device(&self) -> *const c_void {
         match *self {
-            WindowWrapper::WindowedContext(_, _, _) |
-            WindowWrapper::Headless(_, _, _) => unreachable!(),
             WindowWrapper::Angle(_, ref ctx, _, _) => ctx.get_d3d11_device(),
+            _ => unreachable!(),
         }
     }
 
@@ -449,6 +479,55 @@ fn make_window(
     );
 
     wrapper
+}
+
+/// Create a wgpu-backed window + Instance + Surface.
+/// Returns the WindowWrapper and the (instance, surface) pair that should be
+/// passed to WebRender's RendererBackend::Wgpu.
+#[cfg(feature = "wgpu_backend")]
+fn make_wgpu_window(
+    size: DeviceIntSize,
+    events_loop: &winit::event_loop::EventLoop<()>,
+) -> (WindowWrapper, wgpu::Instance, wgpu::Surface<'static>) {
+    use winit::platform::windows::WindowExtWindows;
+
+    let window = winit::window::WindowBuilder::new()
+        .with_title("WRench (wgpu)")
+        .with_inner_size(LogicalSize::new(size.width as f64, size.height as f64))
+        .build(events_loop)
+        .expect("failed to create winit window for wgpu");
+
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::all(),
+        ..Default::default()
+    });
+
+    // Build raw_window_handle 0.6 types from winit 0.26's HWND.
+    let hwnd = window.hwnd();
+    let hinstance = window.hinstance();
+    let raw_window_handle = {
+        let mut handle = wgpu::rwh::Win32WindowHandle::new(
+            std::num::NonZero::new(hwnd as isize).expect("HWND is null"),
+        );
+        handle.hinstance = std::num::NonZero::new(hinstance as isize);
+        wgpu::rwh::RawWindowHandle::Win32(handle)
+    };
+    let raw_display_handle = wgpu::rwh::RawDisplayHandle::Windows(
+        wgpu::rwh::WindowsDisplayHandle::new(),
+    );
+
+    // Safety: the window outlives the surface (WindowWrapper keeps it alive).
+    let surface = unsafe {
+        instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+            raw_display_handle,
+            raw_window_handle,
+        }).expect("failed to create wgpu surface")
+    };
+
+    println!("wgpu backend initialized");
+    println!("hidpi factor: {}", window.scale_factor());
+
+    (WindowWrapper::Wgpu(window), instance, surface)
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -715,16 +794,38 @@ pub fn main() {
     }
 
     let using_compositor = args.is_present("compositor");
+    let use_wgpu = args.is_present("wgpu");
 
-    let mut window = make_window(
-        size,
-        args.is_present("vsync"),
-        &events_loop,
-        args.is_present("angle"),
-        gl_request,
-        software,
-        using_compositor,
-    );
+    // wgpu state (instance + surface) — only populated when --wgpu is set.
+    // Must outlive the Renderer, so declared here in main scope.
+    #[cfg(feature = "wgpu_backend")]
+    let wgpu_state: Option<(wgpu::Instance, wgpu::Surface<'static>)>;
+
+    let mut window = if use_wgpu {
+        #[cfg(feature = "wgpu_backend")]
+        {
+            let el = events_loop.as_ref().expect("--wgpu requires a windowed event loop (no --headless)");
+            let (wrapper, instance, surface) = make_wgpu_window(size, el);
+            wgpu_state = Some((instance, surface));
+            wrapper
+        }
+        #[cfg(not(feature = "wgpu_backend"))]
+        {
+            panic!("--wgpu requires the wgpu_backend feature to be enabled");
+        }
+    } else {
+        #[cfg(feature = "wgpu_backend")]
+        { wgpu_state = None; }
+        make_window(
+            size,
+            args.is_present("vsync"),
+            &events_loop,
+            args.is_present("angle"),
+            gl_request,
+            software,
+            using_compositor,
+        )
+    };
     let dim = window.get_inner_size();
 
     let needs_frame_notifier = args.subcommand_name().map_or(false, |name| {
@@ -743,6 +844,25 @@ pub fn main() {
         None
     };
 
+    // Build the renderer backend — wgpu if --wgpu, else GL (default).
+    let backend = {
+        #[cfg(feature = "wgpu_backend")]
+        {
+            if let Some((instance, surface)) = wgpu_state {
+                Some(webrender::RendererBackend::Wgpu {
+                    instance: Some(instance),
+                    surface: Some(surface),
+                    width: dim.width as u32,
+                    height: dim.height as u32,
+                })
+            } else {
+                None
+            }
+        }
+        #[cfg(not(feature = "wgpu_backend"))]
+        { None::<webrender::RendererBackend> }
+    };
+
     let mut wrench = Wrench::new(
         &mut window,
         events_loop.as_mut().map(|el| el.create_proxy()),
@@ -758,6 +878,7 @@ pub fn main() {
         dump_shader_source,
         notifier,
         layer_compositor,
+        backend,
     );
 
     if let Some(ui_str) = args.value_of("profiler_ui") {

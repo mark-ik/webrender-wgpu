@@ -11,7 +11,7 @@ edition = "2018"
 [features]
 default = ["static_freetype", "gl_backend"]
 gl_backend = ["dep:gleam"]
-wgpu_backend = ["dep:naga", "dep:wgpu", "dep:pollster"]
+wgpu_backend = ["dep:wgpu", "dep:pollster", "webrender_build/wgsl", "dep:naga"]
 profiler = ["tracy-rs/enable_profiler"]
 capture = ["api/serialize", "ron", "serde", "smallvec/serde", "etagere/serialization", "glyph_rasterizer/capture"]
 replay = ["api/deserialize", "ron", "serde", "smallvec/serde", "etagere/serialization", "glyph_rasterizer/replay"]
