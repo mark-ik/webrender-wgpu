@@ -74,3 +74,5 @@ base64 = { optional=true, version="0.22" }
 [dev-dependencies]
 mozangle = "0.5.2"
 rand = "0.4"
+png = "0.16"
+pollster = "0.4"

@@ -253,6 +253,18 @@ pub struct WebRenderOptions {
     /// other backends wgpu's pipeline cache is a no-op.
     #[cfg(feature = "wgpu_backend")]
     pub pipeline_cache_dir: Option<PathBuf>,
+
+    /// Presentation mode for the wgpu surface.
+    ///
+    /// Only has an effect when using `RendererBackend::Wgpu` with a surface
+    /// (i.e. not headless or shared-device mode).  Defaults to `Fifo`
+    /// (vsync).  Common alternatives: `AutoNoVsync` (uncapped), `Mailbox`
+    /// (low-latency on supported hardware).
+    ///
+    /// The adapter's supported present modes are queried at init time; if the
+    /// requested mode is unsupported, `Fifo` is used as a fallback.
+    #[cfg(feature = "wgpu_backend")]
+    pub wgpu_present_mode: wgpu::PresentMode,
 }
 
 impl WebRenderOptions {
@@ -361,6 +373,8 @@ impl Default for WebRenderOptions {
             precise_conic_gradients: false,
             #[cfg(feature = "wgpu_backend")]
             pipeline_cache_dir: None,
+            #[cfg(feature = "wgpu_backend")]
+            wgpu_present_mode: wgpu::PresentMode::Fifo,
         }
     }
 }
@@ -405,7 +419,8 @@ pub fn create_webrender_instance_with_backend(
 ) -> Result<(Renderer, RenderApiSender), RendererError> {
     #[cfg(feature = "wgpu_backend")]
     if let RendererBackend::Wgpu { instance, surface, width, height } = backend {
-        return create_webrender_instance_wgpu(notifier, options, WgpuInit::CreateDevice { instance, surface, width, height });
+        let present_mode = options.wgpu_present_mode;
+        return create_webrender_instance_wgpu(notifier, options, WgpuInit::CreateDevice { instance, surface, width, height, present_mode });
     }
 
     #[cfg(feature = "wgpu_backend")]
@@ -886,6 +901,7 @@ pub(crate) enum WgpuInit {
         surface: Option<wgpu::Surface<'static>>,
         width: u32,
         height: u32,
+        present_mode: wgpu::PresentMode,
     },
     /// The host application provides a pre-existing device + queue.
     SharedDevice {
@@ -927,11 +943,11 @@ pub fn create_webrender_instance_wgpu(
 
     // Create or adopt the wgpu device.
     let mut wgpu_device = match init {
-        WgpuInit::CreateDevice { instance, surface, width, height } => {
+        WgpuInit::CreateDevice { instance, surface, width, height, present_mode } => {
             if let Some(surface) = surface {
                 let inst = instance.as_ref()
                     .expect("wgpu Instance must be provided when surface is Some");
-                WgpuDevice::new_with_surface(inst, surface, width, height, options.pipeline_cache_dir.as_deref())
+                WgpuDevice::new_with_surface(inst, surface, width, height, present_mode, options.pipeline_cache_dir.as_deref())
                     .ok_or(RendererError::UnsupportedBackend("no wgpu adapter available for surface"))?
             } else {
                 WgpuDevice::new_headless(options.pipeline_cache_dir.as_deref())

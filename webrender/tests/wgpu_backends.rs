@@ -4,15 +4,21 @@
 
 //! Integration tests for WgpuHal backend and cross-backend pixel parity.
 //!
-//! Three test groups:
+//! Test groups:
 //!   1. WgpuHal device-level: factory closure initialises WgpuDevice correctly.
 //!   2. Cross-backend pixel parity: WgpuShared and WgpuHal render the same scene
 //!      to pixel-identical output (they share all rendering code).
 //!   3. composite_output_hal: raw backend texture handle is accessible after render.
+//!   4. Multi-instance shared-device: two independent renderers on one wgpu::Device.
+//!
+//! On pixel mismatch, test helpers write `WR_TEST_OUTPUT_DIR` (default: /tmp)
+//! PNG files for both images so failures can be inspected visually.
 
 #![cfg(feature = "wgpu_backend")]
 
 extern crate webrender;
+
+use std::path::{Path, PathBuf};
 
 use webrender::api::units::*;
 use webrender::api::*;
@@ -46,6 +52,62 @@ impl RenderNotifier for NoopNotifier {
     fn clone(&self) -> Box<dyn RenderNotifier> { Box::new(NoopNotifier) }
     fn wake_up(&self, _: bool) {}
     fn new_frame_ready(&self, _: DocumentId, _: FramePublishId, _: &FrameReadyParams) {}
+}
+
+/// Output directory for diagnostic PNGs on pixel mismatch.
+fn test_output_dir() -> PathBuf {
+    std::env::var("WR_TEST_OUTPUT_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir())
+}
+
+/// Write a raw RGBA8 pixel buffer as a PNG file to `path`.
+fn write_png(path: &Path, width: u32, height: u32, pixels: &[u8]) {
+    use std::fs::File;
+    use std::io::BufWriter;
+    let file = match File::create(path) {
+        Ok(f) => f,
+        Err(e) => { eprintln!("PNG write failed ({path:?}): {e}"); return; }
+    };
+    let mut encoder = png::Encoder::new(BufWriter::new(file), width, height);
+    encoder.set_color(png::ColorType::RGBA);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().expect("PNG header");
+    writer.write_image_data(pixels).expect("PNG data");
+}
+
+/// Assert pixel buffers are identical, dumping PNGs on failure.
+///
+/// `label_a` / `label_b` are used in the PNG filename (e.g. "shared", "hal").
+#[track_caller]
+fn assert_pixels_equal(
+    label_a: &str, pixels_a: &[u8],
+    label_b: &str, pixels_b: &[u8],
+    width: u32, height: u32,
+    test_name: &str,
+) {
+    if pixels_a == pixels_b {
+        return;
+    }
+
+    // Count differing pixels for the error message.
+    let diff_pixels: usize = pixels_a.chunks(4)
+        .zip(pixels_b.chunks(4))
+        .filter(|(a, b)| a != b)
+        .count();
+    let total = (width * height) as usize;
+
+    // Dump PNGs for visual inspection.
+    let dir = test_output_dir();
+    let path_a = dir.join(format!("{test_name}_{label_a}.png"));
+    let path_b = dir.join(format!("{test_name}_{label_b}.png"));
+    write_png(&path_a, width, height, pixels_a);
+    write_png(&path_b, width, height, pixels_b);
+
+    panic!(
+        "Pixel mismatch in '{test_name}': {diff_pixels}/{total} pixels differ.\n\
+         Diagnostic PNGs written:\n  {label_a}: {path_a:?}\n  {label_b}: {path_b:?}"
+    );
 }
 
 /// Render a fixed 256×256 scene (4 solid-colour quadrants) using the given
@@ -188,13 +250,11 @@ fn wgpu_shared_and_wgpu_hal_are_pixel_identical() {
         device_factory: Box::new(move || make_device(&adapter2)),
     });
 
-    assert_eq!(
-        shared_pixels.len(), hal_pixels.len(),
-        "pixel buffers must be the same size"
-    );
-    assert_eq!(
-        shared_pixels, hal_pixels,
-        "WgpuShared and WgpuHal must produce pixel-identical output"
+    assert_pixels_equal(
+        "shared", &shared_pixels,
+        "hal", &hal_pixels,
+        256, 256,
+        "wgpu_shared_and_wgpu_hal_are_pixel_identical",
     );
 }
 
@@ -274,4 +334,204 @@ fn composite_output_hal_returns_handle() {
     assert!(hal_ok, "composite_output_hal<A>() must return Some on matching backend {:?}", info.backend);
 
     renderer.deinit();
+}
+
+// ──────────────── 4. Multi-instance shared-device isolation ──────────────────
+
+/// Two independent WebRender instances on a single wgpu::Device must not
+/// interfere with each other.  Each renders a distinct solid colour; we verify
+/// that each instance's readback reflects only its own scene.
+#[test]
+fn two_renderers_on_one_device_are_isolated() {
+    let Some(adapter) = make_adapter() else {
+        eprintln!("multi-instance test: no adapter — skipping");
+        return;
+    };
+
+    // Single shared device — both renderers will use it.
+    let (device, queue) = make_device(&adapter);
+
+    let make_renderer = |r: f32, g: f32, b: f32, instance_label: &str| {
+        let opts = webrender::WebRenderOptions {
+            clear_color: ColorF::new(r, g, b, 1.0),
+            ..Default::default()
+        };
+        let (mut renderer, sender) = webrender::create_webrender_instance_with_backend(
+            RendererBackend::WgpuShared {
+                device: device.clone(),
+                queue: queue.clone(),
+            },
+            Box::new(NoopNotifier),
+            opts,
+            None,
+        )
+        .unwrap_or_else(|e| panic!("Failed to create renderer '{instance_label}': {e:?}"));
+
+        let device_size = DeviceIntSize::new(64, 64);
+        let mut api = sender.create_api();
+        let document = api.add_document(device_size);
+        let pipeline = PipelineId(0, 0);
+
+        let mut builder = DisplayListBuilder::new(pipeline);
+        builder.begin();
+        // Push a rect covering the whole viewport in the chosen colour.
+        let rect = LayoutRect::from_origin_and_size(
+            LayoutPoint::zero(),
+            LayoutSize::new(64.0, 64.0),
+        );
+        builder.push_rect(
+            &CommonItemProperties::new(rect, SpaceAndClipInfo::root_scroll(pipeline)),
+            rect,
+            ColorF::new(r, g, b, 1.0),
+        );
+        let mut txn = Transaction::new();
+        txn.set_display_list(Epoch(0), builder.end());
+        txn.set_root_pipeline(pipeline);
+        txn.generate_frame(0, true, false, RenderReasons::empty());
+        api.send_transaction(document, txn);
+        api.flush_scene_builder();
+        renderer.update();
+        renderer.render(device_size, 0).expect("render failed");
+        (renderer, device_size)
+    };
+
+    let (mut renderer_a, size_a) = make_renderer(1.0, 0.0, 0.0, "red");   // solid red
+    let (mut renderer_b, size_b) = make_renderer(0.0, 0.0, 1.0, "blue");  // solid blue
+
+    let readback = |renderer: &mut webrender::Renderer, size: DeviceIntSize| {
+        let rect = FramebufferIntRect::from_origin_and_size(
+            FramebufferIntPoint::new(0, 0),
+            FramebufferIntSize::new(size.width, size.height),
+        );
+        renderer.read_pixels_rgba8(rect)
+    };
+
+    let pixels_a = readback(&mut renderer_a, size_a);
+    let pixels_b = readback(&mut renderer_b, size_b);
+
+    renderer_a.deinit();
+    renderer_b.deinit();
+
+    // Every pixel in renderer_a should be red.
+    for (i, chunk) in pixels_a.chunks(4).enumerate() {
+        assert!(
+            chunk[0] > 200 && chunk[1] < 50 && chunk[2] < 50,
+            "renderer_a pixel {i}: expected red, got RGBA {:?}", chunk
+        );
+    }
+
+    // Every pixel in renderer_b should be blue.
+    for (i, chunk) in pixels_b.chunks(4).enumerate() {
+        assert!(
+            chunk[0] < 50 && chunk[1] < 50 && chunk[2] > 200,
+            "renderer_b pixel {i}: expected blue, got RGBA {:?}", chunk
+        );
+    }
+
+    // The two outputs must differ (they render different colours).
+    assert_ne!(pixels_a, pixels_b, "renderers on the same device must produce independent output");
+}
+
+/// Two renderers on the same device can render sequentially and produce
+/// the correct output even when interleaved.  This catches cases where
+/// shared device state (bind groups, scratch buffers, etc.) leaks between
+/// renderer instances.
+#[test]
+fn two_renderers_interleaved_produce_correct_pixels() {
+    let Some(adapter) = make_adapter() else {
+        eprintln!("interleaved test: no adapter — skipping");
+        return;
+    };
+
+    let (device, queue) = make_device(&adapter);
+    let device_size = DeviceIntSize::new(128, 128);
+
+    // Helper: create one renderer + a stable API (same namespace throughout).
+    let make_wr = |r: f32, g: f32, b: f32, pipeline_ns: u32| {
+        let opts = webrender::WebRenderOptions {
+            clear_color: ColorF::new(r, g, b, 1.0),
+            ..Default::default()
+        };
+        let (renderer, sender) = webrender::create_webrender_instance_with_backend(
+            RendererBackend::WgpuShared {
+                device: device.clone(),
+                queue: queue.clone(),
+            },
+            Box::new(NoopNotifier),
+            opts,
+            None,
+        ).expect("create renderer");
+        let mut api = sender.create_api();
+        let doc = api.add_document(device_size);
+        let pipeline = PipelineId(pipeline_ns, 0);
+        (renderer, api, doc, pipeline)
+    };
+
+    let push_solid = |api: &mut RenderApi, doc: DocumentId, pipeline: PipelineId,
+                      epoch: u32, r: f32, g: f32, b: f32| {
+        let mut builder = DisplayListBuilder::new(pipeline);
+        builder.begin();
+        let rect = LayoutRect::from_origin_and_size(LayoutPoint::zero(), LayoutSize::new(128.0, 128.0));
+        builder.push_rect(
+            &CommonItemProperties::new(rect, SpaceAndClipInfo::root_scroll(pipeline)),
+            rect,
+            ColorF::new(r, g, b, 1.0),
+        );
+        let mut txn = Transaction::new();
+        txn.set_display_list(Epoch(epoch), builder.end());
+        txn.set_root_pipeline(pipeline);
+        txn.generate_frame(0, true, false, RenderReasons::empty());
+        api.send_transaction(doc, txn);
+        api.flush_scene_builder();
+    };
+
+    let (mut wr_a, mut api_a, doc_a, pipe_a) = make_wr(0.0, 1.0, 0.0, 0); // green
+    let (mut wr_b, mut api_b, doc_b, pipe_b) = make_wr(1.0, 1.0, 0.0, 1); // yellow
+
+    // Round 1: render A (green), then B (yellow).
+    push_solid(&mut api_a, doc_a, pipe_a, 0, 0.0, 1.0, 0.0);
+    wr_a.update();
+    wr_a.render(device_size, 0).expect("wr_a render 1");
+
+    push_solid(&mut api_b, doc_b, pipe_b, 0, 1.0, 1.0, 0.0);
+    wr_b.update();
+    wr_b.render(device_size, 0).expect("wr_b render 1");
+
+    // Round 2: re-render A with a different colour (red), verify it changed.
+    push_solid(&mut api_a, doc_a, pipe_a, 1, 1.0, 0.0, 0.0);
+    wr_a.update();
+    wr_a.render(device_size, 0).expect("wr_a render 2");
+
+    let readback = |r: &mut webrender::Renderer| {
+        let rect = FramebufferIntRect::from_origin_and_size(
+            FramebufferIntPoint::new(0, 0),
+            FramebufferIntSize::new(128, 128),
+        );
+        r.read_pixels_rgba8(rect)
+    };
+
+    let pixels_a2 = readback(&mut wr_a);
+    let pixels_b1 = readback(&mut wr_b);
+
+    wr_a.deinit();
+    wr_b.deinit();
+
+    // A's second render should be red (clear colour = green, rect = red → rect wins).
+    for (i, chunk) in pixels_a2.chunks(4).enumerate() {
+        assert!(
+            chunk[0] > 200 && chunk[1] < 50 && chunk[2] < 50,
+            "wr_a round-2 pixel {i}: expected red, got RGBA {:?}", chunk
+        );
+    }
+
+    // B's output should still be yellow (unaffected by A's re-render).
+    for (i, chunk) in pixels_b1.chunks(4).enumerate() {
+        assert!(
+            chunk[0] > 200 && chunk[1] > 200 && chunk[2] < 50,
+            "wr_b pixel {i}: expected yellow, got RGBA {:?}", chunk
+        );
+    }
+
+    // A (red) and B (yellow) must differ — interleaved renders don't bleed.
+    assert_ne!(pixels_a2, pixels_b1, "A (red) and B (yellow) must differ");
 }
