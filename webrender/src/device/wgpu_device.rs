@@ -517,9 +517,27 @@ pub struct WgpuDevice {
 
 impl Drop for WgpuDevice {
     fn drop(&mut self) {
+        // Submit any buffered commands so GPU work is not silently abandoned.
+        // In a well-behaved shutdown `flush_encoder` is already called by the
+        // render loop, so this is typically a no-op.
+        self.flush_encoder();
+
+        // Save the driver-level pipeline cache blob to disk.
         if let Err(e) = self.save_pipeline_cache() {
             log::warn!("wgpu: failed to auto-save pipeline cache on drop: {}", e);
         }
+
+        // `device.poll(Wait)` ensures the GPU has finished consuming all
+        // submitted work before the device handle is released.  This prevents
+        // validation layer errors about resources being destroyed while in use.
+        let _ = self.device.poll(wgpu::PollType::Wait);
+
+        log::debug!(
+            "wgpu: WgpuDevice dropped — {} shader(s), {} pipeline(s), {} depth texture(s)",
+            self.shaders.len(),
+            self.pipelines.len(),
+            self.depth_textures.len(),
+        );
     }
 }
 
@@ -984,6 +1002,22 @@ impl WgpuDevice {
             self.depth_textures.insert(key, tex);
         }
         self.depth_textures[&key].create_view(&wgpu::TextureViewDescriptor::default())
+    }
+
+    /// Release the pooled depth texture for the given size, if one exists.
+    ///
+    /// Call this when a render target is resized or destroyed so the old depth
+    /// allocation is freed rather than sitting in the pool indefinitely.
+    pub fn evict_depth_texture(&mut self, width: u32, height: u32) {
+        self.depth_textures.remove(&(width, height));
+    }
+
+    /// Release all pooled depth textures.
+    ///
+    /// Useful on device resize or before a full shutdown to reclaim VRAM
+    /// before new depth textures are allocated for the new dimensions.
+    pub fn evict_all_depth_textures(&mut self) {
+        self.depth_textures.clear();
     }
 
     pub fn begin_frame(&mut self) -> GpuFrameId {
