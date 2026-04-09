@@ -262,6 +262,7 @@ impl WebRenderOptions {
     /// the PBOs for us.
     const MAX_INSTANCE_BUFFER_SIZE: usize = 0x20000; // actual threshold in macOS GL drivers
 
+    #[cfg(feature = "gl_backend")]
     pub(crate) fn prepare_for_device_creation(&mut self) {
         match self.compositor_config {
             CompositorConfig::Draw { .. } | CompositorConfig::Native { .. } => {}
@@ -271,6 +272,7 @@ impl WebRenderOptions {
         }
     }
 
+    #[cfg(feature = "gl_backend")]
     pub(crate) fn take_device_config(&mut self) -> DeviceConfig {
         DeviceConfig {
             crash_annotator: self.crash_annotator.take(),
@@ -967,6 +969,7 @@ pub fn create_webrender_instance_wgpu(
     let aux_textures = super::RendererAuxTextures::Wgpu(super::WgpuRendererAuxTextures);
     #[cfg(feature = "gl_backend")]
     let texture_resolver = TextureResolver::new_without_gl();
+    #[cfg(feature = "gl_backend")]
     let gpu_profiler = GpuProfiler::new_noop();
 
     let color_cache_formats = crate::device::TextureFormatPair {
@@ -1220,6 +1223,7 @@ pub fn create_webrender_instance_wgpu(
         clear_caches_with_quads: options.clear_caches_with_quads,
         clear_alpha_targets_with_quads: false,
         last_time: 0,
+        #[cfg(feature = "gl_backend")]
         gpu_profiler,
         #[cfg(feature = "gl_backend")]
         vaos,

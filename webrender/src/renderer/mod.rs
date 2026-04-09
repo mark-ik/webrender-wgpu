@@ -64,7 +64,9 @@ use crate::composite::TileKind;
 #[cfg(feature = "debugger")]
 use api::debugger::CompositorDebugInfo;
 use crate::segment::SegmentBuilder;
-use crate::{debug_colors, CompositorInputConfig, CompositorSurfaceUsage};
+use crate::debug_colors;
+#[cfg(feature = "gl_backend")]
+use crate::{CompositorInputConfig, CompositorSurfaceUsage};
 use crate::device::{GpuDevice, GpuFrameId, TextureFilter, TextureFlags, TextureSlot, Texel};
 #[cfg(feature = "gl_backend")]
 use crate::device::{DepthFunction, Device, DrawTarget, ExternalTexture};
@@ -72,6 +74,7 @@ use crate::device::{DepthFunction, Device, DrawTarget, ExternalTexture};
 use crate::device::{ReadTarget, ShaderError, Texture};
 #[cfg(feature = "wgpu_backend")]
 use crate::device::WgpuDevice;
+#[cfg(feature = "gl_backend")]
 use crate::device::query::{GpuSampler, GpuTimer};
 #[cfg(all(feature = "capture", feature = "gl_backend"))]
 use crate::device::FBOId;
@@ -92,6 +95,7 @@ use crate::picture::{ResolvedSurfaceTexture, TileId};
 use crate::prim_store::DeferredResolve;
 use crate::profiler::{self, GpuProfileTag, TransactionProfile};
 use crate::profiler::{Profiler, add_event_marker, add_text_marker, thread_is_being_profiled};
+#[cfg(feature = "gl_backend")]
 use crate::device::query::GpuProfiler;
 use crate::render_target::ResolveOp;
 use crate::render_task_graph::RenderTaskGraph;
@@ -661,6 +665,7 @@ pub struct GpuProfile {
 }
 
 impl GpuProfile {
+    #[cfg(feature = "gl_backend")]
     fn new(frame_id: GpuFrameId, timers: &[GpuTimer]) -> GpuProfile {
         let mut paint_time_ns = 0;
         for timer in timers {
@@ -1351,6 +1356,7 @@ pub struct Renderer {
 
     last_time: u64,
 
+    #[cfg(feature = "gl_backend")]
     pub gpu_profiler: GpuProfiler,
     #[cfg(feature = "gl_backend")]
     vaos: vertex::RendererVaoState,
@@ -4979,6 +4985,7 @@ impl Renderer {
     }
 
     pub fn set_debug_flags(&mut self, flags: DebugFlags) {
+        #[cfg(feature = "gl_backend")]
         if let Some(enabled) = flag_changed(self.debug_flags, flags, DebugFlags::GPU_TIME_QUERIES) {
             if enabled {
                 self.gpu_profiler.enable_timers();
@@ -4986,6 +4993,7 @@ impl Renderer {
                 self.gpu_profiler.disable_timers();
             }
         }
+        #[cfg(feature = "gl_backend")]
         if let Some(enabled) = flag_changed(self.debug_flags, flags, DebugFlags::GPU_SAMPLE_QUERIES) {
             if enabled {
                 self.gpu_profiler.enable_samplers();

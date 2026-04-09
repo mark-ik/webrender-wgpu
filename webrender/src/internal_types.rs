@@ -7,27 +7,27 @@ use api::{ImageFormat, NotificationRequest, Shadow, FilterOpGraphPictureBufferId
 use api::FramePublishId;
 use api::units::*;
 use crate::device::TextureFilter;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 use crate::render_api::DebugCommand;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 use crate::composite::NativeSurfaceOperation;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 use crate::renderer::{FullFrameStats, PipelineInfo};
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 use crate::gpu_cache::GpuCacheUpdateList;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 use crate::gpu_types::BlurEdgeMode;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 use crate::frame_builder::Frame;
 use crate::profiler::TransactionProfile;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 use crate::spatial_tree::SpatialNodeIndex;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 use crate::prim_store::PrimitiveInstanceIndex;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 use crate::filterdata::FilterDataHandle;
 use rustc_hash::FxHasher;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 use plane_split::BspSplitter;
 use smallvec::SmallVec;
 use std::{usize, i32};
@@ -187,7 +187,7 @@ impl FrameStamp {
 }
 
 /// Custom field embedded inside the Polygon struct of the plane-split crate.
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 #[derive(Copy, Clone, Debug)]
 #[cfg_attr(feature = "capture", derive(Serialize))]
 pub struct PlaneSplitAnchor {
@@ -195,7 +195,7 @@ pub struct PlaneSplitAnchor {
     pub instance_index: PrimitiveInstanceIndex,
 }
 
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 impl PlaneSplitAnchor {
     pub fn new(
         spatial_node_index: SpatialNodeIndex,
@@ -208,7 +208,7 @@ impl PlaneSplitAnchor {
     }
 }
 
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 impl Default for PlaneSplitAnchor {
     fn default() -> Self {
         PlaneSplitAnchor {
@@ -219,7 +219,7 @@ impl Default for PlaneSplitAnchor {
 }
 
 /// A concrete plane splitter type used in WebRender.
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 pub type PlaneSplitter = BspSplitter<PlaneSplitAnchor>;
 
 /// An index into the scene's list of plane splitters
@@ -425,7 +425,7 @@ pub enum FilterGraphOp {
     /// replaced by an interned handle, this is made in wrap_prim_with_filters.
     /// Aside from the interned handle, creates_pixels indicates if the transfer
     /// parameters will probably fill the entire subregion with non-zero alpha.
-    #[cfg(feature = "gl_backend")]
+    #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
     SVGFEComponentTransferInterned{handle: FilterDataHandle, creates_pixels: bool},
     /// composite 2 images with chosen composite mode with parameters for that
     /// mode
@@ -699,7 +699,7 @@ impl FilterGraphOp {
             FilterGraphOp::SVGFEBlendSoftLight => "SVGFEBlendSoftLight",
             FilterGraphOp::SVGFEColorMatrix{..} => "SVGFEColorMatrix",
             FilterGraphOp::SVGFEComponentTransfer => "SVGFEComponentTransfer",
-            #[cfg(feature = "gl_backend")]
+            #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
             FilterGraphOp::SVGFEComponentTransferInterned{..} => "SVGFEComponentTransferInterned",
             FilterGraphOp::SVGFECompositeArithmetic{..} => "SVGFECompositeArithmetic",
             FilterGraphOp::SVGFECompositeATop => "SVGFECompositeATop",
@@ -791,7 +791,7 @@ pub enum Filter {
         width: f32,
         height: f32,
         should_inflate: bool,
-        #[cfg(feature = "gl_backend")]
+        #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
         edge_mode: BlurEdgeMode,
     },
     Brightness(f32),
@@ -910,7 +910,7 @@ impl From<FilterOp> for Filter {
                 width,
                 height,
                 should_inflate: true,
-                #[cfg(feature = "gl_backend")]
+                #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
                 edge_mode: BlurEdgeMode::Duplicate,
             },
             FilterOp::Brightness(b) => Filter::Brightness(b),
@@ -1339,7 +1339,7 @@ impl TextureUpdateList {
 
 /// A list of updates built by the render backend that should be applied
 /// by the renderer thread.
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 pub struct ResourceUpdateList {
     /// List of OS native surface create / destroy operations to apply.
     pub native_surface_updates: Vec<NativeSurfaceOperation>,
@@ -1348,7 +1348,7 @@ pub struct ResourceUpdateList {
     pub texture_updates: TextureUpdateList,
 }
 
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 impl ResourceUpdateList {
     /// Returns true if this update list has no effect.
     pub fn is_nop(&self) -> bool {
@@ -1357,7 +1357,7 @@ impl ResourceUpdateList {
 }
 
 /// Wraps a frame_builder::Frame, but conceptually could hold more information
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 pub struct RenderedDocument {
     pub frame: Frame,
     pub profile: TransactionProfile,
@@ -1365,7 +1365,7 @@ pub struct RenderedDocument {
     pub frame_stats: Option<FullFrameStats>
 }
 
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 pub enum DebugOutput {
     #[cfg(feature = "capture")]
     SaveCapture(CaptureConfig, Vec<ExternalCaptureImage>),
@@ -1373,7 +1373,7 @@ pub enum DebugOutput {
     LoadCapture(CaptureConfig, Vec<PlainExternalImage>),
 }
 
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 #[allow(dead_code)]
 pub enum ResultMsg {
     DebugCommand(DebugCommand),

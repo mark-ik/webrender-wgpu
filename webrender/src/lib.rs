@@ -80,106 +80,118 @@ extern crate svg_fmt;
 
 #[macro_use]
 mod profiler;
-#[cfg(feature = "gl_backend")]
+// ── Scene pipeline modules ────────────────────────────────────────────────────
+// These modules implement the WebRender scene processing pipeline (display
+// lists → primitives → batches → render tasks).  They are backend-agnostic and
+// required by both GL and wgpu render paths.  Gated on "any backend enabled".
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod telemetry;
-
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod batch;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod border;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod box_shadow;
 #[cfg(any(feature = "capture", feature = "replay"))]
 mod capture;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod clip;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod space;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod spatial_tree;
-#[cfg(feature = "gl_backend")]
-mod command_buffer;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod composite;
-#[cfg(feature = "gl_backend")]
-mod compositor;
 mod debug_colors;
 mod debug_font_data;
 mod debug_item;
 mod device;
 mod ellipse;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod filterdata;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod frame_builder;
 mod freelist;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod glyph_cache;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod gpu_cache;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod gpu_types;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod hit_test;
 mod internal_types;
 mod lru_cache;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod pattern;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod picture;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod picture_graph;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod prepare;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod prim_store;
 mod print_tree;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod quad;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod render_backend;
-#[cfg(feature = "gl_backend")]
-mod render_target;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod render_task_graph;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod render_task_cache;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod render_task;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod renderer;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod resource_cache;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod scene;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod scene_builder_thread;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod scene_building;
-#[cfg(feature = "gl_backend")]
-mod screen_capture;
 mod segment;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod spatial_node;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod surface;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod texture_pack;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod texture_cache;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod tile_cache;
 mod util;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod visibility;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod api_resources;
 mod image_tiling;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod image_source;
 mod rectangle_occlusion;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod picture_textures;
+
+// ── Additional scene pipeline modules ──────────────────────────────────────────
+// render_target and command_buffer define the abstract render task data
+// structures (what to render), used by both GL and wgpu render paths.
+// render_api carries the cross-thread message protocol for the render backend.
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
+mod command_buffer;
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
+mod render_target;
+
+// ── GL-specific modules ────────────────────────────────────────────────────────
+// These implement the GL compositor and screen capture.
+// Only compiled when the GL backend is enabled.
+#[cfg(feature = "gl_backend")]
+mod compositor;
+#[cfg(feature = "gl_backend")]
+mod screen_capture;
 mod frame_allocator;
 mod bump_allocator;
 
@@ -195,7 +207,7 @@ pub use wgpu;
 ///
 pub mod intern;
 ///
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 pub mod render_api;
 
 pub mod shader_source {
@@ -226,12 +238,15 @@ extern crate webrender_build;
 #[cfg(feature = "gl_backend")]
 #[doc(hidden)]
 pub use crate::composite::{LayerCompositor, CompositorInputConfig, CompositorSurfaceUsage, ClipRadius};
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 pub use crate::composite::{CompositorConfig, CompositorCapabilities, CompositorSurfaceTransform};
 #[cfg(feature = "gl_backend")]
 pub use crate::composite::Compositor;
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 pub use crate::composite::{NativeSurfaceId, NativeTileId, NativeSurfaceInfo, PartialPresentCompositor};
 #[cfg(feature = "gl_backend")]
 pub use crate::composite::MappableCompositor;
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 pub use crate::composite::{MappedTileInfo, SWGLCompositeSurfaceInfo, WindowVisibility, WindowProperties};
 #[cfg(feature = "gl_backend")]
 pub use crate::device::{UploadMethod, VertexUsageHint, get_gl_target, get_unoptimized_shader_source};
@@ -247,8 +262,9 @@ pub use crate::renderer::{
     RendererStats, MAX_VERTEX_TEXTURE_WIDTH,
 };
 // RendererBackend and create_webrender_instance_with_backend cover all
-// backends and are always exported.
+// backends and are always exported (when any backend is enabled).
 pub use crate::device::RendererBackend;
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 pub use crate::renderer::init::{
     WebRenderOptions, create_webrender_instance_with_backend,
     AsyncPropertySampler, SceneBuilderHooks, RenderBackendHooks,
@@ -264,20 +280,20 @@ pub use crate::hit_test::SharedHitTester;
 pub use crate::internal_types::FastHashMap;
 #[cfg(feature = "gl_backend")]
 pub use crate::screen_capture::{AsyncScreenshotHandle, RecordedFrameHandle};
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 pub use crate::texture_cache::TextureCacheConfig;
 pub use api as webrender_api;
 pub use webrender_build::shader::{ProgramSourceDigest, ShaderKind};
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 pub use crate::picture::{TileDescriptor, TileId, InvalidationReason};
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 pub use crate::picture::{PrimitiveCompareResult, CompareHelperResult};
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 pub use crate::picture::{TileNode, TileNodeKind, TileOffset};
 pub use crate::intern::ItemUid;
-#[cfg(feature = "gl_backend")]
-pub use crate::render_api::*;
-#[cfg(feature = "gl_backend")]
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
+pub use crate::render_api::{RenderApiSender, ApiMsg, MemoryReport, DebugCommand, RenderApi};
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 pub use crate::tile_cache::{PictureCacheDebugInfo, DirtyTileDebugInfo, TileDebugInfo, SliceDebugInfo};
 pub use crate::util::FastTransform;
 pub use glyph_rasterizer;
