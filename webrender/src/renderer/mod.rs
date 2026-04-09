@@ -1671,6 +1671,10 @@ impl Renderer {
         // Clipped tiles go into a separate queue but use the same shader.
         let mut textured_batches: Vec<(CacheTextureId, Vec<CompositeInstance>)> = Vec::new();
         let mut textured_clipped_batches: Vec<(CacheTextureId, Vec<CompositeInstance>)> = Vec::new();
+        // YUV tiles are batched by their 3-plane key [Y, U, V] CacheTextureIds.
+        // Multiple tiles that share the same set of YUV planes (e.g. a tiled video
+        // surface) are instanced together in a single draw call.
+        let mut yuv_batches: Vec<([CacheTextureId; 3], Vec<CompositeInstance>)> = Vec::new();
         let mut skipped_tiles = 0u32;
 
         // Tiles are sorted front-to-back by z_id (for GL depth-test efficiency).
@@ -1758,9 +1762,52 @@ impl Renderer {
                                 skipped_tiles += 1;
                             }
                         }
-                        ResolvedExternalSurfaceColorData::Yuv { .. } => {
-                            // YUV external surfaces not yet supported in wgpu path.
-                            skipped_tiles += 1;
+                        ResolvedExternalSurfaceColorData::Yuv {
+                            ref planes,
+                            color_space,
+                            format,
+                            channel_bit_depth,
+                            ..
+                        } => {
+                            // Require all three planes to be in the wgpu texture cache.
+                            if let (
+                                TextureSource::TextureCache(y_id, _),
+                                TextureSource::TextureCache(u_id, _),
+                                TextureSource::TextureCache(v_id, _),
+                            ) = (planes[0].texture, planes[1].texture, planes[2].texture) {
+                                if self.wgpu_texture_cache.contains_key(&y_id)
+                                    && self.wgpu_texture_cache.contains_key(&u_id)
+                                    && self.wgpu_texture_cache.contains_key(&v_id)
+                                {
+                                    let uv_rects = [
+                                        planes[0].uv_rect,
+                                        planes[1].uv_rect,
+                                        planes[2].uv_rect,
+                                    ];
+                                    let instance = CompositeInstance::new_yuv(
+                                        tile_rect,
+                                        clip_rect,
+                                        color_space,
+                                        format,
+                                        channel_bit_depth,
+                                        uv_rects,
+                                        flip,
+                                        compositor_clip,
+                                    );
+                                    let key = [y_id, u_id, v_id];
+                                    // Batch by plane key: tiles sharing the same YUV
+                                    // plane set are instanced together.
+                                    if let Some(entry) = yuv_batches.iter_mut().find(|(k, _)| *k == key) {
+                                        entry.1.push(instance);
+                                    } else {
+                                        yuv_batches.push((key, vec![instance]));
+                                    }
+                                } else {
+                                    skipped_tiles += 1;
+                                }
+                            } else {
+                                skipped_tiles += 1;
+                            }
                         }
                     }
                 }
@@ -1795,7 +1842,8 @@ impl Renderer {
         // even when there are no tiles to draw (e.g. blank scenes).
         let has_composite_work = !color_instances.is_empty()
             || !textured_batches.is_empty()
-            || !textured_clipped_batches.is_empty();
+            || !textured_clipped_batches.is_empty()
+            || !yuv_batches.is_empty();
         {
             // Use the readback texture format, not the surface format,
             // since the composite pass renders into the offscreen RT.
@@ -1904,18 +1952,67 @@ impl Renderer {
                     );
                 }
 
+                // YUV external surface tiles: each batch shares the same
+                // [Y, U, V] plane texture set.  Uses the CompositeYuv shader
+                // which converts YUV → RGB on the GPU.  Drawn after RGB tiles
+                // so video surfaces composite on top, matching GL path ordering.
+                for ([y_id, u_id, v_id], instances) in &yuv_batches {
+                    let y_view = match self.wgpu_texture_cache.get(y_id) {
+                        Some(t) => t.create_view(),
+                        None => continue,
+                    };
+                    let u_view = match self.wgpu_texture_cache.get(u_id) {
+                        Some(t) => t.create_view(),
+                        None => continue,
+                    };
+                    let v_view = match self.wgpu_texture_cache.get(v_id) {
+                        Some(t) => t.create_view(),
+                        None => continue,
+                    };
+                    let instance_bytes = crate::device::as_byte_slice(instances.as_slice());
+                    let features = instances[0].get_yuv_features();
+                    let variant = if features.contains(crate::composite::CompositeFeatures::NO_CLIP_MASK) {
+                        crate::device::WgpuShaderVariant::CompositeFastPathYuv
+                    } else {
+                        crate::device::WgpuShaderVariant::CompositeYuv
+                    };
+                    let textures = crate::device::TextureBindings {
+                        color0: Some(&y_view),
+                        color1: Some(&u_view),
+                        color2: Some(&v_view),
+                        ..Default::default()
+                    };
+                    wgpu_dev.record_draw(
+                        &mut pass,
+                        variant,
+                        crate::device::WgpuBlendMode::PremultipliedAlpha,
+                        crate::device::WgpuDepthState::None,
+                        surface_fmt,
+                        w,
+                        h,
+                        &textures,
+                        &transform_buf,
+                        &tex_size_buf,
+                        instance_bytes,
+                        instances.len() as u32,
+                        None,
+                    );
+                }
+
             } // render pass dropped
             wgpu_dev.return_encoder(encoder);
         }
 
         let total_textured: usize = textured_batches.iter().map(|(_, v)| v.len()).sum();
         let total_clipped: usize = textured_clipped_batches.iter().map(|(_, v)| v.len()).sum();
-        if !color_instances.is_empty() || total_textured > 0 || total_clipped > 0 {
+        let total_yuv: usize = yuv_batches.iter().map(|(_, v)| v.len()).sum();
+        if !color_instances.is_empty() || total_textured > 0 || total_clipped > 0 || total_yuv > 0 {
             info!(
-                "wgpu: composited {} color + {} textured + {} clipped tiles ({} skipped, {}x{})",
+                "wgpu: composited {} color + {} textured + {} clipped + {} yuv tiles ({} skipped, {}x{})",
                 color_instances.len(),
                 total_textured,
                 total_clipped,
+                total_yuv,
                 skipped_tiles,
                 device_size.width,
                 device_size.height,
