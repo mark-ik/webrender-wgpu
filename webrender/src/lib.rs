@@ -294,6 +294,10 @@ pub use crate::intern::ItemUid;
 #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 pub use crate::render_api::{RenderApiSender, ApiMsg, MemoryReport, DebugCommand, RenderApi};
 #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
+pub use crate::render_api::Transaction;
+#[cfg(any(feature = "capture", feature = "replay"))]
+pub use crate::render_api::CaptureBits;
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 pub use crate::tile_cache::{PictureCacheDebugInfo, DirtyTileDebugInfo, TileDebugInfo, SliceDebugInfo};
 pub use crate::util::FastTransform;
 pub use glyph_rasterizer;
