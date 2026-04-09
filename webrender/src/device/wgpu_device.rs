@@ -832,7 +832,12 @@ impl WgpuDevice {
     }
 
     /// Return a copy of the adapter information captured at device creation.
-    /// Returns a placeholder when the device was created via `from_shared_device`.
+    ///
+    /// Returns a placeholder with `Backend::Noop` when the device was created
+    /// via [`from_shared_device`] — the caller owns the wgpu::Device and we
+    /// have no way to recover the original adapter info.  Callers that need
+    /// real backend/vendor information should pass it alongside the shared
+    /// device (future extension) or query `device.as_hal::<A>()` directly.
     pub fn adapter_info(&self) -> wgpu::AdapterInfo {
         self.adapter_info.clone().unwrap_or_else(|| wgpu::AdapterInfo {
             name: "shared-device".to_string(),
@@ -841,7 +846,7 @@ impl WgpuDevice {
             device_type: wgpu::DeviceType::Other,
             driver: String::new(),
             driver_info: String::new(),
-            backend: wgpu::Backend::Vulkan, // placeholder; real info unavailable
+            backend: wgpu::Backend::Noop, // real info unavailable for shared devices
         })
     }
 

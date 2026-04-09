@@ -812,76 +812,103 @@ pub(super) struct GlRendererUploadState {
 }
 
 #[cfg(feature = "wgpu_backend")]
-#[allow(dead_code)]
 pub struct WgpuRendererUploadState;
 
-#[cfg_attr(feature = "wgpu_backend", allow(dead_code))]
 pub(super) enum RendererUploadState {
+    #[cfg(feature = "gl_backend")]
     Gl(GlRendererUploadState),
     #[cfg(feature = "wgpu_backend")]
     Wgpu(WgpuRendererUploadState),
 }
 
 impl RendererUploadState {
+    #[cfg(feature = "gl_backend")]
     pub fn new_gl(texture_upload_pbo_pool: UploadPBOPool, staging_texture_pool: UploadTexturePool) -> Self {
-        Self::Gl(GlRendererUploadState {
-            texture_upload_pbo_pool,
-            staging_texture_pool,
-        })
+        Self::Gl(GlRendererUploadState { texture_upload_pbo_pool, staging_texture_pool })
     }
 
+    #[cfg(feature = "wgpu_backend")]
+    pub fn new_wgpu() -> Self { Self::Wgpu(WgpuRendererUploadState) }
+
+    #[cfg(feature = "gl_backend")]
     fn gl_mut(&mut self) -> &mut GlRendererUploadState {
         match self {
             Self::Gl(state) => state,
             #[cfg(feature = "wgpu_backend")]
-            Self::Wgpu(..) => unreachable!("wgpu upload state is not wired yet"),
+            Self::Wgpu(..) => panic!("RendererUploadState::gl_mut() called on wgpu variant"),
         }
     }
 
+    #[cfg(feature = "gl_backend")]
     fn gl(&self) -> &GlRendererUploadState {
         match self {
             Self::Gl(state) => state,
             #[cfg(feature = "wgpu_backend")]
-            Self::Wgpu(..) => unreachable!("wgpu upload state is not wired yet"),
+            Self::Wgpu(..) => panic!("RendererUploadState::gl() called on wgpu variant"),
         }
     }
 
+    #[cfg(feature = "gl_backend")]
     pub fn gl_pools_mut(&mut self) -> (&mut UploadPBOPool, &mut UploadTexturePool) {
         let state = self.gl_mut();
         (&mut state.texture_upload_pbo_pool, &mut state.staging_texture_pool)
     }
 
     pub fn begin_frame(&mut self) {
-        self.gl_mut().staging_texture_pool.begin_frame();
-    }
-
-    pub fn end_frame(&mut self, device: &mut Device) {
-        let state = self.gl_mut();
-        state.staging_texture_pool.end_frame(device);
-        state.texture_upload_pbo_pool.end_frame(device);
-    }
-
-    pub fn on_memory_pressure(&mut self, device: &mut Device) {
-        let state = self.gl_mut();
-        state.texture_upload_pbo_pool.on_memory_pressure(device);
-        state.staging_texture_pool.delete_textures(device);
-    }
-
-    pub fn deinit(self, device: &mut Device) {
         match self {
-            Self::Gl(mut state) => {
-                state.texture_upload_pbo_pool.deinit(device);
-                state.staging_texture_pool.delete_textures(device);
-            }
+            #[cfg(feature = "gl_backend")]
+            Self::Gl(state) => state.staging_texture_pool.begin_frame(),
             #[cfg(feature = "wgpu_backend")]
             Self::Wgpu(..) => {}
         }
     }
 
+    pub fn end_frame(&mut self, device: &mut Device) {
+        match self {
+            #[cfg(feature = "gl_backend")]
+            Self::Gl(state) => {
+                state.staging_texture_pool.end_frame(device);
+                state.texture_upload_pbo_pool.end_frame(device);
+            }
+            #[cfg(feature = "wgpu_backend")]
+            Self::Wgpu(..) => { let _ = device; }
+        }
+    }
+
+    pub fn on_memory_pressure(&mut self, device: &mut Device) {
+        match self {
+            #[cfg(feature = "gl_backend")]
+            Self::Gl(state) => {
+                state.texture_upload_pbo_pool.on_memory_pressure(device);
+                state.staging_texture_pool.delete_textures(device);
+            }
+            #[cfg(feature = "wgpu_backend")]
+            Self::Wgpu(..) => { let _ = device; }
+        }
+    }
+
+    pub fn deinit(self, device: &mut Device) {
+        match self {
+            #[cfg(feature = "gl_backend")]
+            Self::Gl(mut state) => {
+                state.texture_upload_pbo_pool.deinit(device);
+                state.staging_texture_pool.delete_textures(device);
+            }
+            #[cfg(feature = "wgpu_backend")]
+            Self::Wgpu(..) => { let _ = device; }
+        }
+    }
+
     pub fn report_memory_to(&self, report: &mut MemoryReport, size_op_funs: &MallocSizeOfOps) {
-        let state = self.gl();
-        state.staging_texture_pool.report_memory_to(report, size_op_funs);
-        *report += state.texture_upload_pbo_pool.report_memory();
+        match self {
+            #[cfg(feature = "gl_backend")]
+            Self::Gl(state) => {
+                state.staging_texture_pool.report_memory_to(report, size_op_funs);
+                *report += state.texture_upload_pbo_pool.report_memory();
+            }
+            #[cfg(feature = "wgpu_backend")]
+            Self::Wgpu(..) => { let _ = (report, size_op_funs); }
+        }
     }
 }
 

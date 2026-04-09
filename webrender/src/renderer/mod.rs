@@ -1213,7 +1213,7 @@ impl RendererAuxTextures {
         match self {
             Self::Gl(state) => state,
             #[cfg(feature = "wgpu_backend")]
-            Self::Wgpu(..) => unreachable!("wgpu aux textures are not wired yet"),
+            Self::Wgpu(..) => panic!("RendererAuxTextures::gl() called on wgpu variant"),
         }
     }
 
@@ -1221,7 +1221,7 @@ impl RendererAuxTextures {
         match self {
             Self::Gl(state) => state,
             #[cfg(feature = "wgpu_backend")]
-            Self::Wgpu(..) => unreachable!("wgpu aux textures are not wired yet"),
+            Self::Wgpu(..) => panic!("RendererAuxTextures::gl_mut() called on wgpu variant"),
         }
     }
 

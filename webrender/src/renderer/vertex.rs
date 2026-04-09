@@ -1073,45 +1073,47 @@ pub(super) struct GlRendererVertexData {
 }
 
 #[cfg(feature = "wgpu_backend")]
-#[allow(dead_code)]
 pub struct WgpuRendererVertexData;
 
-#[cfg_attr(feature = "wgpu_backend", allow(dead_code))]
 pub(super) enum RendererVertexData {
+    #[cfg(feature = "gl_backend")]
     Gl(GlRendererVertexData),
     #[cfg(feature = "wgpu_backend")]
     Wgpu(WgpuRendererVertexData),
 }
 
 impl RendererVertexData {
+    #[cfg(feature = "gl_backend")]
     pub fn new_gl() -> Self {
         let mut textures = Vec::new();
         for _ in 0 .. super::VERTEX_DATA_TEXTURE_COUNT {
             textures.push(VertexDataTextures::new());
         }
-
-        Self::Gl(GlRendererVertexData {
-            textures,
-            current: 0,
-        })
+        Self::Gl(GlRendererVertexData { textures, current: 0 })
     }
 
+    #[cfg(feature = "wgpu_backend")]
+    pub fn new_wgpu() -> Self { Self::Wgpu(WgpuRendererVertexData) }
+
+    #[cfg(feature = "gl_backend")]
     fn gl(&self) -> &GlRendererVertexData {
         match self {
             Self::Gl(state) => state,
             #[cfg(feature = "wgpu_backend")]
-            Self::Wgpu(..) => unreachable!("wgpu vertex data backend is not wired yet"),
+            Self::Wgpu(..) => panic!("RendererVertexData::gl() called on wgpu variant"),
         }
     }
 
+    #[cfg(feature = "gl_backend")]
     fn gl_mut(&mut self) -> &mut GlRendererVertexData {
         match self {
             Self::Gl(state) => state,
             #[cfg(feature = "wgpu_backend")]
-            Self::Wgpu(..) => unreachable!("wgpu vertex data backend is not wired yet"),
+            Self::Wgpu(..) => panic!("RendererVertexData::gl_mut() called on wgpu variant"),
         }
     }
 
+    #[cfg(feature = "gl_backend")]
     pub fn bind_frame_data(
         &mut self,
         device: &mut Device,
@@ -1125,19 +1127,25 @@ impl RendererVertexData {
 
     pub fn deinit(self, device: &mut Device) {
         match self {
+            #[cfg(feature = "gl_backend")]
             Self::Gl(state) => {
-                for textures in state.textures {
-                    textures.deinit(device);
-                }
+                for textures in state.textures { textures.deinit(device); }
             }
             #[cfg(feature = "wgpu_backend")]
-            Self::Wgpu(..) => {}
+            Self::Wgpu(..) => { let _ = device; }
         }
     }
 
     pub fn report_memory_to(&self, report: &mut MemoryReport) {
-        for textures in &self.gl().textures {
-            report.vertex_data_textures += textures.size_in_bytes();
+        match self {
+            #[cfg(feature = "gl_backend")]
+            Self::Gl(state) => {
+                for textures in &state.textures {
+                    report.vertex_data_textures += textures.size_in_bytes();
+                }
+            }
+            #[cfg(feature = "wgpu_backend")]
+            Self::Wgpu(..) => {}
         }
     }
 }
@@ -1235,40 +1243,35 @@ impl RendererVAOs {
     }
 }
 
-pub(super) struct GlRendererVaos {
-    vaos: RendererVAOs,
-}
-
 #[cfg(feature = "wgpu_backend")]
-#[allow(dead_code)]
 pub struct WgpuRendererVaos;
 
-#[cfg_attr(feature = "wgpu_backend", allow(dead_code))]
 pub(super) enum RendererVaoState {
-    Gl(GlRendererVaos),
+    #[cfg(feature = "gl_backend")]
+    Gl(RendererVAOs),
     #[cfg(feature = "wgpu_backend")]
     Wgpu(WgpuRendererVaos),
 }
 
 impl RendererVaoState {
+    #[cfg(feature = "gl_backend")]
     pub fn new_gl(device: &mut Device, indexed_quads: Option<NonZeroUsize>) -> Self {
-        Self::Gl(GlRendererVaos {
-            vaos: RendererVAOs::new(device, indexed_quads),
-        })
+        Self::Gl(RendererVAOs::new(device, indexed_quads))
     }
 
-    fn gl(&self) -> &GlRendererVaos {
+    #[cfg(feature = "wgpu_backend")]
+    pub fn new_wgpu() -> Self { Self::Wgpu(WgpuRendererVaos) }
+
+    #[cfg(feature = "gl_backend")]
+    pub fn vao(&self, kind: VertexArrayKind) -> &VAO {
         match self {
-            Self::Gl(state) => state,
+            Self::Gl(vaos) => &vaos[kind],
             #[cfg(feature = "wgpu_backend")]
-            Self::Wgpu(..) => unreachable!("wgpu vao state is not wired yet"),
+            Self::Wgpu(..) => panic!("RendererVaoState::vao() called on wgpu variant"),
         }
     }
 
-    pub fn vao(&self, kind: VertexArrayKind) -> &VAO {
-        &self.gl().vaos[kind]
-    }
-
+    #[cfg(feature = "gl_backend")]
     pub fn draw_instanced_batch<T: Clone>(
         &self,
         device: &mut Device,
@@ -1302,9 +1305,10 @@ impl RendererVaoState {
 
     pub fn deinit(self, device: &mut Device) {
         match self {
-            Self::Gl(state) => state.vaos.deinit(device),
+            #[cfg(feature = "gl_backend")]
+            Self::Gl(vaos) => vaos.deinit(device),
             #[cfg(feature = "wgpu_backend")]
-            Self::Wgpu(..) => {}
+            Self::Wgpu(..) => { let _ = device; }
         }
     }
 }

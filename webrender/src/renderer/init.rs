@@ -963,15 +963,18 @@ pub fn create_webrender_instance_wgpu(
     let image_tiling_threshold = options.image_tiling_threshold
         .min(max_internal_texture_size);
 
-    // wgpu subsystem — GL resource wrappers only needed when gl_backend is compiled.
+    // When gl_backend is also compiled alongside wgpu_backend, the Renderer
+    // struct still has GL-carrier fields.  Initialize them to the wgpu no-op
+    // variant so the struct literal compiles; these fields are never accessed
+    // on the wgpu render path (render() returns early via render_wgpu()).
     #[cfg(feature = "gl_backend")]
-    let vaos = vertex::RendererVaoState::Wgpu(vertex::WgpuRendererVaos);
+    let vaos = vertex::RendererVaoState::new_wgpu();
     #[cfg(feature = "gl_backend")]
-    let vertex_data_textures = vertex::RendererVertexData::Wgpu(vertex::WgpuRendererVertexData);
+    let vertex_data_textures = vertex::RendererVertexData::new_wgpu();
     #[cfg(feature = "gl_backend")]
-    let upload_state = RendererUploadState::Wgpu(super::upload::WgpuRendererUploadState);
+    let upload_state = RendererUploadState::new_wgpu();
     #[cfg(feature = "gl_backend")]
-    let gpu_cache_texture = gpu_cache::RendererGpuCache::Wgpu(gpu_cache::WgpuGpuCacheTexture);
+    let gpu_cache_texture = gpu_cache::RendererGpuCache::new_wgpu();
     let dither_tex = if options.enable_dithering {
         Some(create_dither_matrix_texture(&mut wgpu_device))
     } else {

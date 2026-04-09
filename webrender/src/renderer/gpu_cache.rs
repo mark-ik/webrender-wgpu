@@ -167,14 +167,12 @@ pub struct GpuCacheTexture {
 }
 
 #[cfg(feature = "wgpu_backend")]
-#[allow(dead_code)]
 pub struct WgpuGpuCacheTexture;
 
-#[cfg_attr(feature = "wgpu_backend", allow(dead_code))]
 pub enum RendererGpuCache {
+    #[cfg(feature = "gl_backend")]
     Gl(GpuCacheTexture),
     #[cfg(feature = "wgpu_backend")]
-    #[allow(dead_code)]
     Wgpu(WgpuGpuCacheTexture),
 }
 
@@ -430,6 +428,7 @@ impl GpuCacheTexture {
 }
 
 impl RendererGpuCache {
+    #[cfg(feature = "gl_backend")]
     pub fn new_gl(
         device: &mut Device,
         use_scatter: bool,
@@ -437,85 +436,97 @@ impl RendererGpuCache {
         Ok(Self::Gl(GpuCacheTexture::new(device, use_scatter)?))
     }
 
+    #[cfg(feature = "wgpu_backend")]
+    pub fn new_wgpu() -> Self { Self::Wgpu(WgpuGpuCacheTexture) }
+
+    #[cfg(feature = "gl_backend")]
     fn gl(&self) -> &GpuCacheTexture {
         match self {
             Self::Gl(cache) => cache,
             #[cfg(feature = "wgpu_backend")]
-            Self::Wgpu(..) => unreachable!("wgpu gpu cache backend is not wired yet"),
+            Self::Wgpu(..) => panic!("RendererGpuCache::gl() called on wgpu variant"),
         }
     }
 
+    #[cfg(feature = "gl_backend")]
     fn gl_mut(&mut self) -> &mut GpuCacheTexture {
         match self {
             Self::Gl(cache) => cache,
             #[cfg(feature = "wgpu_backend")]
-            Self::Wgpu(..) => unreachable!("wgpu gpu cache backend is not wired yet"),
+            Self::Wgpu(..) => panic!("RendererGpuCache::gl_mut() called on wgpu variant"),
         }
     }
 
+    #[cfg(feature = "gl_backend")]
     pub fn uses_scatter_updates(&self) -> bool {
         matches!(self.gl().backend, GpuCacheBackend::Scatter { .. })
     }
 
-    fn texture(&self) -> &Texture {
+    #[cfg(feature = "gl_backend")]
+    pub(super) fn texture(&self) -> &Texture {
         self.gl().storage.texture.as_ref().unwrap()
     }
 
-    pub fn get_height(&self) -> i32 {
-        self.gl().get_height()
-    }
+    #[cfg(feature = "gl_backend")]
+    pub fn get_height(&self) -> i32 { self.gl().get_height() }
 
+    #[cfg(feature = "gl_backend")]
     #[cfg(feature = "capture")]
-    pub fn get_texture(&self) -> &Texture {
-        self.texture()
+    pub fn get_texture(&self) -> &Texture { self.texture() }
+
+    #[cfg(feature = "gl_backend")]
+    pub fn prepare_for_updates(&mut self, device: &mut Device, total_block_count: usize, max_height: i32) {
+        self.gl_mut().prepare_for_updates(device, total_block_count, max_height);
     }
 
-    fn prepare_for_updates(
-        &mut self,
-        device: &mut Device,
-        total_block_count: usize,
-        max_height: i32,
-    ) {
-        self.gl_mut()
-            .prepare_for_updates(device, total_block_count, max_height);
-    }
+    #[cfg(feature = "gl_backend")]
+    pub fn invalidate(&mut self) { self.gl_mut().invalidate(); }
 
-    pub fn invalidate(&mut self) {
-        self.gl_mut().invalidate();
-    }
-
-    fn update(&mut self, device: &mut Device, updates: &GpuCacheUpdateList) {
+    #[cfg(feature = "gl_backend")]
+    pub fn update(&mut self, device: &mut Device, updates: &GpuCacheUpdateList) {
         self.gl_mut().update(device, updates);
     }
 
-    fn flush(&mut self, device: &mut Device, pbo_pool: &mut UploadPBOPool) -> usize {
+    #[cfg(feature = "gl_backend")]
+    pub fn flush(&mut self, device: &mut Device, pbo_pool: &mut UploadPBOPool) -> usize {
         self.gl_mut().flush(device, pbo_pool)
     }
 
     pub fn deinit(self, device: &mut Device) {
         match self {
+            #[cfg(feature = "gl_backend")]
             Self::Gl(cache) => cache.deinit(device),
             #[cfg(feature = "wgpu_backend")]
-            Self::Wgpu(..) => {}
+            Self::Wgpu(..) => { let _ = device; }
         }
     }
 
+    #[cfg(feature = "gl_backend")]
     #[cfg(feature = "replay")]
-    pub fn remove_texture(&mut self, device: &mut Device) {
-        self.gl_mut().remove_texture(device);
-    }
+    pub fn remove_texture(&mut self, device: &mut Device) { self.gl_mut().remove_texture(device); }
 
+    #[cfg(feature = "gl_backend")]
     #[cfg(feature = "replay")]
     pub fn load_from_data(&mut self, texture: Texture, data: Vec<u8>) {
         self.gl_mut().load_from_data(texture, data);
     }
 
     pub fn report_memory_to(&self, report: &mut MemoryReport, size_op_funs: &MallocSizeOfOps) {
-        self.gl().report_memory_to(report, size_op_funs);
+        match self {
+            #[cfg(feature = "gl_backend")]
+            Self::Gl(cache) => cache.report_memory_to(report, size_op_funs),
+            #[cfg(feature = "wgpu_backend")]
+            Self::Wgpu(..) => { let _ = (report, size_op_funs); }
+        }
     }
 
     pub fn gpu_size_in_bytes(&self) -> usize {
-        self.gl().gpu_size_in_bytes()
+        match self {
+            #[cfg(feature = "gl_backend")]
+            Self::Gl(cache) => cache.gpu_size_in_bytes(),
+            #[cfg(feature = "wgpu_backend")]
+            Self::Wgpu(..) => 0,
+        }
     }
 }
 
