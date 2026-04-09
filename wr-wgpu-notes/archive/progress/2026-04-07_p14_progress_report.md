@@ -101,7 +101,7 @@ Diagnostic logging for texture cache lookups.
 
 ---
 
-## Log files (in wr-wgpu_notes/logs/, gitignored)
+## Log files (in wr-wgpu-notes/logs/, gitignored)
 - `clamp_diag_alone.log` — alone run, 4 ref requests, PASSES
 - `gradient_suite_cache_diag.log` — suite run, 2 ref requests, FAILS
 - `gradient_suite_no_dirty.log` — suite with dirty_rects=false, STILL FAILS

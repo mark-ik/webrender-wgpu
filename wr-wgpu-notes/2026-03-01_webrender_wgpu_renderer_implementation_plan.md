@@ -72,7 +72,7 @@ editable WebRender checkout. See `2026-03-03_servo_wgpu_upgrade_audit_report.md`
      stack overflow on large transpiled WGSL (pre-existing bug).
 - Primary remaining gaps: `resolve_ops`, `clip_masks` (ClipMaskInstanceList), subpixel text
      (dual-source blending), and encoder-invalid validation errors on some targets.
-- Detailed breakdown in `2026-04-03_p6_progress_report.md`.
+- Detailed historical breakdown in `archive/progress/2026-04-03_p6_progress_report.md`.
 
 **Current-state refresh (2026-04-09)**:
 

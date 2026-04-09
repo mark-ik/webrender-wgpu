@@ -230,7 +230,7 @@ GL and wgpu paths — no Servo-side changes needed.
 
 The webrender wgpu backend must select the `GLYPH_TRANSFORM` shader
 variant for `TransformedAlpha`/`TransformedSubpixel` glyph formats
-at DPR > 1. See `wr_wgpu_debug_plan.md` for details on this fix.
+at DPR > 1. See `archive/legacy/wr_wgpu_debug_plan.md` for details on this fix.
 
 ## Reference commits
 

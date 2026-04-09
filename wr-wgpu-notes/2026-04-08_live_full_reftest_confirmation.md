@@ -11,7 +11,7 @@ Command shape used:
 Set-Location "c:\Users\mark_\Code\source\repos\webrender\wrench"
 $env:RUST_LOG = "info"
 & "C:\t\graphshell-target\debug\wrench.exe" --wgpu reftest `
-  2>&1 | Tee-Object -FilePath "c:\Users\mark_\Code\source\repos\webrender\wr-wgpu_notes\logs\live_full_reftest_2026-04-08_run3.log"
+  2>&1 | Tee-Object -FilePath "c:\Users\mark_\Code\source\repos\webrender\wr-wgpu-notes\logs\live_full_reftest_2026-04-08_run3.log"
 ```
 
 Outcome:

@@ -1061,7 +1061,7 @@ full Tier 2 granular gating pass is not justified.
 - `project_wgpu_backend.md`
   - experimental branch note
   - use it for broader seam exploration, larger refactors, and ideas not appropriate for the minimal branch
-- `shader_translation_journal.md`
+- `../../shader_translation_journal.md`
   - technical record of the GLSL -> WGSL translation work
   - shared reference for both branches
 - `wasm-portability-checklist.md`

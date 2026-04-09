@@ -14,7 +14,7 @@ Use this note for work on the experimental branch line, where broader renderer/d
 
 The minimal additive proof branch is tracked separately in:
 
-- `notes/wgpu-backend-minimal-plan.md`
+- `wgpu-backend-minimal-plan.md`
 
 ## Purpose
 
@@ -82,9 +82,9 @@ Examples:
 
 ## Shared References
 
-- `notes/wgpu-backend-minimal-plan.md`
+- `wgpu-backend-minimal-plan.md`
   - current additive proof plan
-- `notes/shader_translation_journal.md`
+- `../../shader_translation_journal.md`
   - detailed WGSL translation record
 
 ## Status
