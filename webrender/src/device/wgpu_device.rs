@@ -464,22 +464,22 @@ impl WgpuDepthState {
             WgpuDepthState::None => None,
             WgpuDepthState::WriteAndTest => Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::LessEqual,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
             WgpuDepthState::TestOnly => Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::LessEqual,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
             WgpuDepthState::AlwaysPass => Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
@@ -695,7 +695,7 @@ impl WgpuDevice {
         let bind_group_layout_1 = create_sampler_bind_group_layout(&device);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("WR pipeline layout"),
-            bind_group_layouts: &[&bind_group_layout_0, &bind_group_layout_1],
+            bind_group_layouts: &[Some(&bind_group_layout_0), Some(&bind_group_layout_1)],
             immediate_size: 0,
         });
 
@@ -1240,8 +1240,9 @@ impl WgpuDevice {
     pub fn acquire_surface_texture(&mut self) -> Option<wgpu::SurfaceTexture> {
         let surface = self.surface.as_ref()?;
         match surface.get_current_texture() {
-            Ok(tex) => Some(tex),
-            Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
+            wgpu::CurrentSurfaceTexture::Success(tex)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(tex) => Some(tex),
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 // Surface lost or went out of date (e.g. window was resized
                 // just before this call).  Reconfigure at the current stored
                 // dimensions and try once more.
@@ -1249,10 +1250,14 @@ impl WgpuDevice {
                     log::debug!("wgpu: surface outdated/lost — reconfiguring {}×{}", config.width, config.height);
                     surface.configure(&self.device, config);
                 }
-                self.surface.as_ref()?.get_current_texture().ok()
+                match self.surface.as_ref()?.get_current_texture() {
+                    wgpu::CurrentSurfaceTexture::Success(tex)
+                    | wgpu::CurrentSurfaceTexture::Suboptimal(tex) => Some(tex),
+                    _ => None,
+                }
             }
-            Err(e) => {
-                warn!("wgpu: failed to acquire surface texture: {:?}", e);
+            other => {
+                warn!("wgpu: failed to acquire surface texture: {:?}", other);
                 None
             }
         }
