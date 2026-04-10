@@ -940,9 +940,14 @@ pub fn main() {
                 // WgpuHal: factory closure captures the adapter and opens a device on demand.
                 let device_factory: Box<dyn FnOnce() -> (wgpu::Device, wgpu::Queue) + Send> =
                     Box::new(move || {
+                        let wanted = wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
+                            | wgpu::Features::DUAL_SOURCE_BLENDING
+                            | wgpu::Features::TIMESTAMP_QUERY;
+                        let required_features = adapter.features() & wanted;
                         pollster::block_on(adapter.request_device(
                             &wgpu::DeviceDescriptor {
                                 label: Some("wrench wgpu-hal device"),
+                                required_features,
                                 required_limits: wgpu::Limits {
                                     max_inter_stage_shader_variables: 28,
                                     ..Default::default()
