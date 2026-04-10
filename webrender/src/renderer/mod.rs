@@ -4652,7 +4652,7 @@ impl Renderer {
     /// Returns `None` if there is no composited output yet or if the backend
     /// does not match `A`.
     #[cfg(feature = "wgpu_native")]
-    pub unsafe fn composite_output_hal<A: wgpu::wgc::hal_api::HalApi>(
+    pub unsafe fn composite_output_hal<A: wgpu::hal::Api>(
         &self,
     ) -> Option<impl std::ops::Deref<Target = <A as wgpu_hal::Api>::Texture> + '_> {
         let texture = &self.wgpu_readback_texture.as_ref()?.texture;

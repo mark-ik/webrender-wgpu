@@ -1093,7 +1093,7 @@ impl WgpuDevice {
     /// Call between render targets, before surface present, and at frame end.
     pub fn flush_encoder(&mut self) {
         if let Some(encoder) = self.pending_encoder.take() {
-            self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let error_scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 encoder.finish()
             })) {
@@ -1106,11 +1106,13 @@ impl WgpuDevice {
             }
             #[cfg(feature = "wgpu_native")]
             {
-                let err = pollster::block_on(self.device.pop_error_scope());
+                let err = pollster::block_on(error_scope.pop());
                 if let Some(e) = err {
                     log::error!("wgpu flush_encoder validation error: {}", e);
                 }
             }
+            #[cfg(not(feature = "wgpu_native"))]
+            drop(error_scope);
         }
     }
 
@@ -3440,7 +3442,7 @@ fn wgpu_format_bytes_per_pixel(format: wgpu::TextureFormat) -> u32 {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "wgpu_native"))]
 mod tests {
     use super::*;
 

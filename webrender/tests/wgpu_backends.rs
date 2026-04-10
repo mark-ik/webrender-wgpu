@@ -14,7 +14,7 @@
 //! On pixel mismatch, test helpers write `WR_TEST_OUTPUT_DIR` (default: /tmp)
 //! PNG files for both images so failures can be inspected visually.
 
-#![cfg(feature = "wgpu_backend")]
+#![cfg(feature = "wgpu_native")]
 
 extern crate webrender;
 
@@ -644,7 +644,7 @@ fn render_to_view_writes_into_caller_texture() {
     let slice = staging.slice(..);
     let (tx, rx) = std::sync::mpsc::channel();
     slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
-    let _ = device.poll(wgpu::PollType::Wait);
+    let _ = device.poll(wgpu::PollType::wait_indefinitely());
     rx.recv().expect("map failed").expect("map error");
 
     let data = slice.get_mapped_range();
