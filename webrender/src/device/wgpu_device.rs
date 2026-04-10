@@ -681,6 +681,11 @@ impl WgpuDevice {
     /// Takes an already-created device + queue (and optional surface state) and
     /// builds all the pipelines, bind groups, samplers, and constant buffers
     /// that WebRender needs.
+    /// Minimum `max_inter_stage_shader_variables` required by WebRender's
+    /// shaders.  The composite shader uses up to `@location(17)`, requiring
+    /// at least 18 variables.  We request 28 for headroom.
+    pub const MIN_INTER_STAGE_VARS: u32 = 18;
+
     fn init_gpu_resources(
         device: wgpu::Device,
         queue: wgpu::Queue,
@@ -691,6 +696,16 @@ impl WgpuDevice {
         pipeline_cache_path: Option<std::path::PathBuf>,
         adapter_info: Option<wgpu::AdapterInfo>,
     ) -> Self {
+        let limits = device.limits();
+        if limits.max_inter_stage_shader_variables < Self::MIN_INTER_STAGE_VARS {
+            log::warn!(
+                "wgpu device has max_inter_stage_shader_variables={}, but WebRender needs at \
+                 least {}. Composite shaders will fail validation.",
+                limits.max_inter_stage_shader_variables,
+                Self::MIN_INTER_STAGE_VARS,
+            );
+        }
+
         let bind_group_layout_0 = create_resource_bind_group_layout(&device);
         let bind_group_layout_1 = create_sampler_bind_group_layout(&device);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -797,6 +812,12 @@ impl WgpuDevice {
             &wgpu::DeviceDescriptor {
                 label: Some("WebRender wgpu device"),
                 required_features,
+                required_limits: wgpu::Limits {
+                    // WebRender's composite shader uses up to @location(17),
+                    // exceeding the default limit of 16.
+                    max_inter_stage_shader_variables: 28,
+                    ..Default::default()
+                },
                 ..Default::default()
             },
         ))
@@ -845,6 +866,10 @@ impl WgpuDevice {
             &wgpu::DeviceDescriptor {
                 label: Some("WebRender wgpu device"),
                 required_features,
+                required_limits: wgpu::Limits {
+                    max_inter_stage_shader_variables: 28,
+                    ..Default::default()
+                },
                 ..Default::default()
             },
         ))

@@ -177,7 +177,7 @@ pub fn main_wrapper<E: Example>(
     };
     let notifier = Box::new(Notifier::new(events_loop.create_proxy()));
     let (mut renderer, sender) = webrender::create_webrender_instance(
-        webrender::RendererBackend::Gl { gl: gl.clone() },
+        gl.clone(),
         notifier,
         opts,
         None,

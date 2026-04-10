@@ -22,7 +22,13 @@ fn main() {
 
     // === Step 1: Host app creates its own wgpu device ===
     // In a real app, egui/wgpu would create this during window init.
-    let instance = webrender::wgpu::Instance::default();
+    let instance = webrender::wgpu::Instance::new(webrender::wgpu::InstanceDescriptor {
+        backends: webrender::wgpu::Backends::all(),
+        flags: webrender::wgpu::InstanceFlags::default(),
+        memory_budget_thresholds: webrender::wgpu::MemoryBudgetThresholds::default(),
+        backend_options: webrender::wgpu::BackendOptions::default(),
+        display: None,
+    });
     let adapter = pollster::block_on(instance.request_adapter(
         &webrender::wgpu::RequestAdapterOptions::default(),
     ))
@@ -31,6 +37,10 @@ fn main() {
     let (host_device, host_queue) = pollster::block_on(adapter.request_device(
         &webrender::wgpu::DeviceDescriptor {
             label: Some("host-app device"),
+            required_limits: webrender::wgpu::Limits {
+                max_inter_stage_shader_variables: webrender::WgpuDevice::MIN_INTER_STAGE_VARS.max(28),
+                ..Default::default()
+            },
             ..Default::default()
         },
     ))

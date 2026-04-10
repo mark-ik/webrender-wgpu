@@ -64,7 +64,7 @@ path = "wgpu_hal_device.rs"
 
 [features]
 debug = ["webrender/capture", "webrender/profiler"]
-wgpu_backend = ["webrender/wgpu_backend", "dep:pollster"]
+wgpu_backend = ["webrender/wgpu_backend", "webrender/wgpu_native", "dep:pollster"]
 
 [dependencies]
 app_units = "0.7"

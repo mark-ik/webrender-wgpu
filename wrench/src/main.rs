@@ -516,9 +516,12 @@ fn make_wgpu_window(
         .build(events_loop)
         .expect("failed to create winit window for wgpu");
 
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::all(),
-        ..Default::default()
+        flags: wgpu::InstanceFlags::default(),
+        memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
+        backend_options: wgpu::BackendOptions::default(),
+        display: None,
     });
 
     // Build raw_window_handle 0.6 types from winit 0.26's HWND.
@@ -538,7 +541,7 @@ fn make_wgpu_window(
     // Safety: the window outlives the surface (WindowWrapper keeps it alive).
     let surface = unsafe {
         instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
-            raw_display_handle,
+            raw_display_handle: Some(raw_display_handle),
             raw_window_handle,
         }).expect("failed to create wgpu surface")
     };
@@ -845,7 +848,13 @@ pub fn main() {
             let el = events_loop.as_ref().expect("--wgpu-hal requires a windowed event loop (no --headless)");
             let wrapper = make_wgpu_hal_window(size, el);
             wgpu_state = None;
-            let instance = wgpu::Instance::default();
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                backends: wgpu::Backends::all(),
+                flags: wgpu::InstanceFlags::default(),
+                memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
+                backend_options: wgpu::BackendOptions::default(),
+                display: None,
+            });
             let adapter = pollster::block_on(instance.request_adapter(
                 &wgpu::RequestAdapterOptions::default(),
             )).expect("No wgpu adapter for wgpu-hal backend");
@@ -899,6 +908,10 @@ pub fn main() {
                         pollster::block_on(adapter.request_device(
                             &wgpu::DeviceDescriptor {
                                 label: Some("wrench wgpu-hal device"),
+                                required_limits: wgpu::Limits {
+                                    max_inter_stage_shader_variables: 28,
+                                    ..Default::default()
+                                },
                                 ..Default::default()
                             },
                         )).expect("Failed to create device for wgpu-hal backend")

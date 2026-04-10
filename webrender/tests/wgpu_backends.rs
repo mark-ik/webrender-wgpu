@@ -41,6 +41,10 @@ fn make_device(adapter: &wgpu::Adapter) -> (wgpu::Device, wgpu::Queue) {
     pollster::block_on(adapter.request_device(
         &wgpu::DeviceDescriptor {
             label: Some("test device"),
+            required_limits: wgpu::Limits {
+                max_inter_stage_shader_variables: webrender::WgpuDevice::MIN_INTER_STAGE_VARS.max(28),
+                ..Default::default()
+            },
             ..Default::default()
         },
     ))
