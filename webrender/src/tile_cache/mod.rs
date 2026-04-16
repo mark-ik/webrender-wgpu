@@ -2554,8 +2554,7 @@ impl TileCacheInstance {
                     generation: resource_cache.get_image_generation(border_data.request.key),
                 });
             }
-            PrimitiveInstanceKind::LinearGradient { data_handle, .. }
-            | PrimitiveInstanceKind::CachedLinearGradient { data_handle, .. } => {
+            PrimitiveInstanceKind::LinearGradient { data_handle, .. } => {
                 let gradient_data = &data_stores.linear_grad[data_handle];
                 if gradient_data.stops_opacity.is_opaque
                     && gradient_data.tile_spacing == LayoutSize::zero()

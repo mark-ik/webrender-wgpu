@@ -16,10 +16,9 @@ use crate::pattern::{Pattern, PatternBuilder, PatternBuilderContext, PatternBuil
 use crate::scene_building::IsVisible;
 use crate::intern::{Internable, InternDebug, Handle as InternHandle};
 use crate::internal_types::LayoutPrimitiveInfo;
-use crate::prim_store::{PrimitiveInstanceKind, PrimitiveOpacity, FloatKey};
+use crate::prim_store::{PrimitiveInstanceKind, PrimitiveOpacity};
 use crate::prim_store::{PrimKeyCommonData, PrimTemplateCommonData, PrimitiveStore};
 use crate::prim_store::{NinePatchDescriptor, PointKey, SizeKey, InternablePrimitive};
-use crate::renderer::GpuBufferAddress;
 
 use std::{hash, ops::{Deref, DerefMut}};
 use super::{stops_and_min_alpha, GradientStopKey};
@@ -271,60 +270,3 @@ impl IsVisible for ConicGradient {
     }
 }
 
-#[derive(Debug)]
-#[cfg_attr(feature = "capture", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
-pub struct ConicGradientTask {
-    pub extend_mode: ExtendMode,
-    pub center: DevicePoint,
-    pub scale: DeviceVector2D,
-    pub params: ConicGradientParams,
-    pub stops: GpuBufferAddress,
-}
-
-impl ConicGradientTask {
-    pub fn to_instance(&self, target_rect: &DeviceIntRect) -> ConicGradientInstance {
-        ConicGradientInstance {
-            task_rect: target_rect.to_f32(),
-            center: self.center,
-            scale: self.scale,
-            start_offset: self.params.start_offset,
-            end_offset: self.params.end_offset,
-            angle: self.params.angle,
-            extend_mode: self.extend_mode as i32,
-            gradient_stops_address: self.stops.as_int(),
-        }
-    }
-}
-
-/// The per-instance shader input of a radial gradient render task.
-///
-/// Must match the RADIAL_GRADIENT instance description in renderer/vertex.rs.
-#[cfg_attr(feature = "capture", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
-#[repr(C)]
-#[derive(Clone, Debug)]
-pub struct ConicGradientInstance {
-    pub task_rect: DeviceRect,
-    pub center: DevicePoint,
-    pub scale: DeviceVector2D,
-    pub start_offset: f32,
-    pub end_offset: f32,
-    pub angle: f32,
-    pub extend_mode: i32,
-    pub gradient_stops_address: i32,
-}
-
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-#[cfg_attr(feature = "capture", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
-pub struct ConicGradientCacheKey {
-    pub size: DeviceIntSize,
-    pub center: PointKey,
-    pub scale: PointKey,
-    pub start_offset: FloatKey,
-    pub end_offset: FloatKey,
-    pub angle: FloatKey,
-    pub extend_mode: ExtendMode,
-    pub stops: Vec<GradientStopKey>,
-}

@@ -21,10 +21,6 @@ use crate::picture::ResolvedSurfaceTexture;
 use crate::tile_cache::MAX_SURFACE_SIZE;
 use crate::transform::GpuTransformId;
 use crate::prim_store::ClipData;
-use crate::prim_store::gradient::{
-    FastLinearGradientTask, RadialGradientTask,
-    ConicGradientTask, LinearGradientTask,
-};
 use crate::resource_cache::{ResourceCache, ImageRequest};
 use std::{usize, f32, i32, u32};
 use crate::renderer::{GpuBufferAddress, GpuBufferBuilder, GpuBufferBuilderF};
@@ -370,10 +366,6 @@ pub enum RenderTaskKind {
     Blit(BlitTask),
     Border(BorderTask),
     LineDecoration(LineDecorationTask),
-    FastLinearGradient(FastLinearGradientTask),
-    LinearGradient(LinearGradientTask),
-    RadialGradient(RadialGradientTask),
-    ConicGradient(ConicGradientTask),
     SVGFENode(SVGFEFilterTask),
     TileComposite(TileCompositeTask),
     Prim(PrimTask),
@@ -421,10 +413,6 @@ impl RenderTaskKind {
             RenderTaskKind::Blit(..) => "Blit",
             RenderTaskKind::Border(..) => "Border",
             RenderTaskKind::LineDecoration(..) => "LineDecoration",
-            RenderTaskKind::FastLinearGradient(..) => "FastLinearGradient",
-            RenderTaskKind::LinearGradient(..) => "LinearGradient",
-            RenderTaskKind::RadialGradient(..) => "RadialGradient",
-            RenderTaskKind::ConicGradient(..) => "ConicGradient",
             RenderTaskKind::SVGFENode(..) => "SVGFENode",
             RenderTaskKind::TileComposite(..) => "TileComposite",
             RenderTaskKind::Prim(..) => "Prim",
@@ -440,10 +428,6 @@ impl RenderTaskKind {
             RenderTaskKind::LineDecoration(..) |
             RenderTaskKind::Readback(..) |
             RenderTaskKind::Border(..) |
-            RenderTaskKind::FastLinearGradient(..) |
-            RenderTaskKind::LinearGradient(..) |
-            RenderTaskKind::RadialGradient(..) |
-            RenderTaskKind::ConicGradient(..) |
             RenderTaskKind::Picture(..) |
             RenderTaskKind::Blit(..) |
             RenderTaskKind::TileComposite(..) |
@@ -778,10 +762,6 @@ impl RenderTaskKind {
             RenderTaskKind::Scaling(..) |
             RenderTaskKind::Border(..) |
             RenderTaskKind::LineDecoration(..) |
-            RenderTaskKind::FastLinearGradient(..) |
-            RenderTaskKind::LinearGradient(..) |
-            RenderTaskKind::RadialGradient(..) |
-            RenderTaskKind::ConicGradient(..) |
             RenderTaskKind::TileComposite(..) |
             RenderTaskKind::Blit(..) => {
                 [0.0; 4]

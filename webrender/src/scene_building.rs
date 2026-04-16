@@ -3525,7 +3525,6 @@ impl<'a> SceneBuilder<'a> {
             stops,
             reverse_stops,
             nine_patch,
-            cached: false,
             edge_aa_mask,
             enable_dithering: self.config.enable_dithering,
         })
