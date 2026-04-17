@@ -11,10 +11,10 @@ use std::sync::atomic::{AtomicBool, AtomicI8, AtomicPtr, AtomicU32, AtomicU8, Or
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 use crate::{
-    api::units::*, api::ColorDepth, api::ColorF, api::ExternalImageId, api::ImageRendering, api::YuvRangedColorSpace,
-    Compositor, CompositorCapabilities, CompositorSurfaceTransform, NativeSurfaceId, NativeSurfaceInfo, NativeTileId,
-    profiler, MappableCompositor, SWGLCompositeSurfaceInfo, WindowVisibility,
-    device::Device, ClipRadius
+    api::units::*, api::ColorDepth, api::ColorF, api::ExternalImageId, api::ImageRendering,
+    api::YuvRangedColorSpace, Compositor, CompositorCapabilities, CompositorSurfaceTransform,
+    NativeSurfaceId, NativeSurfaceInfo, NativeTileId, profiler, MappableCompositor,
+    SWGLCompositeSurfaceInfo, WindowVisibility, device::Device, ClipRadius,
 };
 
 // Size (in pixels) of the indirection buffer used for applying rounded rect alpha masks as required
@@ -59,10 +59,7 @@ impl RoundedClip {
         }
 
         let rect_tr = DeviceIntRect::from_origin_and_size(
-            DeviceIntPoint::new(
-                self.rect.max.x - self.radii.top_right,
-                self.rect.min.y,
-            ),
+            DeviceIntPoint::new(self.rect.max.x - self.radii.top_right, self.rect.min.y),
             DeviceIntSize::new(self.radii.top_right, self.radii.top_right),
         );
         if rect_tr.intersects(rect) {
@@ -81,10 +78,7 @@ impl RoundedClip {
         }
 
         let rect_bl = DeviceIntRect::from_origin_and_size(
-            DeviceIntPoint::new(
-                self.rect.min.x,
-                self.rect.max.y - self.radii.bottom_left,
-            ),
+            DeviceIntPoint::new(self.rect.min.x, self.rect.max.y - self.radii.bottom_left),
             DeviceIntSize::new(self.radii.bottom_left, self.radii.bottom_left),
         );
         if rect_bl.intersects(rect) {
@@ -161,13 +155,12 @@ impl SwCompositeJobContext {
             INDIRECT_BUFFER_HEIGHT,
         );
 
-        let indirect = gl.lock_texture(indirect_id).expect("bug: unable to lock indirect");
+        let indirect = gl
+            .lock_texture(indirect_id)
+            .expect("bug: unable to lock indirect");
         let mask = gl.lock_texture(mask_id).expect("bug: unable to lock mask");
 
-        SwCompositeJobContext {
-            indirect,
-            mask,
-        }
+        SwCompositeJobContext { indirect, mask }
     }
 }
 
@@ -207,7 +200,10 @@ impl SwTile {
     /// The offset of the tile in the local space of the surface before any
     /// transform is applied.
     fn origin(&self, surface: &SwSurface) -> DeviceIntPoint {
-        DeviceIntPoint::new(self.x * surface.tile_size.width, self.y * surface.tile_size.height)
+        DeviceIntPoint::new(
+            self.x * surface.tile_size.width,
+            self.y * surface.tile_size.height,
+        )
     }
 
     /// The offset valid rect positioned within the local space of the surface
@@ -270,9 +266,10 @@ impl SwTile {
             .translate(-valid.min.to_vector().to_f32());
         // Ensure source and dest rects when transformed from Box2D to Rect formats will still fit in an i32.
         // If p0=i32::MIN and p1=i32::MAX, then evaluating the size with p1-p0 will overflow an i32 and not
-        // be representable. 
-        if src_rect.size().try_cast::<i32>().is_none() ||
-           dest_rect.size().try_cast::<i32>().is_none() {
+        // be representable.
+        if src_rect.size().try_cast::<i32>().is_none()
+            || dest_rect.size().try_cast::<i32>().is_none()
+        {
             return None;
         }
         let flip_x = transform.scale.x < 0.0;
@@ -396,11 +393,7 @@ struct SwCompositeJob {
 impl SwCompositeJob {
     // Construct a mask for this job's rounded clip, that is stored in the
     // shared mask texture of the supplied composite context.
-    fn create_mask(
-        &self,
-        band_clip: &DeviceIntRect,
-        ctx: &SwCompositeJobContext,
-    ) {
+    fn create_mask(&self, band_clip: &DeviceIntRect, ctx: &SwCompositeJobContext) {
         assert!(band_clip.width() <= INDIRECT_BUFFER_WIDTH);
         assert!(band_clip.height() <= INDIRECT_BUFFER_HEIGHT);
 
@@ -418,15 +411,19 @@ impl SwCompositeJob {
         // is run on only a very small number of pixels, so it's unlikely to
         // show up in profiles.
 
-        fn sd_round_box(
-            pos: DevicePoint,
-            half_box_size: DeviceSize,
-            radii: &ClipRadius,
-        ) -> f32 {
+        fn sd_round_box(pos: DevicePoint, half_box_size: DeviceSize, radii: &ClipRadius) -> f32 {
             let radius = if pos.x < 0.0 {
-                if pos.y < 0.0 { radii.bottom_right } else { radii.top_right }
+                if pos.y < 0.0 {
+                    radii.bottom_right
+                } else {
+                    radii.top_right
+                }
             } else {
-                if pos.y < 0.0 { radii.bottom_left } else { radii.top_left }
+                if pos.y < 0.0 {
+                    radii.bottom_left
+                } else {
+                    radii.top_left
+                }
             } as f32;
 
             let qx = pos.x.abs() - half_box_size.width + radius;
@@ -436,30 +433,28 @@ impl SwCompositeJob {
             let qyp = qy.max(0.0);
 
             let d1 = qx.max(qy).min(0.0);
-            let d2 = ((qxp*qxp) + (qyp*qyp)).sqrt();
+            let d2 = ((qxp * qxp) + (qyp * qyp)).sqrt();
 
             d1 + d2 - radius
         }
 
         let half_clip_box_size = self.rounded_clip.rect.size().to_f32() * 0.5;
 
-        for y in 0 .. mask_height {
+        for y in 0..mask_height {
             let py = band_clip.min.y + y;
 
-            for x in 0 .. mask_width {
+            for x in 0..mask_width {
                 let px = band_clip.min.x + x;
 
                 let pos = DevicePoint::new(
-                    -0.5 + self.rounded_clip.rect.min.x as f32 + half_clip_box_size.width - px as f32,
-                    -0.5 + self.rounded_clip.rect.min.y as f32 + half_clip_box_size.height - py as f32,
+                    -0.5 + self.rounded_clip.rect.min.x as f32 + half_clip_box_size.width
+                        - px as f32,
+                    -0.5 + self.rounded_clip.rect.min.y as f32 + half_clip_box_size.height
+                        - py as f32,
                 );
 
                 let i = (y * mask_width + x) as usize;
-                let d = sd_round_box(
-                    pos,
-                    half_clip_box_size,
-                    &self.rounded_clip.radii,
-                );
+                let d = sd_round_box(pos, half_clip_box_size, &self.rounded_clip.radii);
 
                 let d = (0.5 - d).min(1.0).max(0.0);
                 mask_pixels[i] = (d * 255.0) as u8;
@@ -481,22 +476,18 @@ impl SwCompositeJob {
                     // Copy tile into temporary buffer
                     ctx.indirect.composite(
                         resource,
-
                         self.src_rect.min.x,
                         self.src_rect.min.y,
                         self.src_rect.width(),
                         self.src_rect.height(),
-
                         -band_clip.min.x + self.dst_rect.min.x,
                         -band_clip.min.y + self.dst_rect.min.y,
                         self.dst_rect.width(),
                         self.dst_rect.height(),
-
                         true,
                         self.flip_x,
                         self.flip_y,
                         image_rendering_to_gl_filter(self.filter),
-
                         0,
                         0,
                         band_clip.width(),
@@ -509,22 +500,18 @@ impl SwCompositeJob {
                     // Composite indirect buffer to frame buffer
                     self.locked_dst.composite(
                         &ctx.indirect,
-
                         0,
                         0,
                         band_clip.width(),
                         band_clip.height(),
-
                         band_clip.min.x,
                         band_clip.min.y,
                         band_clip.width(),
                         band_clip.height(),
-
                         false,
                         false,
                         false,
                         gl::NEAREST,
-
                         band_clip.min.x,
                         band_clip.min.y,
                         band_clip.width(),
@@ -570,20 +557,16 @@ impl SwCompositeJob {
                         v,
                         swgl_color_space,
                         color_depth.bit_depth(),
-
                         self.src_rect.min.x,
                         self.src_rect.min.y,
                         self.src_rect.width(),
                         self.src_rect.height(),
-
                         -band_clip.min.x + self.dst_rect.min.x,
                         -band_clip.min.y + self.dst_rect.min.y,
                         self.dst_rect.width(),
                         self.dst_rect.height(),
-
                         self.flip_x,
                         self.flip_y,
-
                         0,
                         0,
                         band_clip.width(),
@@ -596,22 +579,18 @@ impl SwCompositeJob {
                     // Composite indirect buffer to frame buffer
                     self.locked_dst.composite(
                         &ctx.indirect,
-
                         0,
                         0,
                         band_clip.width(),
                         band_clip.height(),
-
                         band_clip.min.x,
                         band_clip.min.y,
                         band_clip.width(),
                         band_clip.height(),
-
                         false,
                         false,
                         false,
                         gl::NEAREST,
-
                         band_clip.min.x,
                         band_clip.min.y,
                         band_clip.width(),
@@ -645,11 +624,7 @@ impl SwCompositeJob {
     }
 
     /// Process a composite job
-    fn process(
-        &self,
-        band_index: i32,
-        is_composite_thread: bool,
-    ) {
+    fn process(&self, band_index: i32, is_composite_thread: bool) {
         // Retrive the correct context buffers depending on which thread we're on
         let ctx = self.context.get_job_context(is_composite_thread);
 
@@ -672,9 +647,10 @@ impl SwCompositeJob {
             // The job context allocates a small fixed size buffer for indirections, so split this band
             // in to a number of tiles that can be individually processed.
 
-            let num_x_tiles = (self.clipped_dst.width() + INDIRECT_BUFFER_WIDTH-1) / INDIRECT_BUFFER_WIDTH;
+            let num_x_tiles =
+                (self.clipped_dst.width() + INDIRECT_BUFFER_WIDTH - 1) / INDIRECT_BUFFER_WIDTH;
 
-            for x in 0 .. num_x_tiles {
+            for x in 0..num_x_tiles {
                 let x_offset = (self.clipped_dst.width() * x) / num_x_tiles;
                 let tile_width = (self.clipped_dst.width() * (x + 1)) / num_x_tiles - x_offset;
 
@@ -683,10 +659,7 @@ impl SwCompositeJob {
                         self.clipped_dst.min.x + x_offset,
                         self.clipped_dst.min.y + band_offset,
                     ),
-                    DeviceIntSize::new(
-                        tile_width,
-                        band_height,
-                    ),
+                    DeviceIntSize::new(tile_width, band_height),
                 );
 
                 // Check if each individual tile within the band is affected by the clip, and
@@ -698,19 +671,11 @@ impl SwCompositeJob {
                     self.create_mask(&tile_rect, ctx);
                 }
 
-                self.composite_rect(
-                    &tile_rect,
-                    use_indirect,
-                    ctx,
-                );
+                self.composite_rect(&tile_rect, use_indirect, ctx);
             }
         } else {
             // Simple (direct) composite path if no rounded clip
-            self.composite_rect(
-                &band_clip,
-                false,
-                ctx,
-            );
+            self.composite_rect(&band_clip, false, ctx);
         }
     }
 }
@@ -839,11 +804,7 @@ impl SwCompositeGraphNode {
     }
 
     /// Try to take the job from this node for processing and then process it within the current band.
-    fn process_job(
-        &self,
-        band_index: i32,
-        is_composite_thread: bool,
-    ) {
+    fn process_job(&self, band_index: i32, is_composite_thread: bool) {
         if let Some(ref job) = self.job {
             job.process(band_index, is_composite_thread);
         }
@@ -1200,13 +1161,10 @@ impl SwCompositor {
         let (composite_thread, composite_context) = if !use_native_compositor {
             (
                 Some(SwCompositeThread::new()),
-                Some(Arc::new(SwCompositeContext::new(&gl)))
+                Some(Arc::new(SwCompositeContext::new(&gl))),
             )
         } else {
-            (
-                None,
-                None,
-            )
+            (None, None)
         };
         SwCompositor {
             gl,
@@ -1295,7 +1253,9 @@ impl SwCompositor {
         for &mut (ref id, ref transform, ref mut clip_rect, _) in &mut self.frame_surfaces {
             if let Some(surface) = self.surfaces.get(id) {
                 // Restrict the clip rect to fall within the valid region of the surface.
-                *clip_rect = surface.device_bounds(transform, clip_rect).unwrap_or_default();
+                *clip_rect = surface
+                    .device_bounds(transform, clip_rect)
+                    .unwrap_or_default();
             }
         }
 
@@ -1319,7 +1279,9 @@ impl SwCompositor {
             // axis interval while overlapping on the other, fuse it with the
             // occluder rect before considering any underlying surfaces.
             let (mut occlude_x, mut occlude_y) = (occlude_rect.x_range(), occlude_rect.y_range());
-            for &mut (ref id, _, ref mut clip_rect, _) in self.frame_surfaces[..occlude_index].iter_mut().rev() {
+            for &mut (ref id, _, ref mut clip_rect, _) in
+                self.frame_surfaces[..occlude_index].iter_mut().rev()
+            {
                 if let Some(surface) = self.surfaces.get(id) {
                     let (clip_x, clip_y) = (clip_rect.x_range(), clip_rect.y_range());
                     if includes(&occlude_x, &clip_x) {
@@ -1377,7 +1339,11 @@ impl SwCompositor {
         // on its own future update.
         let mut overlaps = if overlap_tile.invalid.get() { 1 } else { 0 };
 
-        let overlap_rect = match overlap_tile.overlap_rect(overlap_surface, overlap_transform, overlap_clip_rect) {
+        let overlap_rect = match overlap_tile.overlap_rect(
+            overlap_surface,
+            overlap_transform,
+            overlap_clip_rect,
+        ) {
             Some(overlap_rect) => overlap_rect,
             None => {
                 overlap_tile.overlaps.set(overlaps);
@@ -1406,7 +1372,9 @@ impl SwCompositor {
                         }
                         // Regardless of whether this tile is deferred, if it has dependency
                         // overlaps, then record that it is potentially a dependency parent.
-                        tile.graph_node.get_mut().add_child(overlap_tile.graph_node.clone());
+                        tile.graph_node
+                            .get_mut()
+                            .add_child(overlap_tile.graph_node.clone());
                     }
                 }
             }
@@ -1428,7 +1396,9 @@ impl SwCompositor {
         job_queue: &mut SwCompositeJobQueue,
     ) {
         if let Some(ref composite_thread) = self.composite_thread {
-            if let Some((src_rect, dst_rect, flip_x, flip_y)) = tile.composite_rects(surface, transform, clip_rect) {
+            if let Some((src_rect, dst_rect, flip_x, flip_y)) =
+                tile.composite_rects(surface, transform, clip_rect)
+            {
                 let source = if let Some(ref external_image) = surface.external_image {
                     // If the surface has an attached external image, lock any textures supplied in the descriptor.
                     match self.composite_surfaces.get(external_image) {
@@ -1442,13 +1412,15 @@ impl SwCompositor {
                                 self.gl.lock_texture(info.textures[1]),
                                 self.gl.lock_texture(info.textures[2]),
                             ) {
-                                (Some(y_texture), Some(u_texture), Some(v_texture)) => SwCompositeSource::YUV(
-                                    y_texture,
-                                    u_texture,
-                                    v_texture,
-                                    info.color_space,
-                                    info.color_depth,
-                                ),
+                                (Some(y_texture), Some(u_texture), Some(v_texture)) => {
+                                    SwCompositeSource::YUV(
+                                        y_texture,
+                                        u_texture,
+                                        v_texture,
+                                        info.color_space,
+                                        info.color_depth,
+                                    )
+                                }
                                 _ => return,
                             },
                             _ => panic!("unsupported number of YUV planes: {}", info.yuv_planes),
@@ -1465,7 +1437,8 @@ impl SwCompositor {
                     if let Some(clipped_dst) = dst_rect.intersection(clip_rect) {
                         let num_bands = if surface.rounded_clip.affects_rect(&clipped_dst) {
                             // Create enough bands that we won't exceed the height of the indirection buffer.
-                            ((clipped_dst.height() + INDIRECT_BUFFER_HEIGHT-1) / INDIRECT_BUFFER_HEIGHT) as u8
+                            ((clipped_dst.height() + INDIRECT_BUFFER_HEIGHT - 1)
+                                / INDIRECT_BUFFER_HEIGHT) as u8
                         } else if clipped_dst.width() >= 64 && clipped_dst.height() >= 64 {
                             // For jobs that would span a sufficiently large destination rectangle, split
                             // it into multiple horizontal bands so that multiple threads can process them.
@@ -1516,7 +1489,12 @@ impl SwCompositor {
                     color_depth: ColorDepth::Color8,
                     size: DeviceIntSize::zero(),
                 };
-                if self.compositor.lock_composite_surface(device, self.gl.into(), external_image, &mut info) {
+                if self.compositor.lock_composite_surface(
+                    device,
+                    self.gl.into(),
+                    external_image,
+                    &mut info,
+                ) {
                     tile.valid_rect = DeviceIntRect::from_size(info.size);
                     self.composite_surfaces.insert(external_image, info);
                 } else {
@@ -1529,7 +1507,8 @@ impl SwCompositor {
     /// Look for any attached external images that have been locked and then unlock them.
     fn unlock_composite_surfaces(&mut self, device: &mut Device) {
         for &external_image in self.composite_surfaces.keys() {
-            self.compositor.unlock_composite_surface(device, self.gl.into(), external_image);
+            self.compositor
+                .unlock_composite_surface(device, self.gl.into(), external_image);
         }
         self.composite_surfaces.clear();
     }
@@ -1608,7 +1587,9 @@ impl SwCompositor {
                         // If the count hit zero, it is ready to composite.
                         tile.overlaps.set(overlaps);
                         if overlaps == 0 {
-                            self.queue_composite(surface, transform, clip_rect, filter, tile, &mut lock);
+                            self.queue_composite(
+                                surface, transform, clip_rect, filter, tile, &mut lock,
+                            );
                             // Record that the tile got flushed to update any downwind dependencies.
                             flushed_bounds = flushed_bounds.union(&overlap_rect);
                             flushed_rects.push(overlap_rect);
@@ -1630,7 +1611,8 @@ impl Compositor for SwCompositor {
         is_opaque: bool,
     ) {
         if self.use_native_compositor {
-            self.compositor.create_surface(device, id, virtual_offset, tile_size, is_opaque);
+            self.compositor
+                .create_surface(device, id, virtual_offset, tile_size, is_opaque);
         }
         self.max_tile_size = DeviceIntSize::new(
             self.max_tile_size.width.max(tile_size.width),
@@ -1639,18 +1621,30 @@ impl Compositor for SwCompositor {
         if self.depth_id.is_none() {
             self.depth_id = Some(self.gl.gen_textures(1)[0]);
         }
-        self.surfaces.insert(id, SwSurface::new(tile_size, is_opaque));
+        self.surfaces
+            .insert(id, SwSurface::new(tile_size, is_opaque));
     }
 
-    fn create_external_surface(&mut self, device: &mut Device, id: NativeSurfaceId, is_opaque: bool) {
+    fn create_external_surface(
+        &mut self,
+        device: &mut Device,
+        id: NativeSurfaceId,
+        is_opaque: bool,
+    ) {
         if self.use_native_compositor {
-            self.compositor.create_external_surface(device, id, is_opaque);
+            self.compositor
+                .create_external_surface(device, id, is_opaque);
         }
         self.surfaces
             .insert(id, SwSurface::new(DeviceIntSize::zero(), is_opaque));
     }
 
-    fn create_backdrop_surface(&mut self, _device: &mut Device, _id: NativeSurfaceId, _color: ColorF) {
+    fn create_backdrop_surface(
+        &mut self,
+        _device: &mut Device,
+        _id: NativeSurfaceId,
+        _color: ColorF,
+    ) {
         unreachable!("Not implemented.")
     }
 
@@ -1701,7 +1695,8 @@ impl Compositor for SwCompositor {
             tile.fbo_id = self.gl.gen_framebuffers(1)[0];
             let mut prev_fbo = [0];
             unsafe {
-                self.gl.get_integer_v(gl::DRAW_FRAMEBUFFER_BINDING, &mut prev_fbo);
+                self.gl
+                    .get_integer_v(gl::DRAW_FRAMEBUFFER_BINDING, &mut prev_fbo);
             }
             self.gl.bind_framebuffer(gl::DRAW_FRAMEBUFFER, tile.fbo_id);
             self.gl.framebuffer_texture_2d(
@@ -1718,7 +1713,8 @@ impl Compositor for SwCompositor {
                 self.depth_id.expect("depth texture should be initialized"),
                 0,
             );
-            self.gl.bind_framebuffer(gl::DRAW_FRAMEBUFFER, prev_fbo[0] as gl::GLuint);
+            self.gl
+                .bind_framebuffer(gl::DRAW_FRAMEBUFFER, prev_fbo[0] as gl::GLuint);
 
             surface.tiles.push(tile);
         }
@@ -1726,7 +1722,11 @@ impl Compositor for SwCompositor {
 
     fn destroy_tile(&mut self, device: &mut Device, id: NativeTileId) {
         if let Some(surface) = self.surfaces.get_mut(&id.surface_id) {
-            if let Some(idx) = surface.tiles.iter().position(|t| t.x == id.x && t.y == id.y) {
+            if let Some(idx) = surface
+                .tiles
+                .iter()
+                .position(|t| t.x == id.x && t.y == id.y)
+            {
                 let tile = surface.tiles.remove(idx);
                 self.deinit_tile(&tile);
             }
@@ -1736,9 +1736,15 @@ impl Compositor for SwCompositor {
         }
     }
 
-    fn attach_external_image(&mut self, device: &mut Device, id: NativeSurfaceId, external_image: ExternalImageId) {
+    fn attach_external_image(
+        &mut self,
+        device: &mut Device,
+        id: NativeSurfaceId,
+        external_image: ExternalImageId,
+    ) {
         if self.use_native_compositor {
-            self.compositor.attach_external_image(device, id, external_image);
+            self.compositor
+                .attach_external_image(device, id, external_image);
         }
         if let Some(surface) = self.surfaces.get_mut(&id) {
             // Surfaces with attached external images have a single tile at the origin encompassing
@@ -1751,19 +1757,34 @@ impl Compositor for SwCompositor {
         }
     }
 
-    fn invalidate_tile(&mut self, device: &mut Device, id: NativeTileId, valid_rect: DeviceIntRect) {
+    fn invalidate_tile(
+        &mut self,
+        device: &mut Device,
+        id: NativeTileId,
+        valid_rect: DeviceIntRect,
+    ) {
         if self.use_native_compositor {
             self.compositor.invalidate_tile(device, id, valid_rect);
         }
         if let Some(surface) = self.surfaces.get_mut(&id.surface_id) {
-            if let Some(tile) = surface.tiles.iter_mut().find(|t| t.x == id.x && t.y == id.y) {
+            if let Some(tile) = surface
+                .tiles
+                .iter_mut()
+                .find(|t| t.x == id.x && t.y == id.y)
+            {
                 tile.invalid.set(true);
                 tile.valid_rect = valid_rect;
             }
         }
     }
 
-    fn bind(&mut self, device: &mut Device, id: NativeTileId, dirty_rect: DeviceIntRect, valid_rect: DeviceIntRect) -> NativeSurfaceInfo {
+    fn bind(
+        &mut self,
+        device: &mut Device,
+        id: NativeTileId,
+        dirty_rect: DeviceIntRect,
+        valid_rect: DeviceIntRect,
+    ) -> NativeSurfaceInfo {
         let mut surface_info = NativeSurfaceInfo {
             origin: DeviceIntPoint::zero(),
             fbo_id: 0,
@@ -1772,7 +1793,11 @@ impl Compositor for SwCompositor {
         self.cur_tile = id;
 
         if let Some(surface) = self.surfaces.get_mut(&id.surface_id) {
-            if let Some(tile) = surface.tiles.iter_mut().find(|t| t.x == id.x && t.y == id.y) {
+            if let Some(tile) = surface
+                .tiles
+                .iter_mut()
+                .find(|t| t.x == id.x && t.y == id.y)
+            {
                 assert_eq!(tile.valid_rect, valid_rect);
                 if valid_rect.is_empty() {
                     return surface_info;
@@ -1781,7 +1806,9 @@ impl Compositor for SwCompositor {
                 let mut stride = 0;
                 let mut buf = ptr::null_mut();
                 if self.use_native_compositor {
-                    if let Some(tile_info) = self.compositor.map_tile(device, id, dirty_rect, valid_rect) {
+                    if let Some(tile_info) =
+                        self.compositor.map_tile(device, id, dirty_rect, valid_rect)
+                    {
                         stride = tile_info.stride;
                         buf = tile_info.data;
                     }
@@ -1914,7 +1941,13 @@ impl Compositor for SwCompositor {
     /// frame will not have overlap dependencies assigned and so must instead
     /// be added to the late_surfaces queue to be processed at the end of the
     /// frame.
-    fn start_compositing(&mut self, device: &mut Device, clear_color: ColorF, dirty_rects: &[DeviceIntRect], _opaque_rects: &[DeviceIntRect]) {
+    fn start_compositing(
+        &mut self,
+        device: &mut Device,
+        clear_color: ColorF,
+        dirty_rects: &[DeviceIntRect],
+        _opaque_rects: &[DeviceIntRect],
+    ) {
         self.is_compositing = true;
 
         // Opaque rects are currently only computed here, not by WR itself, so we
@@ -1935,11 +1968,14 @@ impl Compositor for SwCompositor {
             }
         }
 
-        self.compositor.start_compositing(device, clear_color, dirty_rects, &opaque_rects);
+        self.compositor
+            .start_compositing(device, clear_color, dirty_rects, &opaque_rects);
 
         if let Some(dirty_rect) = dirty_rects
             .iter()
-            .fold(DeviceIntRect::zero(), |acc, dirty_rect| acc.union(dirty_rect))
+            .fold(DeviceIntRect::zero(), |acc, dirty_rect| {
+                acc.union(dirty_rect)
+            })
             .to_non_empty()
         {
             // Factor dirty rect into surface clip rects
@@ -1975,7 +2011,9 @@ impl Compositor for SwCompositor {
                     for tile in &surface.tiles {
                         if tile.overlaps.get() == 0 {
                             // Not dependent on any tiles, so go ahead and composite now.
-                            self.queue_composite(surface, transform, clip_rect, filter, tile, &mut lock);
+                            self.queue_composite(
+                                surface, transform, clip_rect, filter, tile, &mut lock,
+                            );
                         }
                     }
                 }
@@ -1983,7 +2021,7 @@ impl Compositor for SwCompositor {
         }
     }
 
-    fn end_frame(&mut self, device: &mut Device,) {
+    fn end_frame(&mut self, device: &mut Device) {
         self.is_compositing = false;
 
         if self.use_native_compositor {
@@ -2004,7 +2042,9 @@ impl Compositor for SwCompositor {
                     for &(ref id, ref transform, ref clip_rect, filter) in &self.late_surfaces {
                         if let Some(surface) = self.surfaces.get(id) {
                             for tile in &surface.tiles {
-                                self.queue_composite(surface, transform, clip_rect, filter, tile, &mut lock);
+                                self.queue_composite(
+                                    surface, transform, clip_rect, filter, tile, &mut lock,
+                                );
                             }
                         }
                     }

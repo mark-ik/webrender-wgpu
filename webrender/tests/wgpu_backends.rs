@@ -38,22 +38,22 @@ fn make_adapter() -> Option<wgpu::Adapter> {
 }
 
 fn make_device(adapter: &wgpu::Adapter) -> (wgpu::Device, wgpu::Queue) {
-    pollster::block_on(adapter.request_device(
-        &wgpu::DeviceDescriptor {
-            label: Some("test device"),
-            required_limits: wgpu::Limits {
-                max_inter_stage_shader_variables: webrender::WgpuDevice::MIN_INTER_STAGE_VARS.max(28),
-                ..Default::default()
-            },
+    pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("test device"),
+        required_limits: wgpu::Limits {
+            max_inter_stage_shader_variables: webrender::WgpuDevice::MIN_INTER_STAGE_VARS.max(28),
             ..Default::default()
         },
-    ))
+        ..Default::default()
+    }))
     .expect("failed to create device")
 }
 
 struct NoopNotifier;
 impl RenderNotifier for NoopNotifier {
-    fn clone(&self) -> Box<dyn RenderNotifier> { Box::new(NoopNotifier) }
+    fn clone(&self) -> Box<dyn RenderNotifier> {
+        Box::new(NoopNotifier)
+    }
     fn wake_up(&self, _: bool) {}
     fn new_frame_ready(&self, _: DocumentId, _: FramePublishId, _: &FrameReadyParams) {}
 }
@@ -71,7 +71,10 @@ fn write_png(path: &Path, width: u32, height: u32, pixels: &[u8]) {
     use std::io::BufWriter;
     let file = match File::create(path) {
         Ok(f) => f,
-        Err(e) => { eprintln!("PNG write failed ({path:?}): {e}"); return; }
+        Err(e) => {
+            eprintln!("PNG write failed ({path:?}): {e}");
+            return;
+        }
     };
     let mut encoder = png::Encoder::new(BufWriter::new(file), width, height);
     encoder.set_color(png::ColorType::RGBA);
@@ -85,9 +88,12 @@ fn write_png(path: &Path, width: u32, height: u32, pixels: &[u8]) {
 /// `label_a` / `label_b` are used in the PNG filename (e.g. "shared", "hal").
 #[track_caller]
 fn assert_pixels_equal(
-    label_a: &str, pixels_a: &[u8],
-    label_b: &str, pixels_b: &[u8],
-    width: u32, height: u32,
+    label_a: &str,
+    pixels_a: &[u8],
+    label_b: &str,
+    pixels_b: &[u8],
+    width: u32,
+    height: u32,
     test_name: &str,
 ) {
     if pixels_a == pixels_b {
@@ -95,7 +101,8 @@ fn assert_pixels_equal(
     }
 
     // Count differing pixels for the error message.
-    let diff_pixels: usize = pixels_a.chunks(4)
+    let diff_pixels: usize = pixels_a
+        .chunks(4)
         .zip(pixels_b.chunks(4))
         .filter(|(a, b)| a != b)
         .count();
@@ -139,16 +146,18 @@ fn render_solid_quads(backend: RendererBackend) -> Vec<u8> {
     let sac = SpaceAndClipInfo::root_scroll(pipeline);
 
     for (x, y, r, g, b) in [
-        (0.0f32,  0.0f32,  1.0, 0.0, 0.0), // red    — top-left
-        (128.0,   0.0,     0.0, 1.0, 0.0), // green  — top-right
-        (0.0,     128.0,   0.0, 0.0, 1.0), // blue   — bottom-left
-        (128.0,   128.0,   1.0, 1.0, 0.0), // yellow — bottom-right
+        (0.0f32, 0.0f32, 1.0, 0.0, 0.0), // red    — top-left
+        (128.0, 0.0, 0.0, 1.0, 0.0),     // green  — top-right
+        (0.0, 128.0, 0.0, 0.0, 1.0),     // blue   — bottom-left
+        (128.0, 128.0, 1.0, 1.0, 0.0),   // yellow — bottom-right
     ] {
-        let rect = LayoutRect::from_origin_and_size(
-            LayoutPoint::new(x, y),
-            LayoutSize::new(128.0, 128.0),
+        let rect =
+            LayoutRect::from_origin_and_size(LayoutPoint::new(x, y), LayoutSize::new(128.0, 128.0));
+        builder.push_rect(
+            &CommonItemProperties::new(rect, sac),
+            rect,
+            ColorF::new(r, g, b, 1.0),
         );
-        builder.push_rect(&CommonItemProperties::new(rect, sac), rect, ColorF::new(r, g, b, 1.0));
     }
 
     let mut txn = Transaction::new();
@@ -180,7 +189,10 @@ fn wgpu_hal_factory_initialises_device() {
     };
     let (device, queue) = make_device(&adapter);
     let wgpu_dev = WgpuDevice::from_shared_device(device, queue);
-    assert!(!wgpu_dev.has_surface(), "WgpuHal device should be headless (no surface)");
+    assert!(
+        !wgpu_dev.has_surface(),
+        "WgpuHal device should be headless (no surface)"
+    );
 }
 
 #[test]
@@ -217,7 +229,9 @@ fn wgpu_hal_factory_device_remains_functional_after_wr_use() {
     let mut wgpu_dev = WgpuDevice::from_shared_device(device, queue);
     let _tex = wgpu_dev.create_data_texture(
         "hal-test-use",
-        4, 4, wgpu::TextureFormat::Rgba8Unorm,
+        4,
+        4,
+        wgpu::TextureFormat::Rgba8Unorm,
         &[0u8; 64],
     );
     wgpu_dev.flush_encoder();
@@ -246,7 +260,10 @@ fn wgpu_shared_and_wgpu_hal_are_pixel_identical() {
 
     // WgpuShared backend.
     let (d1, q1) = make_device(&adapter);
-    let shared_pixels = render_solid_quads(RendererBackend::WgpuShared { device: d1, queue: q1 });
+    let shared_pixels = render_solid_quads(RendererBackend::WgpuShared {
+        device: d1,
+        queue: q1,
+    });
 
     // WgpuHal backend — factory provides device from same adapter class.
     let adapter2 = make_adapter().unwrap();
@@ -255,9 +272,12 @@ fn wgpu_shared_and_wgpu_hal_are_pixel_identical() {
     });
 
     assert_pixels_equal(
-        "shared", &shared_pixels,
-        "hal", &hal_pixels,
-        256, 256,
+        "shared",
+        &shared_pixels,
+        "hal",
+        &hal_pixels,
+        256,
+        256,
         "wgpu_shared_and_wgpu_hal_are_pixel_identical",
     );
 }
@@ -311,31 +331,45 @@ fn composite_output_hal_returns_handle() {
     renderer.render(device_size, 0).expect("render failed");
 
     // composite_output() must be Some after render.
-    assert!(renderer.composite_output().is_some(), "composite_output() must be Some after render");
+    assert!(
+        renderer.composite_output().is_some(),
+        "composite_output() must be Some after render"
+    );
 
     // composite_output_hal<A>() must be Some on the matching backend.
     // We dispatch on the runtime-detected backend to call the right generic.
     let hal_ok = unsafe {
         match info.backend {
-            #[cfg(all(feature = "wgpu_backend", not(target_os = "ios"), not(target_os = "android")))]
-            wgpu::Backend::Vulkan => {
-                renderer.composite_output_hal::<wgpu::wgc::api::Vulkan>().is_some()
-            }
+            #[cfg(all(
+                feature = "wgpu_backend",
+                not(target_os = "ios"),
+                not(target_os = "android")
+            ))]
+            wgpu::Backend::Vulkan => renderer
+                .composite_output_hal::<wgpu::wgc::api::Vulkan>()
+                .is_some(),
             #[cfg(all(feature = "wgpu_backend", target_os = "macos"))]
-            wgpu::Backend::Metal => {
-                renderer.composite_output_hal::<wgpu::wgc::api::Metal>().is_some()
-            }
+            wgpu::Backend::Metal => renderer
+                .composite_output_hal::<wgpu::wgc::api::Metal>()
+                .is_some(),
             #[cfg(all(feature = "wgpu_backend", target_os = "windows"))]
-            wgpu::Backend::Dx12 => {
-                renderer.composite_output_hal::<wgpu::wgc::api::Dx12>().is_some()
-            }
+            wgpu::Backend::Dx12 => renderer
+                .composite_output_hal::<wgpu::wgc::api::Dx12>()
+                .is_some(),
             _ => {
-                eprintln!("composite_output_hal test: backend {:?} not covered — skipping hal check", info.backend);
+                eprintln!(
+                    "composite_output_hal test: backend {:?} not covered — skipping hal check",
+                    info.backend
+                );
                 true // don't fail for uncovered backends
             }
         }
     };
-    assert!(hal_ok, "composite_output_hal<A>() must return Some on matching backend {:?}", info.backend);
+    assert!(
+        hal_ok,
+        "composite_output_hal<A>() must return Some on matching backend {:?}",
+        info.backend
+    );
 
     renderer.deinit();
 }
@@ -379,10 +413,8 @@ fn two_renderers_on_one_device_are_isolated() {
         let mut builder = DisplayListBuilder::new(pipeline);
         builder.begin();
         // Push a rect covering the whole viewport in the chosen colour.
-        let rect = LayoutRect::from_origin_and_size(
-            LayoutPoint::zero(),
-            LayoutSize::new(64.0, 64.0),
-        );
+        let rect =
+            LayoutRect::from_origin_and_size(LayoutPoint::zero(), LayoutSize::new(64.0, 64.0));
         builder.push_rect(
             &CommonItemProperties::new(rect, SpaceAndClipInfo::root_scroll(pipeline)),
             rect,
@@ -399,8 +431,8 @@ fn two_renderers_on_one_device_are_isolated() {
         (renderer, device_size)
     };
 
-    let (mut renderer_a, size_a) = make_renderer(1.0, 0.0, 0.0, "red");   // solid red
-    let (mut renderer_b, size_b) = make_renderer(0.0, 0.0, 1.0, "blue");  // solid blue
+    let (mut renderer_a, size_a) = make_renderer(1.0, 0.0, 0.0, "red"); // solid red
+    let (mut renderer_b, size_b) = make_renderer(0.0, 0.0, 1.0, "blue"); // solid blue
 
     let readback = |renderer: &mut webrender::Renderer, size: DeviceIntSize| {
         let rect = FramebufferIntRect::from_origin_and_size(
@@ -420,7 +452,8 @@ fn two_renderers_on_one_device_are_isolated() {
     for (i, chunk) in pixels_a.chunks(4).enumerate() {
         assert!(
             chunk[0] > 200 && chunk[1] < 50 && chunk[2] < 50,
-            "renderer_a pixel {i}: expected red, got RGBA {:?}", chunk
+            "renderer_a pixel {i}: expected red, got RGBA {:?}",
+            chunk
         );
     }
 
@@ -428,12 +461,16 @@ fn two_renderers_on_one_device_are_isolated() {
     for (i, chunk) in pixels_b.chunks(4).enumerate() {
         assert!(
             chunk[0] < 50 && chunk[1] < 50 && chunk[2] > 200,
-            "renderer_b pixel {i}: expected blue, got RGBA {:?}", chunk
+            "renderer_b pixel {i}: expected blue, got RGBA {:?}",
+            chunk
         );
     }
 
     // The two outputs must differ (they render different colours).
-    assert_ne!(pixels_a, pixels_b, "renderers on the same device must produce independent output");
+    assert_ne!(
+        pixels_a, pixels_b,
+        "renderers on the same device must produce independent output"
+    );
 }
 
 /// Two renderers on the same device can render sequentially and produce
@@ -464,18 +501,25 @@ fn two_renderers_interleaved_produce_correct_pixels() {
             Box::new(NoopNotifier),
             opts,
             None,
-        ).expect("create renderer");
+        )
+        .expect("create renderer");
         let mut api = sender.create_api();
         let doc = api.add_document(device_size);
         let pipeline = PipelineId(pipeline_ns, 0);
         (renderer, api, doc, pipeline)
     };
 
-    let push_solid = |api: &mut RenderApi, doc: DocumentId, pipeline: PipelineId,
-                      epoch: u32, r: f32, g: f32, b: f32| {
+    let push_solid = |api: &mut RenderApi,
+                      doc: DocumentId,
+                      pipeline: PipelineId,
+                      epoch: u32,
+                      r: f32,
+                      g: f32,
+                      b: f32| {
         let mut builder = DisplayListBuilder::new(pipeline);
         builder.begin();
-        let rect = LayoutRect::from_origin_and_size(LayoutPoint::zero(), LayoutSize::new(128.0, 128.0));
+        let rect =
+            LayoutRect::from_origin_and_size(LayoutPoint::zero(), LayoutSize::new(128.0, 128.0));
         builder.push_rect(
             &CommonItemProperties::new(rect, SpaceAndClipInfo::root_scroll(pipeline)),
             rect,
@@ -524,7 +568,8 @@ fn two_renderers_interleaved_produce_correct_pixels() {
     for (i, chunk) in pixels_a2.chunks(4).enumerate() {
         assert!(
             chunk[0] > 200 && chunk[1] < 50 && chunk[2] < 50,
-            "wr_a round-2 pixel {i}: expected red, got RGBA {:?}", chunk
+            "wr_a round-2 pixel {i}: expected red, got RGBA {:?}",
+            chunk
         );
     }
 
@@ -532,7 +577,8 @@ fn two_renderers_interleaved_produce_correct_pixels() {
     for (i, chunk) in pixels_b1.chunks(4).enumerate() {
         assert!(
             chunk[0] > 200 && chunk[1] > 200 && chunk[2] < 50,
-            "wr_b pixel {i}: expected yellow, got RGBA {:?}", chunk
+            "wr_b pixel {i}: expected yellow, got RGBA {:?}",
+            chunk
         );
     }
 
@@ -561,7 +607,11 @@ fn render_to_view_writes_into_caller_texture() {
     // Allocate the "swap-chain-like" target texture on the host device.
     let target_tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("host frame texture"),
-        size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: W,
+            height: H,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -596,15 +646,18 @@ fn render_to_view_writes_into_caller_texture() {
     builder.begin();
     let sac = SpaceAndClipInfo::root_scroll(pipeline);
     for (x, y, r, g, b) in [
-        (0.0f32,  0.0,   1.0, 0.0, 0.0), // red
-        (128.0,   0.0,   0.0, 1.0, 0.0), // green
-        (0.0,     128.0, 0.0, 0.0, 1.0), // blue
-        (128.0,   128.0, 1.0, 1.0, 0.0), // yellow
+        (0.0f32, 0.0, 1.0, 0.0, 0.0),  // red
+        (128.0, 0.0, 0.0, 1.0, 0.0),   // green
+        (0.0, 128.0, 0.0, 0.0, 1.0),   // blue
+        (128.0, 128.0, 1.0, 1.0, 0.0), // yellow
     ] {
-        let rect = LayoutRect::from_origin_and_size(
-            LayoutPoint::new(x, y), LayoutSize::new(128.0, 128.0),
+        let rect =
+            LayoutRect::from_origin_and_size(LayoutPoint::new(x, y), LayoutSize::new(128.0, 128.0));
+        builder.push_rect(
+            &CommonItemProperties::new(rect, sac),
+            rect,
+            ColorF::new(r, g, b, 1.0),
         );
-        builder.push_rect(&CommonItemProperties::new(rect, sac), rect, ColorF::new(r, g, b, 1.0));
     }
     let mut txn = Transaction::new();
     txn.set_display_list(Epoch(0), builder.end());
@@ -615,7 +668,9 @@ fn render_to_view_writes_into_caller_texture() {
     renderer.update();
 
     // Render into the caller-provided view.
-    renderer.render_to_view(target_view, device_size, 0).expect("render_to_view failed");
+    renderer
+        .render_to_view(target_view, device_size, 0)
+        .expect("render_to_view failed");
 
     // Read back via staging buffer.
     let bytes_per_row = W * 4;
@@ -641,13 +696,19 @@ fn render_to_view_writes_into_caller_texture() {
                 rows_per_image: None,
             },
         },
-        wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+        wgpu::Extent3d {
+            width: W,
+            height: H,
+            depth_or_array_layers: 1,
+        },
     );
     queue.submit(Some(enc.finish()));
 
     let slice = staging.slice(..);
     let (tx, rx) = std::sync::mpsc::channel();
-    slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+    slice.map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
     let _ = device.poll(wgpu::PollType::wait_indefinitely());
     rx.recv().expect("map failed").expect("map error");
 
@@ -669,8 +730,20 @@ fn render_to_view_writes_into_caller_texture() {
     renderer.deinit();
 
     let close = |a: u8, b: u8| (a as i16 - b as i16).unsigned_abs() < 10;
-    assert!(close(r1, 255) && close(g1, 0) && close(b1, 0),   "TL should be red,    got ({r1},{g1},{b1})");
-    assert!(close(r2, 0) && close(g2, 255) && close(b2, 0),   "TR should be green,  got ({r2},{g2},{b2})");
-    assert!(close(r3, 0) && close(g3, 0) && close(b3, 255),   "BL should be blue,   got ({r3},{g3},{b3})");
-    assert!(close(r4, 255) && close(g4, 255) && close(b4, 0), "BR should be yellow, got ({r4},{g4},{b4})");
+    assert!(
+        close(r1, 255) && close(g1, 0) && close(b1, 0),
+        "TL should be red,    got ({r1},{g1},{b1})"
+    );
+    assert!(
+        close(r2, 0) && close(g2, 255) && close(b2, 0),
+        "TR should be green,  got ({r2},{g2},{b2})"
+    );
+    assert!(
+        close(r3, 0) && close(g3, 0) && close(b3, 255),
+        "BL should be blue,   got ({r3},{g3},{b3})"
+    );
+    assert!(
+        close(r4, 255) && close(g4, 255) && close(b4, 0),
+        "BR should be yellow, got ({r4},{g4},{b4})"
+    );
 }

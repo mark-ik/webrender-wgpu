@@ -23,7 +23,6 @@ use webrender::api::units::*;
 use crate::wrench::{Wrench, WrenchThing};
 use crate::yaml_frame_reader::YamlFrameReader;
 
-
 const OPTION_DISABLE_SUBPX: &str = "disable-subpixel";
 const OPTION_DISABLE_AA: &str = "disable-aa";
 const OPTION_ALLOW_MIPMAPS: &str = "allow-mipmaps";
@@ -80,12 +79,9 @@ enum ExtraCheck {
 impl ExtraCheck {
     fn run(&self, results: &[RenderResults]) -> bool {
         match *self {
-            ExtraCheck::DrawCalls(x) =>
-                x == results.last().unwrap().stats.total_draw_calls,
-            ExtraCheck::AlphaTargets(x) =>
-                x == results.last().unwrap().stats.alpha_target_count,
-            ExtraCheck::ColorTargets(x) =>
-                x == results.last().unwrap().stats.color_target_count,
+            ExtraCheck::DrawCalls(x) => x == results.last().unwrap().stats.total_draw_calls,
+            ExtraCheck::AlphaTargets(x) => x == results.last().unwrap().stats.alpha_target_count,
+            ExtraCheck::ColorTargets(x) => x == results.last().unwrap().stats.color_target_count,
         }
     }
 }
@@ -116,10 +112,12 @@ impl Reftest {
         reference: &ReftestImage,
     ) -> bool {
         match comparison {
-            ReftestImageComparison::Equal => {
-                true
-            }
-            ReftestImageComparison::NotEqual { difference_histogram, max_difference, count_different } => {
+            ReftestImageComparison::Equal => true,
+            ReftestImageComparison::NotEqual {
+                difference_histogram,
+                max_difference,
+                count_different,
+            } => {
                 // Each entry in the sorted self.fuzziness list represents a bucket which
                 // allows at most num_differences pixels with a difference of at most
                 // max_difference -- but with the caveat that a difference which is small
@@ -159,9 +157,13 @@ impl Reftest {
                 // Finally we check if there are any pixels that exceed the max difference (4)
                 // by checking Sum[255] - Sum[4] which shows there are 14-12 == 2 so we fail.
 
-                let prefix_sum = difference_histogram.iter()
-                                                     .scan(0, |sum, i| { *sum += i; Some(*sum) })
-                                                     .collect::<Vec<_>>();
+                let prefix_sum = difference_histogram
+                    .iter()
+                    .scan(0, |sum, i| {
+                        *sum += i;
+                        Some(*sum)
+                    })
+                    .collect::<Vec<_>>();
 
                 // check each fuzzy statement for violations.
                 assert_eq!(0, difference_histogram[0]);
@@ -172,7 +174,7 @@ impl Reftest {
 
                 // loop invariant: this is the number of pixels to ignore as they have been counted
                 // against previous iterations' fuzzy statements.
-                let mut previous_sum_fail = 0;  // ==  prefix_sum[previous_max_diff]
+                let mut previous_sum_fail = 0; // ==  prefix_sum[previous_max_diff]
 
                 let mut is_failing = false;
                 let mut fail_text = String::new();
@@ -181,11 +183,13 @@ impl Reftest {
                     let fuzzy_max_difference = cmp::min(255, fuzzy.max_difference);
                     let num_differences = prefix_sum[fuzzy_max_difference] - previous_sum_fail;
                     if num_differences > fuzzy.num_differences {
-                        fail_text.push_str(
-                            &format!("{} differences > {} and <= {} (allowed {}); ",
-                                     num_differences,
-                                     previous_max_diff, fuzzy_max_difference,
-                                     fuzzy.num_differences));
+                        fail_text.push_str(&format!(
+                            "{} differences > {} and <= {} (allowed {}); ",
+                            num_differences,
+                            previous_max_diff,
+                            fuzzy_max_difference,
+                            fuzzy.num_differences
+                        ));
                         is_failing = true;
                     }
                     previous_max_diff = fuzzy_max_difference;
@@ -195,11 +199,10 @@ impl Reftest {
                 // max difference? if so, we fail the test:
                 let num_differences = prefix_sum[255] - previous_sum_fail;
                 if num_differences > 0 {
-                    fail_text.push_str(
-                        &format!("{} num_differences > {} and <= {} (allowed {}); ",
-                                num_differences,
-                                previous_max_diff, 255,
-                                0));
+                    fail_text.push_str(&format!(
+                        "{} num_differences > {} and <= {} (allowed {}); ",
+                        num_differences, previous_max_diff, 255, 0
+                    ));
                     is_failing = true;
                 }
 
@@ -207,12 +210,12 @@ impl Reftest {
                     println!(
                         "REFTEST TEST-UNEXPECTED-FAIL | {} | \
                          image comparison, max difference: {}, number of differing pixels: {} | {}",
-                        self,
-                        max_difference,
-                        count_different,
-                        fail_text,
+                        self, max_difference, count_different, fail_text,
                     );
-                    println!("REFTEST   IMAGE 1 (TEST): {}", test.clone().create_data_uri());
+                    println!(
+                        "REFTEST   IMAGE 1 (TEST): {}",
+                        test.clone().create_data_uri()
+                    );
                     println!(
                         "REFTEST   IMAGE 2 (REFERENCE): {}",
                         reference.clone().create_data_uri()
@@ -276,14 +279,18 @@ impl ReftestImage {
 
         for (a, b) in self.data.chunks(4).zip(other.data.chunks(4)) {
             if a != b {
-                let pixel_max = a.iter()
+                let pixel_max = a
+                    .iter()
                     .zip(b.iter())
                     .map(|(x, y)| (*x as isize - *y as isize).abs() as usize)
                     .max()
                     .unwrap();
 
                 count += 1;
-                assert!(pixel_max < 256, "pixel values are not 8 bit, update the histogram binning code");
+                assert!(
+                    pixel_max < 256,
+                    "pixel values are not 8 bit, update the histogram binning code"
+                );
                 // deliberately avoid counting pixels that match --
                 // histogram[0] stays at zero.
                 // this helps our prefix sum later during analysis to
@@ -311,19 +318,23 @@ impl ReftestImage {
         // flip image vertically (texture is upside down)
         let orig_pixels = self.data.clone();
         let stride = width as usize * 4;
-        for y in 0 .. height as usize {
+        for y in 0..height as usize {
             let dst_start = y * stride;
             let src_start = (height as usize - y - 1) * stride;
-            let src_slice = &orig_pixels[src_start .. src_start + stride];
-            (&mut self.data[dst_start .. dst_start + stride])
-                .clone_from_slice(&src_slice[.. stride]);
+            let src_slice = &orig_pixels[src_start..src_start + stride];
+            (&mut self.data[dst_start..dst_start + stride]).clone_from_slice(&src_slice[..stride]);
         }
 
         let mut png: Vec<u8> = vec![];
         {
             let encoder = PNGEncoder::new(&mut png);
             encoder
-                .encode(&self.data[..], width as u32, height as u32, ColorType::Rgba8)
+                .encode(
+                    &self.data[..],
+                    width as u32,
+                    height as u32,
+                    ColorType::Rgba8,
+                )
                 .expect("Unable to encode PNG!");
         }
         let png_base64 = base64::engine::general_purpose::STANDARD.encode(&png);
@@ -335,10 +346,14 @@ struct ReftestManifest {
     reftests: Vec<Reftest>,
 }
 impl ReftestManifest {
-    fn new(manifest: &Path, environment: &ReftestEnvironment, options: &ReftestOptions) -> ReftestManifest {
+    fn new(
+        manifest: &Path,
+        environment: &ReftestEnvironment,
+        options: &ReftestOptions,
+    ) -> ReftestManifest {
         let dir = manifest.parent().unwrap();
-        let f =
-            File::open(manifest).unwrap_or_else(|_| panic!("couldn't open manifest: {}", manifest.display()));
+        let f = File::open(manifest)
+            .unwrap_or_else(|_| panic!("couldn't open manifest: {}", manifest.display()));
         let file = BufReader::new(&f);
 
         let mut reftests = Vec::new();
@@ -347,7 +362,7 @@ impl ReftestManifest {
             let l = line.unwrap();
 
             // strip the comments
-            let s = &l[0 .. l.find('#').unwrap_or(l.len())];
+            let s = &l[0..l.find('#').unwrap_or(l.len())];
             let s = s.trim();
             if s.is_empty() {
                 continue;
@@ -369,35 +384,48 @@ impl ReftestManifest {
                         let (_, args, _) = parse_function(function);
                         force_subpixel_aa_where_possible = Some(args[0].parse().unwrap());
                     }
-                    function if function.starts_with("fuzzy-range(") ||
-                                function.starts_with("fuzzy-range-if(") => {
+                    function
+                        if function.starts_with("fuzzy-range(")
+                            || function.starts_with("fuzzy-range-if(") =>
+                    {
                         let (_, mut args, _) = parse_function(function);
                         if function.starts_with("fuzzy-range-if(") {
-                            if !environment.parse_condition(args.remove(0)).expect("unknown condition") {
+                            if !environment
+                                .parse_condition(args.remove(0))
+                                .expect("unknown condition")
+                            {
                                 return true;
                             }
                             fuzziness.clear();
                         }
                         let num_range = args.len() / 2;
                         for range in 0..num_range {
-                            let mut max = args[range * 2    ];
+                            let mut max = args[range * 2];
                             let mut num = args[range * 2 + 1];
-                            if max.starts_with("<=") { // trim_start_matches would allow <=<=123
+                            if max.starts_with("<=") {
+                                // trim_start_matches would allow <=<=123
                                 max = &max[2..];
                             }
                             if num.starts_with('*') {
                                 num = &num[1..];
                             }
-                            let max_difference  = max.parse().unwrap();
+                            let max_difference = max.parse().unwrap();
                             let num_differences = num.parse().unwrap();
-                            fuzziness.push(RefTestFuzzy { max_difference, num_differences });
+                            fuzziness.push(RefTestFuzzy {
+                                max_difference,
+                                num_differences,
+                            });
                         }
                     }
-                    function if function.starts_with("fuzzy(") ||
-                                function.starts_with("fuzzy-if(") => {
+                    function
+                        if function.starts_with("fuzzy(") || function.starts_with("fuzzy-if(") =>
+                    {
                         let (_, mut args, _) = parse_function(function);
                         if function.starts_with("fuzzy-if(") {
-                            if !environment.parse_condition(args.remove(0)).expect("unknown condition") {
+                            if !environment
+                                .parse_condition(args.remove(0))
+                                .expect("unknown condition")
+                            {
                                 return true;
                             }
                             fuzziness.clear();
@@ -405,7 +433,10 @@ impl ReftestManifest {
                         let max_difference = args[0].parse().unwrap();
                         let num_differences = args[1].parse().unwrap();
                         assert!(fuzziness.is_empty()); // if this fires, consider fuzzy-range instead
-                        fuzziness.push(RefTestFuzzy { max_difference, num_differences });
+                        fuzziness.push(RefTestFuzzy {
+                            max_difference,
+                            num_differences,
+                        });
                     }
                     function if function.starts_with("draw_calls(") => {
                         let (_, args, _) = parse_function(function);
@@ -448,7 +479,8 @@ impl ReftestManifest {
                         let include = dir.join(tokens[1]);
 
                         reftests.append(
-                            &mut ReftestManifest::new(include.as_path(), environment, options).reftests,
+                            &mut ReftestManifest::new(include.as_path(), environment, options)
+                                .reftests,
                         );
 
                         break;
@@ -467,20 +499,21 @@ impl ReftestManifest {
                     }
                     cond if cond.starts_with("if(") => {
                         let (_, args, _) = parse_function(cond);
-                        if environment.parse_condition(args[0]).expect("unknown condition") {
+                        if environment
+                            .parse_condition(args[0])
+                            .expect("unknown condition")
+                        {
                             for command in &args[1..] {
                                 parse_command(command);
                             }
                         }
                     }
                     command if parse_command(command) => {}
-                    _ => {
-                        match environment.parse_condition(*token) {
-                            Some(true) => {}
-                            Some(false) => break,
-                            _ => paths.push(dir.join(*token)),
-                        }
-                    }
+                    _ => match environment.parse_condition(*token) {
+                        Some(true) => {}
+                        Some(false) => break,
+                        _ => paths.push(dir.join(*token)),
+                    },
                 }
             }
 
@@ -503,7 +536,10 @@ impl ReftestManifest {
                 // First remove the ranges with difference <= 2, otherwise they might cause the
                 // test to fail before the new range is picked up.
                 fuzziness.retain(|fuzzy| fuzzy.max_difference > 2);
-                fuzziness.push(RefTestFuzzy { max_difference: 2, num_differences: std::usize::MAX });
+                fuzziness.push(RefTestFuzzy {
+                    max_difference: 2,
+                    num_differences: std::usize::MAX,
+                });
             }
 
             if environment.backend == "wgpu" {
@@ -512,7 +548,10 @@ impl ReftestManifest {
                 // Allow unlimited pixels with difference <= 4, similar to
                 // how Android gets global fuzz for mobile precision.
                 fuzziness.retain(|fuzzy| fuzzy.max_difference > 4);
-                fuzziness.push(RefTestFuzzy { max_difference: 4, num_differences: std::usize::MAX });
+                fuzziness.push(RefTestFuzzy {
+                    max_difference: 4,
+                    num_differences: std::usize::MAX,
+                });
             }
 
             // to avoid changing the meaning of existing tests, the case of
@@ -521,21 +560,26 @@ impl ReftestManifest {
             // turn into a test that allows fuzzy.allow_ *plus* options.allow_):
             match fuzziness.len() {
                 0 => fuzziness.push(RefTestFuzzy {
-                        max_difference: options.allow_max_difference,
-                        num_differences: options.allow_num_differences }),
+                    max_difference: options.allow_max_difference,
+                    num_differences: options.allow_num_differences,
+                }),
                 1 => {
                     let fuzzy = &mut fuzziness[0];
-                    fuzzy.max_difference = cmp::max(fuzzy.max_difference, options.allow_max_difference);
-                    fuzzy.num_differences = cmp::max(fuzzy.num_differences, options.allow_num_differences);
-                },
+                    fuzzy.max_difference =
+                        cmp::max(fuzzy.max_difference, options.allow_max_difference);
+                    fuzzy.num_differences =
+                        cmp::max(fuzzy.num_differences, options.allow_num_differences);
+                }
                 _ => {
                     // ignore options, use multiple fuzzy keywords instead. make sure
                     // the list is sorted to speed up counting violations.
                     fuzziness.sort_by(|a, b| a.max_difference.cmp(&b.max_difference));
                     for pair in fuzziness.windows(2) {
                         if pair[0].max_difference == pair[1].max_difference {
-                            println!("Warning: repeated fuzzy of max_difference {} ignored.",
-                                     pair[1].max_difference);
+                            println!(
+                                "Warning: repeated fuzzy of max_difference {} ignored.",
+                                pair[1].max_difference
+                            );
                         }
                     }
                 }
@@ -653,8 +697,10 @@ impl ReftestEnvironment {
             if version_string.chars().filter(|c| *c == '.').count() == 1 {
                 version_string.push_str(".0");
             }
-            Some(semver::Version::parse(&version_string)
-                 .unwrap_or_else(|_| panic!("Failed to parse macOS version {}", version_string)))
+            Some(
+                semver::Version::parse(&version_string)
+                    .unwrap_or_else(|_| panic!("Failed to parse macOS version {}", version_string)),
+            )
         } else {
             None
         }
@@ -692,11 +738,17 @@ impl ReftestEnvironment {
             }
             op if op.starts_with("or(") => {
                 let (_, args, _) = parse_function(op);
-                Some(args.iter().any(|arg| self.parse_condition(arg).expect("unknown condition")))
+                Some(
+                    args.iter()
+                        .any(|arg| self.parse_condition(arg).expect("unknown condition")),
+                )
             }
             op if op.starts_with("and(") => {
                 let (_, args, _) = parse_function(op);
-                Some(args.iter().all(|arg| self.parse_condition(arg).expect("unknown condition")))
+                Some(
+                    args.iter()
+                        .all(|arg| self.parse_condition(arg).expect("unknown condition")),
+                )
             }
             _ => None,
         }
@@ -710,12 +762,26 @@ pub struct ReftestHarness<'a> {
     environment: ReftestEnvironment,
 }
 impl<'a> ReftestHarness<'a> {
-    pub fn new(wrench: &'a mut Wrench, window: &'a mut WindowWrapper, rx: &'a Receiver<NotifierEvent>) -> Self {
+    pub fn new(
+        wrench: &'a mut Wrench,
+        window: &'a mut WindowWrapper,
+        rx: &'a Receiver<NotifierEvent>,
+    ) -> Self {
         let environment = ReftestEnvironment::new(wrench, window);
-        ReftestHarness { wrench, window, rx, environment }
+        ReftestHarness {
+            wrench,
+            window,
+            rx,
+            environment,
+        }
     }
 
-    pub fn run(mut self, base_manifest: &Path, reftests: Option<&Path>, options: &ReftestOptions) -> usize {
+    pub fn run(
+        mut self,
+        base_manifest: &Path,
+        reftests: Option<&Path>,
+        options: &ReftestOptions,
+    ) -> usize {
         let manifest = ReftestManifest::new(base_manifest, &self.environment, options);
         let reftests = manifest.find(reftests.unwrap_or(&PathBuf::new()));
 
@@ -754,12 +820,12 @@ impl<'a> ReftestHarness<'a> {
 
         self.wrench
             .api
-            .send_debug_cmd(
-                DebugCommand::ClearCaches(ClearCache::all())
-            );
+            .send_debug_cmd(DebugCommand::ClearCaches(ClearCache::all()));
 
         let quality_settings = QualitySettings {
-            force_subpixel_aa_where_possible: t.force_subpixel_aa_where_possible.unwrap_or_default(),
+            force_subpixel_aa_where_possible: t
+                .force_subpixel_aa_where_possible
+                .unwrap_or_default(),
         };
 
         self.wrench.set_quality_settings(quality_settings);
@@ -767,9 +833,9 @@ impl<'a> ReftestHarness<'a> {
         if let Some(max_surface_override) = t.max_surface_override {
             self.wrench
                 .api
-                .send_debug_cmd(
-                    DebugCommand::SetMaximumSurfaceSize(Some(max_surface_override))
-                );
+                .send_debug_cmd(DebugCommand::SetMaximumSurfaceSize(Some(
+                    max_surface_override,
+                )));
         }
 
         let window_size = self.window.get_inner_size();
@@ -794,12 +860,8 @@ impl<'a> ReftestHarness<'a> {
             ReftestOp::Equal | ReftestOp::NotEqual => {
                 // For equality tests, render each test image and store result
                 for filename in t.test.iter() {
-                    let output = self.render_yaml(
-                        filename,
-                        test_size,
-                        t.font_render_mode,
-                        t.allow_mipmaps,
-                    );
+                    let output =
+                        self.render_yaml(filename, test_size, t.font_render_mode, t.allow_mipmaps);
                     images.push(output.image);
                     results.push(output.results);
                 }
@@ -816,9 +878,7 @@ impl<'a> ReftestHarness<'a> {
                 for tile_size in &tile_sizes {
                     self.wrench
                         .api
-                        .send_debug_cmd(
-                            DebugCommand::SetPictureTileSize(Some(*tile_size))
-                        );
+                        .send_debug_cmd(DebugCommand::SetPictureTileSize(Some(*tile_size)));
 
                     let output = self.render_yaml(
                         &t.reference,
@@ -832,9 +892,7 @@ impl<'a> ReftestHarness<'a> {
 
                 self.wrench
                     .api
-                    .send_debug_cmd(
-                        DebugCommand::SetPictureTileSize(None)
-                    );
+                    .send_debug_cmd(DebugCommand::SetPictureTileSize(None));
             }
         }
 
@@ -846,21 +904,15 @@ impl<'a> ReftestHarness<'a> {
             }
             image
         } else {
-            let output = self.render_yaml(
-                &t.reference,
-                test_size,
-                t.font_render_mode,
-                t.allow_mipmaps,
-            );
+            let output =
+                self.render_yaml(&t.reference, test_size, t.font_render_mode, t.allow_mipmaps);
             output.image
         };
 
         if let Some(_) = t.max_surface_override {
             self.wrench
                 .api
-                .send_debug_cmd(
-                    DebugCommand::SetMaximumSurfaceSize(None)
-                );
+                .send_debug_cmd(DebugCommand::SetMaximumSurfaceSize(None));
         }
 
         // wgpu backend doesn't report draw call / render target statistics,
@@ -885,11 +937,7 @@ impl<'a> ReftestHarness<'a> {
                 // Ensure that the final image matches the reference
                 let test = images.pop().unwrap();
                 let comparison = test.compare(&reference);
-                t.check_and_report_equality_failure(
-                    comparison,
-                    &test,
-                    &reference,
-                )
+                t.check_and_report_equality_failure(comparison, &test, &reference)
             }
             ReftestOp::NotEqual => {
                 // Ensure that the final image *doesn't* match the reference
@@ -900,9 +948,7 @@ impl<'a> ReftestHarness<'a> {
                         t.report_unexpected_equality();
                         false
                     }
-                    ReftestImageComparison::NotEqual { .. } => {
-                        true
-                    }
+                    ReftestImageComparison::NotEqual { .. } => true,
                 }
             }
             ReftestOp::Accurate => {
@@ -910,11 +956,7 @@ impl<'a> ReftestHarness<'a> {
                 for test in images.drain(..) {
                     let comparison = test.compare(&reference);
 
-                    if !t.check_and_report_equality_failure(
-                        comparison,
-                        &test,
-                        &reference,
-                    ) {
+                    if !t.check_and_report_equality_failure(comparison, &test, &reference) {
                         return false;
                     }
                 }
@@ -923,11 +965,9 @@ impl<'a> ReftestHarness<'a> {
             }
             ReftestOp::Inaccurate => {
                 // Ensure that at least one of the images doesn't match the reference
-                let all_same = images.iter().all(|image| {
-                    match image.compare(&reference) {
-                        ReftestImageComparison::Equal => true,
-                        ReftestImageComparison::NotEqual { .. } => false,
-                    }
+                let all_same = images.iter().all(|image| match image.compare(&reference) {
+                    ReftestImageComparison::Equal => true,
+                    ReftestImageComparison::NotEqual { .. } => false,
                 });
 
                 if all_same {
@@ -970,9 +1010,10 @@ impl<'a> ReftestHarness<'a> {
 
         let window_size = self.window.get_inner_size();
         assert!(
-            size.width <= window_size.width &&
-            size.height <= window_size.height,
-            "size={:?} ws={:?}", size, window_size
+            size.width <= window_size.width && size.height <= window_size.height,
+            "size={:?} ws={:?}",
+            size,
+            window_size
         );
 
         // taking the bottom left sub-rectangle

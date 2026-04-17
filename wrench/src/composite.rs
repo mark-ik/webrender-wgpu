@@ -32,12 +32,17 @@ impl LayerId {
 }
 
 // FFI bindings to `composite.cpp`
-#[link(name="wr_composite", kind="static")]
+#[link(name = "wr_composite", kind = "static")]
 extern "C" {
     fn wrc_new(d3d11_device: *const c_void, hwnd: *const c_void) -> CompositorHandle;
     fn wrc_delete(compositor: CompositorHandle);
 
-    fn wrc_create_layer(compositor: CompositorHandle, width: i32, height: i32, is_opaque: bool) -> LayerId;
+    fn wrc_create_layer(
+        compositor: CompositorHandle,
+        width: i32,
+        height: i32,
+        is_opaque: bool,
+    ) -> LayerId;
     fn wrc_get_layer_backbuffer(layer_id: LayerId) -> *mut c_void;
     fn wrc_set_layer_position(layer_id: LayerId, x: f32, y: f32);
     fn wrc_present_layer(layer_id: LayerId);
@@ -94,9 +99,7 @@ impl WrCompositor {
         };
 
         // Construct the FFI part of the compositor impl
-        let compositor = unsafe {
-            wrc_new(d3d11_device, hwnd)
-        };
+        let compositor = unsafe { wrc_new(d3d11_device, hwnd) };
 
         WrCompositor {
             display,
@@ -120,10 +123,7 @@ impl LayerCompositor for WrCompositor {
     // The main job of this method is to inspect the input config, create the output
     // config, and create any native OS resources that will be needed as layers get
     // composited.
-    fn begin_frame(
-        &mut self,
-        input: &CompositorInputConfig,
-    ) -> bool {
+    fn begin_frame(&mut self, input: &CompositorInputConfig) -> bool {
         unsafe {
             // Reset DC visual tree
             wrc_begin_frame(self.compositor);
@@ -136,7 +136,7 @@ impl LayerCompositor for WrCompositor {
             todo!();
         } else if curr_layer_count > prev_layer_count {
             // Construct new empty layers, they'll get resized below
-            for _ in 0 .. curr_layer_count-prev_layer_count {
+            for _ in 0..curr_layer_count - prev_layer_count {
                 self.layers.push(WrLayer::empty());
             }
         }
@@ -149,8 +149,7 @@ impl LayerCompositor for WrCompositor {
             // TODO(gwc): Handle External surfaces as swapchains separate from content
 
             // See if we need to resize the swap-chain layer
-            if input_size.width != layer.width ||
-                input_size.height != layer.height {
+            if input_size.width != layer.width || input_size.height != layer.height {
                 // TODO: Handle resize of layer (not needed for initial commit,
                 // but will need to support resizing wrench window)
                 assert_eq!(layer.layer_id, LayerId::INVALID);
@@ -163,35 +162,50 @@ impl LayerCompositor for WrCompositor {
                 };
 
                 let pbuffer_attribs: [EGLint; 5] = [
-                    egl::ffi::WIDTH as EGLint, layer.width,
-                    egl::ffi::HEIGHT as EGLint, layer.height,
+                    egl::ffi::WIDTH as EGLint,
+                    layer.width,
+                    egl::ffi::HEIGHT as EGLint,
+                    layer.height,
                     egl::ffi::NONE as EGLint,
                 ];
 
                 let attribs: [EGLint; 18] = [
-                    egl::ffi::SURFACE_TYPE as EGLint, egl::ffi::WINDOW_BIT as EGLint,
-                    egl::ffi::RED_SIZE as EGLint, 8,
-                    egl::ffi::GREEN_SIZE as EGLint, 8,
-                    egl::ffi::BLUE_SIZE as EGLint, 8,
-                    egl::ffi::ALPHA_SIZE as EGLint, 8,
-                    egl::ffi::RENDERABLE_TYPE as EGLint, egl::ffi::OPENGL_ES2_BIT as EGLint,
+                    egl::ffi::SURFACE_TYPE as EGLint,
+                    egl::ffi::WINDOW_BIT as EGLint,
+                    egl::ffi::RED_SIZE as EGLint,
+                    8,
+                    egl::ffi::GREEN_SIZE as EGLint,
+                    8,
+                    egl::ffi::BLUE_SIZE as EGLint,
+                    8,
+                    egl::ffi::ALPHA_SIZE as EGLint,
+                    8,
+                    egl::ffi::RENDERABLE_TYPE as EGLint,
+                    egl::ffi::OPENGL_ES2_BIT as EGLint,
                     // TODO(gw): Can we disable z-buffer for compositing always?
-                    egl::ffi::DEPTH_SIZE as EGLint, 24,
-                    egl::ffi::STENCIL_SIZE as EGLint, 8,
-                    egl::ffi::NONE as EGLint, egl::ffi::NONE as EGLint
+                    egl::ffi::DEPTH_SIZE as EGLint,
+                    24,
+                    egl::ffi::STENCIL_SIZE as EGLint,
+                    8,
+                    egl::ffi::NONE as EGLint,
+                    egl::ffi::NONE as EGLint,
                 ];
 
                 // Get the D3D backbuffer texture for the swap-chain
-                let back_buffer = unsafe {
-                    wrc_get_layer_backbuffer(layer.layer_id)
-                };
+                let back_buffer = unsafe { wrc_get_layer_backbuffer(layer.layer_id) };
 
                 // Create an EGL surface <-> binding to the D3D backbuffer texture
                 let mut egl_config = ptr::null();
                 let mut cfg_count = 0;
 
                 let ok = unsafe {
-                    egl::ffi::ChooseConfig(self.display, attribs.as_ptr(), &mut egl_config, 1, &mut cfg_count)
+                    egl::ffi::ChooseConfig(
+                        self.display,
+                        attribs.as_ptr(),
+                        &mut egl_config,
+                        1,
+                        &mut cfg_count,
+                    )
                 };
 
                 assert_ne!(ok, 0);
@@ -230,12 +244,7 @@ impl LayerCompositor for WrCompositor {
         let layer = &self.layers[index];
 
         let ok = unsafe {
-            egl::ffi::MakeCurrent(
-                self.display,
-                layer.surface,
-                layer.surface,
-                self.context,
-            )
+            egl::ffi::MakeCurrent(self.display, layer.surface, layer.surface, self.context)
         };
         assert!(ok != 0);
     }

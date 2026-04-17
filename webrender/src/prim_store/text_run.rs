@@ -12,7 +12,7 @@ use crate::gpu_cache::GpuCache;
 use crate::intern;
 use crate::internal_types::LayoutPrimitiveInfo;
 use crate::picture::SurfaceInfo;
-use crate::prim_store::{PrimitiveOpacity,  PrimitiveScratchBuffer};
+use crate::prim_store::{PrimitiveOpacity, PrimitiveScratchBuffer};
 use crate::prim_store::{PrimitiveStore, PrimKeyCommonData, PrimTemplateCommonData};
 use crate::renderer::MAX_VERTEX_TEXTURE_WIDTH;
 use crate::resource_cache::ResourceCache;
@@ -47,18 +47,13 @@ pub struct TextRunKey {
 }
 
 impl TextRunKey {
-    pub fn new(
-        info: &LayoutPrimitiveInfo,
-        text_run: TextRun,
-    ) -> Self {
+    pub fn new(info: &LayoutPrimitiveInfo, text_run: TextRun) -> Self {
         let glyphs = text_run
             .glyphs
             .iter()
-            .map(|glyph| {
-                GlyphInstanceAu {
-                    index: glyph.index,
-                    point: glyph.point.to_au(),
-                }
+            .map(|glyph| GlyphInstanceAu {
+                index: glyph.index,
+                point: glyph.point.to_au(),
             })
             .collect();
 
@@ -103,11 +98,9 @@ impl From<TextRunKey> for TextRunTemplate {
         let glyphs = item
             .glyphs
             .iter()
-            .map(|glyph| {
-                GlyphInstance {
-                    index: glyph.index,
-                    point: LayoutPoint::from_au(glyph.point),
-                }
+            .map(|glyph| GlyphInstance {
+                index: glyph.index,
+                point: LayoutPoint::from_au(glyph.point),
             })
             .collect();
 
@@ -124,20 +117,17 @@ impl TextRunTemplate {
     /// times per frame, by each primitive reference that refers to this interned
     /// template. The initial request call to the GPU cache ensures that work is only
     /// done if the cache entry is invalid (due to first use or eviction).
-    pub fn update(
-        &mut self,
-        frame_state: &mut FrameBuildingState,
-    ) {
+    pub fn update(&mut self, frame_state: &mut FrameBuildingState) {
         self.write_prim_gpu_blocks(frame_state);
         self.opacity = PrimitiveOpacity::translucent();
     }
 
-    fn write_prim_gpu_blocks(
-        &mut self,
-        frame_state: &mut FrameBuildingState,
-    ) {
+    fn write_prim_gpu_blocks(&mut self, frame_state: &mut FrameBuildingState) {
         // corresponds to `fetch_glyph` in the shaders
-        if let Some(mut request) = frame_state.gpu_cache.request(&mut self.common.gpu_cache_handle) {
+        if let Some(mut request) = frame_state
+            .gpu_cache
+            .request(&mut self.common.gpu_cache_handle)
+        {
             request.push(ColorF::from(self.font.color).premultiplied());
 
             let mut gpu_block = [0.0; 4];
@@ -186,14 +176,8 @@ impl intern::Internable for TextRun {
 }
 
 impl InternablePrimitive for TextRun {
-    fn into_key(
-        self,
-        info: &LayoutPrimitiveInfo,
-    ) -> TextRunKey {
-        TextRunKey::new(
-            info,
-            self,
-        )
+    fn into_key(self, info: &LayoutPrimitiveInfo) -> TextRunKey {
+        TextRunKey::new(info, self)
     }
 
     fn make_instance_kind(
@@ -213,7 +197,10 @@ impl InternablePrimitive for TextRun {
             requested_raster_space: key.requested_raster_space,
         });
 
-        PrimitiveInstanceKind::TextRun{ data_handle, run_index }
+        PrimitiveInstanceKind::TextRun {
+            data_handle,
+            run_index,
+        }
     }
 }
 
@@ -300,8 +287,10 @@ impl TextRunPrimitive {
         // Only support transforms that can be coerced to simple 2D transforms.
         // Add texture padding to the rasterized glyph buffer when one anticipates
         // the glyph will need to be scaled when rendered.
-        let (use_subpixel_aa, transform_glyphs, texture_padding, oversized) = if raster_space != RasterSpace::Screen ||
-            transform.has_perspective_component() || !transform.has_2d_inverse()
+        let (use_subpixel_aa, transform_glyphs, texture_padding, oversized) = if raster_space
+            != RasterSpace::Screen
+            || transform.has_perspective_component()
+            || !transform.has_2d_inverse()
         {
             (false, false, true, device_font_size > FONT_SIZE_LIMIT)
         } else if transform.exceeds_2d_scale((FONT_SIZE_LIMIT / device_font_size) as f64) {
@@ -363,7 +352,9 @@ impl TextRunPrimitive {
                 raster_pixel_scale,
                 spatial_tree,
             );
-            snap_to_device.snap_point(&self.reference_frame_relative_offset.to_point()).to_vector()
+            snap_to_device
+                .snap_point(&self.reference_frame_relative_offset.to_point())
+                .to_vector()
         };
 
         let mut flags = specified_font.flags;
@@ -376,10 +367,9 @@ impl TextRunPrimitive {
 
         // If the transform or device size is different, then the caller of
         // this method needs to know to rebuild the glyphs.
-        let cache_dirty =
-            self.used_font.transform != font_transform ||
-            self.used_font.size != device_font_size.into() ||
-            self.used_font.flags != flags;
+        let cache_dirty = self.used_font.transform != font_transform
+            || self.used_font.size != device_font_size.into()
+            || self.used_font.flags != flags;
 
         // Construct used font instance from the specified font instance
         self.used_font = FontInstance {
@@ -496,12 +486,11 @@ impl TextRunPrimitive {
                 RasterSpace::Screen => self.used_font.transform.scale(dps),
             };
 
-            self.glyph_keys_range = scratch.glyph_keys.extend(
-                glyphs.iter().map(|src| {
-                    let src_point = src.point + prim_offset;
-                    let device_offset = transform.transform(&src_point);
-                    GlyphKey::new(src.index, device_offset, subpx_dir)
-                }));
+            self.glyph_keys_range = scratch.glyph_keys.extend(glyphs.iter().map(|src| {
+                let src_point = src.point + prim_offset;
+                let device_offset = transform.transform(&src_point);
+                GlyphKey::new(src.index, device_offset, subpx_dir)
+            }));
         }
 
         resource_cache.request_glyphs(
@@ -524,7 +513,15 @@ fn test_struct_sizes() {
     // (b) You made a structure larger. This is not necessarily a problem, but should only
     //     be done with care, and after checking if talos performance regresses badly.
     assert_eq!(mem::size_of::<TextRun>(), 88, "TextRun size changed");
-    assert_eq!(mem::size_of::<TextRunTemplate>(), 96, "TextRunTemplate size changed");
+    assert_eq!(
+        mem::size_of::<TextRunTemplate>(),
+        96,
+        "TextRunTemplate size changed"
+    );
     assert_eq!(mem::size_of::<TextRunKey>(), 104, "TextRunKey size changed");
-    assert_eq!(mem::size_of::<TextRunPrimitive>(), 80, "TextRunPrimitive size changed");
+    assert_eq!(
+        mem::size_of::<TextRunPrimitive>(),
+        80,
+        "TextRunPrimitive size changed"
+    );
 }

@@ -63,9 +63,9 @@ fn main() {
         backend_options: webrender::wgpu::BackendOptions::default(),
         display: None,
     });
-    let adapter = pollster::block_on(instance.request_adapter(
-        &webrender::wgpu::RequestAdapterOptions::default(),
-    ))
+    let adapter = pollster::block_on(
+        instance.request_adapter(&webrender::wgpu::RequestAdapterOptions::default()),
+    )
     .expect("No wgpu adapter available — cannot run wgpu_hal_device demo");
 
     let adapter_name = adapter.get_info().name.clone();
@@ -76,39 +76,39 @@ fn main() {
     // The closure captures whatever it needs (here: the adapter) and creates
     // the wgpu Device + Queue when called by WebRender's init sequence.
     // This is the same type signature as what a raw-hal path would produce.
-    let device_factory: Box<dyn FnOnce() -> (webrender::wgpu::Device, webrender::wgpu::Queue) + Send> =
-        Box::new(move || {
-            println!("  [factory] creating device on adapter: {adapter_name}");
-            let wr_limits = webrender::wgpu::Limits {
-                max_inter_stage_shader_variables: webrender::WgpuDevice::MIN_INTER_STAGE_VARS.max(28),
+    let device_factory: Box<
+        dyn FnOnce() -> (webrender::wgpu::Device, webrender::wgpu::Queue) + Send,
+    > = Box::new(move || {
+        println!("  [factory] creating device on adapter: {adapter_name}");
+        let wr_limits = webrender::wgpu::Limits {
+            max_inter_stage_shader_variables: webrender::WgpuDevice::MIN_INTER_STAGE_VARS.max(28),
+            ..Default::default()
+        };
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&webrender::wgpu::DeviceDescriptor {
+                label: Some("wgpu-hal-device demo"),
+                required_features: webrender::wgpu::Features::TEXTURE_FORMAT_16BIT_NORM,
+                required_limits: wr_limits.clone(),
                 ..Default::default()
-            };
-            let (device, queue) = pollster::block_on(adapter.request_device(
-                &webrender::wgpu::DeviceDescriptor {
-                    label: Some("wgpu-hal-device demo"),
-                    required_features: webrender::wgpu::Features::TEXTURE_FORMAT_16BIT_NORM,
-                    required_limits: wr_limits.clone(),
-                    ..Default::default()
-                },
-            ))
+            }))
             // If 16-bit norm isn't supported, fall back to no extra features.
             .or_else(|_| {
-                pollster::block_on(adapter.request_device(
-                    &webrender::wgpu::DeviceDescriptor {
-                        label: Some("wgpu-hal-device demo (no 16bit)"),
-                        required_limits: wr_limits,
-                        ..Default::default()
-                    },
-                ))
+                pollster::block_on(adapter.request_device(&webrender::wgpu::DeviceDescriptor {
+                    label: Some("wgpu-hal-device demo (no 16bit)"),
+                    required_limits: wr_limits,
+                    ..Default::default()
+                }))
             })
             .expect("Device creation failed in WgpuHal factory");
-            (device, queue)
-        });
+        (device, queue)
+    });
 
     // === Step 3: Hand the factory to WebRender ===
     struct DemoNotifier;
     impl RenderNotifier for DemoNotifier {
-        fn clone(&self) -> Box<dyn RenderNotifier> { Box::new(DemoNotifier) }
+        fn clone(&self) -> Box<dyn RenderNotifier> {
+            Box::new(DemoNotifier)
+        }
         fn wake_up(&self, _composite_needed: bool) {}
         fn new_frame_ready(&self, _: DocumentId, _: FramePublishId, _: &FrameReadyParams) {}
     }
@@ -138,20 +138,14 @@ fn main() {
     let sac = SpaceAndClipInfo::root_scroll(pipeline_id);
 
     let quad = |builder: &mut DisplayListBuilder, x: f32, y: f32, color: ColorF| {
-        let rect = LayoutRect::from_origin_and_size(
-            LayoutPoint::new(x, y),
-            LayoutSize::new(128.0, 128.0),
-        );
-        builder.push_rect(
-            &CommonItemProperties::new(rect, sac),
-            rect,
-            color,
-        );
+        let rect =
+            LayoutRect::from_origin_and_size(LayoutPoint::new(x, y), LayoutSize::new(128.0, 128.0));
+        builder.push_rect(&CommonItemProperties::new(rect, sac), rect, color);
     };
 
-    quad(&mut builder, 0.0,   0.0,   ColorF::new(1.0, 0.0, 0.0, 1.0)); // red    TL
-    quad(&mut builder, 128.0, 0.0,   ColorF::new(0.0, 1.0, 0.0, 1.0)); // green  TR
-    quad(&mut builder, 0.0,   128.0, ColorF::new(0.0, 0.0, 1.0, 1.0)); // blue   BL
+    quad(&mut builder, 0.0, 0.0, ColorF::new(1.0, 0.0, 0.0, 1.0)); // red    TL
+    quad(&mut builder, 128.0, 0.0, ColorF::new(0.0, 1.0, 0.0, 1.0)); // green  TR
+    quad(&mut builder, 0.0, 128.0, ColorF::new(0.0, 0.0, 1.0, 1.0)); // blue   BL
     quad(&mut builder, 128.0, 128.0, ColorF::new(1.0, 1.0, 0.0, 1.0)); // yellow BR
 
     let mut txn = Transaction::new();
@@ -163,11 +157,15 @@ fn main() {
     renderer.update();
 
     // === Step 5: Render and verify ===
-    renderer.render(device_size, 0)
-        .expect("render failed");
+    renderer.render(device_size, 0).expect("render failed");
 
     if let Some(out) = renderer.composite_output() {
-        println!("Composite output: {}×{} {:?}", out.width, out.height, out.format());
+        println!(
+            "Composite output: {}×{} {:?}",
+            out.width,
+            out.height,
+            out.format()
+        );
     }
 
     let rect = FramebufferIntRect::from_origin_and_size(
@@ -179,13 +177,18 @@ fn main() {
     if !pixels.is_empty() {
         let sample = |x: usize, y: usize| -> (u8, u8, u8, u8) {
             let idx = (y * 256 + x) * 4;
-            (pixels[idx], pixels[idx + 1], pixels[idx + 2], pixels[idx + 3])
+            (
+                pixels[idx],
+                pixels[idx + 1],
+                pixels[idx + 2],
+                pixels[idx + 3],
+            )
         };
         // read_pixels_rgba8 is Y-flipped: row 192 = top of screen, row 64 = bottom.
-        let tl = sample(64,  192); // red
+        let tl = sample(64, 192); // red
         let tr = sample(192, 192); // green
-        let bl = sample(64,  64);  // blue
-        let br = sample(192, 64);  // yellow
+        let bl = sample(64, 64); // blue
+        let br = sample(192, 64); // yellow
 
         println!("Pixel readback (RGBA):");
         println!("  Top-left    (expected red):    {tl:?}");
@@ -194,10 +197,18 @@ fn main() {
         println!("  Bottom-right(expected yellow): {br:?}");
 
         let close = |a: u8, b: u8| (a as i16 - b as i16).unsigned_abs() < 5;
-        let ok = close(tl.0, 255) && close(tl.1, 0)   && close(tl.2, 0)
-              && close(tr.0, 0)   && close(tr.1, 255)  && close(tr.2, 0)
-              && close(bl.0, 0)   && close(bl.1, 0)    && close(bl.2, 255)
-              && close(br.0, 255) && close(br.1, 255)  && close(br.2, 0);
+        let ok = close(tl.0, 255)
+            && close(tl.1, 0)
+            && close(tl.2, 0)
+            && close(tr.0, 0)
+            && close(tr.1, 255)
+            && close(tr.2, 0)
+            && close(bl.0, 0)
+            && close(bl.1, 0)
+            && close(bl.2, 255)
+            && close(br.0, 255)
+            && close(br.1, 255)
+            && close(br.2, 0);
 
         if ok {
             println!("\nSUCCESS: WgpuHal factory path rendering verified!");

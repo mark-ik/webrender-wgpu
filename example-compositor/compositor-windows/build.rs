@@ -14,7 +14,9 @@ fn main() {
 
     // Set up linker paths for ANGLE that is built by Gecko
     println!("cargo:rustc-link-search=../../obj-x86_64-pc-windows-msvc/gfx/angle/targets/libEGL");
-    println!("cargo:rustc-link-search=../../obj-x86_64-pc-windows-msvc/gfx/angle/targets/libGLESv2");
+    println!(
+        "cargo:rustc-link-search=../../obj-x86_64-pc-windows-msvc/gfx/angle/targets/libGLESv2"
+    );
 
     // Link to libEGL and libGLESv2 (ANGLE) and D3D11 + DirectComposition
     println!("cargo:rustc-link-lib=libEGL");

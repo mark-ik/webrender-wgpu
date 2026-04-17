@@ -314,15 +314,15 @@ extern "C" {
         clip_width: GLsizei,
         clip_height: GLsizei,
     );
-    fn ApplyMask(
-        locked_dst: *mut LockedTexture,
-        locked_mask: *mut LockedTexture,
-    );
+    fn ApplyMask(locked_dst: *mut LockedTexture, locked_mask: *mut LockedTexture);
     fn CreateContext() -> *mut c_void;
     fn ReferenceContext(ctx: *mut c_void);
     fn DestroyContext(ctx: *mut c_void);
     fn MakeCurrent(ctx: *mut c_void);
-    fn ReportMemory(ctx: *mut c_void, size_of_op: unsafe extern "C" fn(ptr: *const c_void) -> usize) -> usize;
+    fn ReportMemory(
+        ctx: *mut c_void,
+        size_of_op: unsafe extern "C" fn(ptr: *const c_void) -> usize,
+    ) -> usize;
 }
 
 #[derive(Clone, Copy)]
@@ -457,7 +457,10 @@ impl Context {
         }
     }
 
-    pub fn report_memory(&self, size_of_op: unsafe extern "C" fn(ptr: *const c_void) -> usize) -> usize {
+    pub fn report_memory(
+        &self,
+        size_of_op: unsafe extern "C" fn(ptr: *const c_void) -> usize,
+    ) -> usize {
         unsafe { ReportMemory(self.0, size_of_op) }
     }
 }
@@ -2464,15 +2467,9 @@ impl LockedResource {
     }
 
     /// Apply an R8 alpha mask to this surface
-    pub fn apply_mask(
-        &self,
-        mask: &LockedResource,
-    ) {
+    pub fn apply_mask(&self, mask: &LockedResource) {
         unsafe {
-            ApplyMask(
-                self.0,
-                mask.0,
-            );
+            ApplyMask(self.0, mask.0);
         }
     }
 

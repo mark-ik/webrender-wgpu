@@ -20,16 +20,13 @@ pub struct RawtestHarness<'a> {
     window: &'a mut WindowWrapper,
 }
 
-
 impl<'a> RawtestHarness<'a> {
-    pub fn new(wrench: &'a mut Wrench,
-               window: &'a mut WindowWrapper,
-               rx: &'a Receiver<NotifierEvent>) -> Self {
-        RawtestHarness {
-            wrench,
-            rx,
-            window,
-        }
+    pub fn new(
+        wrench: &'a mut Wrench,
+        window: &'a mut WindowWrapper,
+        rx: &'a Receiver<NotifierEvent>,
+    ) -> Self {
+        RawtestHarness { wrench, rx, window }
     }
 
     pub fn run(mut self) {
@@ -58,23 +55,22 @@ impl<'a> RawtestHarness<'a> {
 
     fn compare_pixels(&self, data1: Vec<u8>, data2: Vec<u8>, size: FramebufferIntSize) {
         let size = DeviceIntSize::new(size.width, size.height);
-        let image1 = ReftestImage {
-            data: data1,
-            size,
-        };
-        let image2 = ReftestImage {
-            data: data2,
-            size,
-        };
+        let image1 = ReftestImage { data: data1, size };
+        let image2 = ReftestImage { data: data2, size };
 
         match image1.compare(&image2) {
             ReftestImageComparison::Equal => {}
-            ReftestImageComparison::NotEqual { max_difference, count_different, .. } => {
+            ReftestImageComparison::NotEqual {
+                max_difference,
+                count_different,
+                ..
+            } => {
                 let t = "rawtest";
                 println!(
                     "REFTEST TEST-UNEXPECTED-FAIL | {t} \
                      | image comparison, max difference: {max_difference}, \
-                     number of differing pixels: {count_different}");
+                     number of differing pixels: {count_different}"
+                );
                 println!("REFTEST   IMAGE 1: {}", image1.create_data_uri());
                 println!("REFTEST   IMAGE 2: {}", image2.create_data_uri());
                 println!("REFTEST TEST-END | {}", t);
@@ -91,14 +87,13 @@ impl<'a> RawtestHarness<'a> {
     ) {
         txn.use_scene_builder_thread();
 
-        txn.set_display_list(
-            *epoch,
-            builder.end(),
-        );
+        txn.set_display_list(*epoch, builder.end());
         epoch.0 += 1;
 
         txn.generate_frame(0, true, false, RenderReasons::TESTING);
-        self.wrench.api.send_transaction(self.wrench.document_id, txn);
+        self.wrench
+            .api
+            .send_transaction(self.wrench.document_id, txn);
     }
 
     fn make_common_properties(&self, clip_rect: LayoutRect) -> CommonItemProperties {
@@ -115,7 +110,7 @@ impl<'a> RawtestHarness<'a> {
         &self,
         clip_rect: LayoutRect,
         clip_chain_id: ClipChainId,
-        spatial_id: SpatialId
+        spatial_id: SpatialId,
     ) -> CommonItemProperties {
         CommonItemProperties {
             clip_rect,
@@ -165,7 +160,12 @@ impl<'a> RawtestHarness<'a> {
         // Resize the image to something bigger than the max texture size (8196) to force tiling.
         txn.update_image(
             img,
-            ImageDescriptor::new(8200, 32, ImageFormat::BGRA8, ImageDescriptorFlags::IS_OPAQUE),
+            ImageDescriptor::new(
+                8200,
+                32,
+                ImageFormat::BGRA8,
+                ImageDescriptorFlags::IS_OPAQUE,
+            ),
             ImageData::new(vec![255; 8200 * 32 * 4]),
             &DirtyRect::All,
         );
@@ -215,7 +215,9 @@ impl<'a> RawtestHarness<'a> {
 
         txn = Transaction::new();
         txn.delete_image(img);
-        self.wrench.api.send_transaction(self.wrench.document_id, txn);
+        self.wrench
+            .api
+            .send_transaction(self.wrench.document_id, txn);
     }
 
     fn test_tile_decomposition(&mut self) {
@@ -260,7 +262,9 @@ impl<'a> RawtestHarness<'a> {
         // confuses the `test_capture`. TODO: remove this
         txn = Transaction::new();
         txn.delete_blob_image(blob_img);
-        self.wrench.api.send_transaction(self.wrench.document_id, txn);
+        self.wrench
+            .api
+            .send_transaction(self.wrench.document_id, txn);
     }
 
     fn test_very_large_blob(&mut self) {
@@ -281,7 +285,12 @@ impl<'a> RawtestHarness<'a> {
         let blob_img = self.wrench.api.generate_blob_image_key();
         txn.add_blob_image(
             blob_img,
-            ImageDescriptor::new(15000, 15000, ImageFormat::BGRA8, ImageDescriptorFlags::empty()),
+            ImageDescriptor::new(
+                15000,
+                15000,
+                ImageFormat::BGRA8,
+                ImageDescriptorFlags::empty(),
+            ),
             blob::serialize_blob(ColorU::new(50, 50, 150, 255)),
             DeviceIntRect::from_size(DeviceIntSize::new(15000, 15000)),
             Some(100),
@@ -339,7 +348,7 @@ impl<'a> RawtestHarness<'a> {
         let w = window_rect.width() as usize;
         let h = window_rect.height() as usize;
         let p1 = (40 + (h - 100) * w) * 4;
-        assert_eq!(pixels[p1    ], 50);
+        assert_eq!(pixels[p1], 50);
         assert_eq!(pixels[p1 + 1], 50);
         assert_eq!(pixels[p1 + 2], 150);
         assert_eq!(pixels[p1 + 3], 255);
@@ -348,7 +357,9 @@ impl<'a> RawtestHarness<'a> {
         // confuses the `test_capture`. TODO: remove this
         txn = Transaction::new();
         txn.delete_blob_image(blob_img);
-        self.wrench.api.send_transaction(self.wrench.document_id, txn);
+        self.wrench
+            .api
+            .send_transaction(self.wrench.document_id, txn);
 
         *self.wrench.callbacks.lock().unwrap() = blob::BlobCallbacks::new();
     }
@@ -414,24 +425,23 @@ impl<'a> RawtestHarness<'a> {
         //use super::png;
         //png::save_flipped("out.png", pixels.clone(), size2(window_rect.size.width, window_rect.size.height));
 
-
         // make sure things are in the right spot
         let w = window_rect.width() as usize;
         let h = window_rect.height() as usize;
         let p1 = (65 + (h - 15) * w) * 4;
-        assert_eq!(pixels[p1    ], 255);
+        assert_eq!(pixels[p1], 255);
         assert_eq!(pixels[p1 + 1], 255);
         assert_eq!(pixels[p1 + 2], 255);
         assert_eq!(pixels[p1 + 3], 255);
 
         let p2 = (25 + (h - 15) * w) * 4;
-        assert_eq!(pixels[p2    ], 221);
+        assert_eq!(pixels[p2], 221);
         assert_eq!(pixels[p2 + 1], 221);
         assert_eq!(pixels[p2 + 2], 221);
         assert_eq!(pixels[p2 + 3], 255);
 
         let p3 = (15 + (h - 15) * w) * 4;
-        assert_eq!(pixels[p3    ], 50);
+        assert_eq!(pixels[p3], 50);
         assert_eq!(pixels[p3 + 1], 50);
         assert_eq!(pixels[p3 + 2], 150);
         assert_eq!(pixels[p3 + 3], 255);
@@ -440,7 +450,9 @@ impl<'a> RawtestHarness<'a> {
         // confuses the `test_capture`. TODO: remove this
         txn = Transaction::new();
         txn.delete_blob_image(blob_img);
-        self.wrench.api.send_transaction(self.wrench.document_id, txn);
+        self.wrench
+            .api
+            .send_transaction(self.wrench.document_id, txn);
 
         *self.wrench.callbacks.lock().unwrap() = blob::BlobCallbacks::new();
     }
@@ -512,10 +524,13 @@ impl<'a> RawtestHarness<'a> {
 
         let mut txn = Transaction::new();
 
-        txn.set_blob_image_visible_area(blob_img, DeviceIntRect {
-            min: point2(50, 50),
-            max: point2(450, 450),
-        });
+        txn.set_blob_image_visible_area(
+            blob_img,
+            DeviceIntRect {
+                min: point2(50, 50),
+                max: point2(450, 450),
+            },
+        );
 
         let mut builder = DisplayListBuilder::new(self.wrench.root_pipeline_id);
         builder.begin();
@@ -603,7 +618,9 @@ impl<'a> RawtestHarness<'a> {
         txn = Transaction::new();
         txn.delete_blob_image(blob_img);
         txn.delete_blob_image(blob_img2);
-        self.wrench.api.send_transaction(self.wrench.document_id, txn);
+        self.wrench
+            .api
+            .send_transaction(self.wrench.document_id, txn);
     }
 
     fn test_offscreen_blob(&mut self) {
@@ -623,7 +640,12 @@ impl<'a> RawtestHarness<'a> {
         let blob_img = self.wrench.api.generate_blob_image_key();
         txn.add_blob_image(
             blob_img,
-            ImageDescriptor::new(1510, 1510, ImageFormat::BGRA8, ImageDescriptorFlags::empty()),
+            ImageDescriptor::new(
+                1510,
+                1510,
+                ImageFormat::BGRA8,
+                ImageDescriptorFlags::empty(),
+            ),
             blob::serialize_blob(ColorU::new(50, 50, 150, 255)),
             DeviceIntRect::from_size(size2(1510, 1510)),
             None,
@@ -683,10 +705,19 @@ impl<'a> RawtestHarness<'a> {
 
         txn.update_blob_image(
             blob_img,
-            ImageDescriptor::new(1510, 1510, ImageFormat::BGRA8, ImageDescriptorFlags::empty()),
+            ImageDescriptor::new(
+                1510,
+                1510,
+                ImageFormat::BGRA8,
+                ImageDescriptorFlags::empty(),
+            ),
             blob::serialize_blob(ColorU::new(50, 50, 150, 255)),
             DeviceIntRect::from_size(size2(1510, 1510)),
-            &Box2D { min: point2(10, 10), max: point2(110, 110) }.into(),
+            &Box2D {
+                min: point2(10, 10),
+                max: point2(110, 110),
+            }
+            .into(),
         );
 
         let mut builder = DisplayListBuilder::new(self.wrench.root_pipeline_id);
@@ -720,7 +751,9 @@ impl<'a> RawtestHarness<'a> {
         // confuses the `test_capture`. TODO: remove this
         txn = Transaction::new();
         txn.delete_blob_image(blob_img);
-        self.wrench.api.send_transaction(self.wrench.document_id, txn);
+        self.wrench
+            .api
+            .send_transaction(self.wrench.document_id, txn);
     }
 
     fn test_retained_blob_images_test(&mut self) {
@@ -901,14 +934,22 @@ impl<'a> RawtestHarness<'a> {
             ImageDescriptor::new(500, 500, ImageFormat::BGRA8, ImageDescriptorFlags::empty()),
             blob::serialize_blob(ColorU::new(50, 50, 150, 255)),
             DeviceIntRect::from_size(size2(500, 500)),
-            &Box2D { min: point2(100, 100), max: point2(200, 200) }.into(),
+            &Box2D {
+                min: point2(100, 100),
+                max: point2(200, 200),
+            }
+            .into(),
         );
         txn.update_blob_image(
             blob_img2,
             ImageDescriptor::new(500, 500, ImageFormat::BGRA8, ImageDescriptorFlags::empty()),
             blob::serialize_blob(ColorU::new(59, 50, 150, 255)),
             DeviceIntRect::from_size(size2(500, 500)),
-            &Box2D { min: point2(100, 100), max: point2(200, 200) }.into(),
+            &Box2D {
+                min: point2(100, 100),
+                max: point2(200, 200),
+            }
+            .into(),
         );
 
         let mut builder = DisplayListBuilder::new(self.wrench.root_pipeline_id);
@@ -924,7 +965,11 @@ impl<'a> RawtestHarness<'a> {
             ImageDescriptor::new(500, 500, ImageFormat::BGRA8, ImageDescriptorFlags::empty()),
             blob::serialize_blob(ColorU::new(50, 150, 150, 255)),
             DeviceIntRect::from_size(size2(500, 500)),
-            &Box2D { min: point2(200, 200), max: point2(300, 300) }.into(),
+            &Box2D {
+                min: point2(200, 200),
+                max: point2(300, 300),
+            }
+            .into(),
         );
 
         let mut builder = DisplayListBuilder::new(self.wrench.root_pipeline_id);
@@ -991,7 +1036,11 @@ impl<'a> RawtestHarness<'a> {
             ImageDescriptor::new(500, 500, ImageFormat::BGRA8, ImageDescriptorFlags::empty()),
             blob::serialize_blob(ColorU::new(50, 50, 150, 255)),
             DeviceIntRect::from_size(size2(500, 500)),
-            &Box2D { min: point2(100, 100), max: point2(200, 200) }.into(),
+            &Box2D {
+                min: point2(100, 100),
+                max: point2(200, 200),
+            }
+            .into(),
         );
 
         // make a new display list that refers to the first image
@@ -1017,7 +1066,11 @@ impl<'a> RawtestHarness<'a> {
             ImageDescriptor::new(500, 500, ImageFormat::BGRA8, ImageDescriptorFlags::empty()),
             blob::serialize_blob(ColorU::new(50, 150, 150, 255)),
             DeviceIntRect::from_size(size2(500, 500)),
-            &Box2D { min: point2(200, 200), max: point2(300, 300) }.into(),
+            &Box2D {
+                min: point2(200, 200),
+                max: point2(300, 300),
+            }
+            .into(),
         );
 
         // make a new display list that refers to the first image
@@ -1065,17 +1118,16 @@ impl<'a> RawtestHarness<'a> {
                 &self.make_common_properties_with_clip_and_spatial(
                     rect(100., 100., 100., 100.).to_box2d(),
                     clip_chain_id,
-                    spatial_id),
+                    spatial_id,
+                ),
                 rect(100., 100., 100., 100.).to_box2d(),
                 ColorF::new(0.0, 0.0, 1.0, 1.0),
             );
 
             if should_try_and_fail {
                 builder.save();
-                let clip_id = builder.define_clip_rect(
-                    spatial_id,
-                    rect(80., 80., 90., 90.).to_box2d(),
-                );
+                let clip_id =
+                    builder.define_clip_rect(spatial_id, rect(80., 80., 90., 90.).to_box2d());
                 let clip_chain_id = builder.define_clip_chain(None, [clip_id]);
                 let space_and_clip = SpaceAndClipInfo {
                     spatial_id,
@@ -1085,7 +1137,8 @@ impl<'a> RawtestHarness<'a> {
                     &self.make_common_properties_with_clip_and_spatial(
                         rect(110., 110., 50., 50.).to_box2d(),
                         clip_chain_id,
-                        spatial_id),
+                        spatial_id,
+                    ),
                     rect(110., 110., 50., 50.).to_box2d(),
                     ColorF::new(0.0, 1.0, 0.0, 1.0),
                 );
@@ -1107,7 +1160,8 @@ impl<'a> RawtestHarness<'a> {
                 builder.push_line(
                     &info,
                     &info.clip_rect,
-                    0.0, LineOrientation::Horizontal,
+                    0.0,
+                    LineOrientation::Horizontal,
                     &ColorF::new(0.0, 0.0, 0.0, 1.0),
                     LineStyle::Solid,
                 );
@@ -1116,16 +1170,15 @@ impl<'a> RawtestHarness<'a> {
 
             {
                 builder.save();
-                let clip_id = builder.define_clip_rect(
-                    spatial_id,
-                    rect(80., 80., 100., 100.).to_box2d(),
-                );
+                let clip_id =
+                    builder.define_clip_rect(spatial_id, rect(80., 80., 100., 100.).to_box2d());
                 let clip_chain_id = builder.define_clip_chain(None, [clip_id]);
                 builder.push_rect(
                     &self.make_common_properties_with_clip_and_spatial(
                         rect(150., 150., 100., 100.).to_box2d(),
                         clip_chain_id,
-                        spatial_id),
+                        spatial_id,
+                    ),
                     rect(150., 150., 100., 100.).to_box2d(),
                     ColorF::new(0.0, 0.0, 1.0, 1.0),
                 );
@@ -1179,7 +1232,8 @@ impl<'a> RawtestHarness<'a> {
             builder.push_line(
                 &info,
                 &info.clip_rect,
-                0.0, LineOrientation::Horizontal,
+                0.0,
+                LineOrientation::Horizontal,
                 &ColorF::new(0.0, 0.0, 0.0, 1.0),
                 LineStyle::Solid,
             );
@@ -1233,18 +1287,19 @@ impl<'a> RawtestHarness<'a> {
 
         let mut txn = Transaction::new();
 
-        txn.set_display_list(
-            Epoch(0),
-            builder.end(),
-        );
+        txn.set_display_list(Epoch(0), builder.end());
         txn.generate_frame(0, true, false, RenderReasons::TESTING);
 
-        self.wrench.api.send_transaction(self.wrench.document_id, txn);
+        self.wrench
+            .api
+            .send_transaction(self.wrench.document_id, txn);
 
         let pixels0 = self.render_and_get_pixels(window_rect);
 
         // 2. capture it
-        self.wrench.api.save_capture(path.into(), CaptureBits::all());
+        self.wrench
+            .api
+            .save_capture(path.into(), CaptureBits::all());
 
         // 3. set a different scene
 
@@ -1252,11 +1307,10 @@ impl<'a> RawtestHarness<'a> {
         builder.begin();
 
         let mut txn = Transaction::new();
-        txn.set_display_list(
-            Epoch(1),
-            builder.end(),
-        );
-        self.wrench.api.send_transaction(self.wrench.document_id, txn);
+        txn.set_display_list(Epoch(1), builder.end());
+        self.wrench
+            .api
+            .send_transaction(self.wrench.document_id, txn);
 
         // 4. load the first one
 
@@ -1285,29 +1339,25 @@ impl<'a> RawtestHarness<'a> {
 
         let mut builder = DisplayListBuilder::new(self.wrench.root_pipeline_id);
         builder.begin();
-        let info = self.make_common_properties(
-            LayoutRect::from_size(LayoutSize::new(100.0, 100.0))
-        );
-        builder.push_rect(
-            &info,
-            info.clip_rect,
-            ColorF::new(0.0, 1.0, 0.0, 1.0),
-        );
+        let info =
+            self.make_common_properties(LayoutRect::from_size(LayoutSize::new(100.0, 100.0)));
+        builder.push_rect(&info, info.clip_rect, ColorF::new(0.0, 1.0, 0.0, 1.0));
 
         let mut txn = Transaction::new();
         txn.set_root_pipeline(self.wrench.root_pipeline_id);
-        txn.set_display_list(
-            Epoch(1),
-            builder.end(),
-        );
+        txn.set_display_list(Epoch(1), builder.end());
         txn.generate_frame(0, true, false, RenderReasons::TESTING);
         self.wrench.api.send_transaction(doc_id, txn);
 
         // Ensure we get a notification from rendering the above, even though
         // there are zero visible pixels
-        assert!(self.rx.recv().unwrap() == NotifierEvent::WakeUp { composite_needed: true });
+        assert!(
+            self.rx.recv().unwrap()
+                == NotifierEvent::WakeUp {
+                    composite_needed: true
+                }
+        );
     }
-
 
     fn test_hit_testing(&mut self) {
         println!("\thit testing test...");
@@ -1330,7 +1380,7 @@ impl<'a> RawtestHarness<'a> {
         builder.push_hit_test(
             LayoutRect::from_origin_and_size(
                 LayoutPoint::new(100., 0.),
-                LayoutSize::new(100., 100.)
+                LayoutSize::new(100., 100.),
             ),
             ClipChainId::INVALID,
             space_and_clip.spatial_id,
@@ -1342,12 +1392,15 @@ impl<'a> RawtestHarness<'a> {
             ComplexClipRegion::new(
                 *rect,
                 BorderRadius::uniform_size(LayoutSize::new(radius, radius)),
-                ClipMode::Clip
+                ClipMode::Clip,
             )
         };
 
         // Add a rectangle that is clipped by a rounded rect clip item.
-        let rect = LayoutRect::from_origin_and_size(LayoutPoint::new(100., 100.), LayoutSize::new(100., 100.));
+        let rect = LayoutRect::from_origin_and_size(
+            LayoutPoint::new(100., 100.),
+            LayoutSize::new(100., 100.),
+        );
         let temp_clip_id = builder.define_clip_rounded_rect(
             space_and_clip.spatial_id,
             make_rounded_complex_clip(&rect, 20.),
@@ -1362,7 +1415,10 @@ impl<'a> RawtestHarness<'a> {
         );
 
         // Add a rectangle that is clipped by a ClipChain containing a rounded rect.
-        let rect = LayoutRect::from_origin_and_size(LayoutPoint::new(200., 100.), LayoutSize::new(100., 100.));
+        let rect = LayoutRect::from_origin_and_size(
+            LayoutPoint::new(200., 100.),
+            LayoutSize::new(100., 100.),
+        );
         let clip_id = builder.define_clip_rounded_rect(
             space_and_clip.spatial_id,
             make_rounded_complex_clip(&rect, 20.),
@@ -1385,10 +1441,7 @@ impl<'a> RawtestHarness<'a> {
         self.wrench.render();
 
         let hit_test = |point: WorldPoint| -> HitTestResult {
-            self.wrench.api.hit_test(
-                self.wrench.document_id,
-                point,
-            )
+            self.wrench.api.hit_test(self.wrench.document_id, point)
         };
 
         let assert_hit_test = |point: WorldPoint, tags: Vec<ItemTag>| {
@@ -1419,7 +1472,7 @@ impl<'a> RawtestHarness<'a> {
 
             assert_hit_test(
                 WorldPoint::new(point.x + (size.width / 2.), point.y + (size.height / 2.)),
-                vec![tag, (0, 1)]
+                vec![tag, (0, 1)],
             );
 
             assert_hit_test(top_left, vec![(0, 1)]);
@@ -1428,14 +1481,26 @@ impl<'a> RawtestHarness<'a> {
             assert_hit_test(bottom_right, vec![(0, 1)]);
         };
 
-        test_rounded_rectangle(WorldPoint::new(100., 100.), WorldSize::new(100., 100.), (0, 4));
-        test_rounded_rectangle(WorldPoint::new(200., 100.), WorldSize::new(100., 100.), (0, 5));
+        test_rounded_rectangle(
+            WorldPoint::new(100., 100.),
+            WorldSize::new(100., 100.),
+            (0, 4),
+        );
+        test_rounded_rectangle(
+            WorldPoint::new(200., 100.),
+            WorldSize::new(100., 100.),
+            (0, 5),
+        );
     }
 
     fn test_clear_cache(&mut self) {
         println!("\tclear cache test...");
 
-        self.wrench.api.send_message(ApiMsg::DebugCommand(DebugCommand::ClearCaches(ClearCache::all())));
+        self.wrench
+            .api
+            .send_message(ApiMsg::DebugCommand(DebugCommand::ClearCaches(
+                ClearCache::all(),
+            )));
 
         let mut builder = DisplayListBuilder::new(self.wrench.root_pipeline_id);
         builder.begin();

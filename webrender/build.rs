@@ -371,24 +371,39 @@ fn strip_precision(s: &str) -> String {
 /// rather than user-defined function definitions.
 #[cfg(feature = "wgpu_backend")]
 const NOT_FUNC_START: &[&str] = &[
-    "if", "else", "for", "while", "do", "switch", "return",
-    "struct", "uniform", "in", "out", "varying", "attribute",
-    "flat", "smooth", "noperspective", "layout", "PER_INSTANCE",
+    "if",
+    "else",
+    "for",
+    "while",
+    "do",
+    "switch",
+    "return",
+    "struct",
+    "uniform",
+    "in",
+    "out",
+    "varying",
+    "attribute",
+    "flat",
+    "smooth",
+    "noperspective",
+    "layout",
+    "PER_INSTANCE",
 ];
 
 /// Replace whole-word occurrences of `old` with `new_val` in a string.
 /// Word boundaries are non-alphanumeric, non-underscore characters.
 #[cfg(feature = "wgpu_backend")]
 fn replace_word(s: &str, old: &str, new_val: &str) -> String {
-    if old.is_empty() { return s.to_string(); }
+    if old.is_empty() {
+        return s.to_string();
+    }
     let mut result = String::with_capacity(s.len() + 32);
     let chars: Vec<char> = s.chars().collect();
     let old_chars: Vec<char> = old.chars().collect();
     let mut i = 0;
     while i < chars.len() {
-        if i + old_chars.len() <= chars.len()
-            && chars[i..i + old_chars.len()] == old_chars[..]
-        {
+        if i + old_chars.len() <= chars.len() && chars[i..i + old_chars.len()] == old_chars[..] {
             // Check word boundary before.
             let before_ok = i == 0 || {
                 let c = chars[i - 1];
@@ -415,7 +430,10 @@ fn replace_word(s: &str, old: &str, new_val: &str) -> String {
 #[cfg(feature = "wgpu_backend")]
 #[inline]
 fn strip_glsl_comment(s: &str) -> &str {
-    match s.find("//") { Some(i) => s[..i].trim_end(), None => s }
+    match s.find("//") {
+        Some(i) => s[..i].trim_end(),
+        None => s,
+    }
 }
 
 /// For each function PROTOTYPE found in the assembled GLSL source,
@@ -441,7 +459,7 @@ fn move_definitions_before_prototypes(src: &str) -> String {
     // ── Pass 1: collect prototype chunks and definition chunks ────────────────
     // Each item: (function_name, start_line_incl, end_line_excl)
     let mut prototypes: Vec<(String, usize, usize)> = Vec::new();
-    let mut defs:       Vec<(String, usize, usize)> = Vec::new();
+    let mut defs: Vec<(String, usize, usize)> = Vec::new();
 
     let mut block_depth: i32 = 0;
     let mut i = 0;
@@ -451,7 +469,11 @@ fn move_definitions_before_prototypes(src: &str) -> String {
 
         if block_depth > 0 {
             for c in code.chars() {
-                match c { '{' => block_depth += 1, '}' => block_depth -= 1, _ => {} }
+                match c {
+                    '{' => block_depth += 1,
+                    '}' => block_depth -= 1,
+                    _ => {}
+                }
             }
             i += 1;
             continue;
@@ -466,7 +488,11 @@ fn move_definitions_before_prototypes(src: &str) -> String {
 
         if NOT_FUNC_START.contains(&first) {
             for c in code.chars() {
-                match c { '{' => block_depth += 1, '}' => block_depth -= 1, _ => {} }
+                match c {
+                    '{' => block_depth += 1,
+                    '}' => block_depth -= 1,
+                    _ => {}
+                }
             }
             i += 1;
             continue;
@@ -474,7 +500,11 @@ fn move_definitions_before_prototypes(src: &str) -> String {
 
         if !code.contains('(') {
             for c in code.chars() {
-                match c { '{' => block_depth += 1, '}' => block_depth -= 1, _ => {} }
+                match c {
+                    '{' => block_depth += 1,
+                    '}' => block_depth -= 1,
+                    _ => {}
+                }
             }
             i += 1;
             continue;
@@ -484,7 +514,11 @@ fn move_definitions_before_prototypes(src: &str) -> String {
             let paren = code.find('(').unwrap();
             if code[..paren].contains('=') {
                 for c in code.chars() {
-                    match c { '{' => block_depth += 1, '}' => block_depth -= 1, _ => {} }
+                    match c {
+                        '{' => block_depth += 1,
+                        '}' => block_depth -= 1,
+                        _ => {}
+                    }
                 }
                 i += 1;
                 continue;
@@ -494,8 +528,8 @@ fn move_definitions_before_prototypes(src: &str) -> String {
         let chunk_start = i;
         let mut paren_depth: i32 = 0;
         let mut brace_depth: i32 = 0;
-        let mut sig_closed  = false;
-        let mut body_open   = false;
+        let mut sig_closed = false;
+        let mut body_open = false;
         let mut j = i;
 
         'accum: while j < n && (j - chunk_start) < 500 {
@@ -505,7 +539,10 @@ fn move_definitions_before_prototypes(src: &str) -> String {
                     '(' => paren_depth += 1,
                     ')' => {
                         paren_depth -= 1;
-                        if paren_depth <= 0 { paren_depth = 0; sig_closed = true; }
+                        if paren_depth <= 0 {
+                            paren_depth = 0;
+                            sig_closed = true;
+                        }
                     }
                     '{' if sig_closed => {
                         brace_depth += 1;
@@ -529,14 +566,19 @@ fn move_definitions_before_prototypes(src: &str) -> String {
 
         if !sig_closed {
             for c in code.chars() {
-                match c { '{' => block_depth += 1, '}' => block_depth -= 1, _ => {} }
+                match c {
+                    '{' => block_depth += 1,
+                    '}' => block_depth -= 1,
+                    _ => {}
+                }
             }
             i += 1;
             continue;
         }
 
         let sig_first = strip_glsl_comment(lines[chunk_start].trim());
-        let name_opt = sig_first.find('(')
+        let name_opt = sig_first
+            .find('(')
             .map(|p| sig_first[..p].trim_end())
             .and_then(|before| before.split_whitespace().last())
             .map(|s| s.to_string());
@@ -603,8 +645,11 @@ fn move_definitions_before_prototypes(src: &str) -> String {
     let earliest_def_start = to_move.iter().map(|t| t.3).min().unwrap();
     let first_proto_start = to_move[0].1;
 
-    let main_end = defs.iter()
-        .filter(|(name, s, e)| name == "main" && *s >= first_proto_start && *e <= earliest_def_start)
+    let main_end = defs
+        .iter()
+        .filter(|(name, s, e)| {
+            name == "main" && *s >= first_proto_start && *e <= earliest_def_start
+        })
         .map(|(_, _, e)| *e)
         .max();
 
@@ -628,7 +673,8 @@ fn move_definitions_before_prototypes(src: &str) -> String {
     // driver section (between the first prototype and the earliest specific
     // definition).  This ensures all #define constants that appear between
     // the prototypes and the driver definitions are above the moved code.
-    let first_driver_def_start = defs.iter()
+    let first_driver_def_start = defs
+        .iter()
         .filter(|(_, s, _)| *s > first_proto_start && *s < earliest_def_start)
         .map(|(_, s, _)| *s)
         .min();
@@ -706,9 +752,13 @@ fn fix_switch_fallthrough(src: &str) -> String {
     // with nothing after the colon (no `{`, `;`, or code).
     let bare_case = |raw: &str| -> bool {
         let c = strip_glsl_comment(raw.trim());
-        if c.is_empty() { return false; }
+        if c.is_empty() {
+            return false;
+        }
         let starts = c.starts_with("case ") || c == "default:" || c.starts_with("default:");
-        if !starts || !c.contains(':') { return false; }
+        if !starts || !c.contains(':') {
+            return false;
+        }
         let after = c[c.rfind(':').unwrap_or(0) + 1..].trim();
         after.is_empty() && !c.contains('{') && !c.contains(';')
     };
@@ -725,8 +775,11 @@ fn fix_switch_fallthrough(src: &str) -> String {
     let is_term = |raw: &str| -> bool {
         let c = strip_glsl_comment(raw.trim());
         // Standalone or prefixed terminator: starts with keyword AND ends with `;`
-        if (c.starts_with("break")    || c.starts_with("return") ||
-            c.starts_with("discard") || c.starts_with("continue")) && c.ends_with(';')
+        if (c.starts_with("break")
+            || c.starts_with("return")
+            || c.starts_with("discard")
+            || c.starts_with("continue"))
+            && c.ends_with(';')
         {
             return true;
         }
@@ -742,7 +795,7 @@ fn fix_switch_fallthrough(src: &str) -> String {
     // does not accept `break` / `return` inside a nested block as satisfying
     // the fall-through check.
     let extract_body = |lines: &[&str], case_line: usize, n: usize| -> (Vec<String>, usize) {
-        let code  = strip_glsl_comment(lines[case_line].trim());
+        let code = strip_glsl_comment(lines[case_line].trim());
         let colon = code.rfind(':').unwrap_or(0);
         let after = code[colon + 1..].trim();
 
@@ -757,7 +810,11 @@ fn fix_switch_fallthrough(src: &str) -> String {
                 // Track depth changes ON this line before deciding to include it.
                 let mut new_depth = depth;
                 for ch in lc.chars() {
-                    match ch { '{' => new_depth += 1, '}' => new_depth -= 1, _ => {} }
+                    match ch {
+                        '{' => new_depth += 1,
+                        '}' => new_depth -= 1,
+                        _ => {}
+                    }
                 }
                 if new_depth > 0 {
                     result.push(lines[j].to_string());
@@ -770,7 +827,7 @@ fn fix_switch_fallthrough(src: &str) -> String {
             (result, j)
         } else if !after.is_empty() {
             // Inline statement after colon (e.g. `case X: return y;`).
-            let raw   = lines[case_line];
+            let raw = lines[case_line];
             let indent: String = raw[..raw.len() - raw.trim_start().len()].to_string();
             (vec![format!("{}    {}", indent, after)], case_line + 1)
         } else {
@@ -781,11 +838,22 @@ fn fix_switch_fallthrough(src: &str) -> String {
             let mut j = case_line + 1;
             while j < n {
                 let lc = strip_glsl_comment(lines[j].trim());
-                if depth == 0 && (is_case(lines[j]) || lc == "}" || lc == "};") { break; }
-                for ch in lc.chars() { match ch { '{' => depth += 1, '}' => depth -= 1, _ => {} } }
+                if depth == 0 && (is_case(lines[j]) || lc == "}" || lc == "};") {
+                    break;
+                }
+                for ch in lc.chars() {
+                    match ch {
+                        '{' => depth += 1,
+                        '}' => depth -= 1,
+                        _ => {}
+                    }
+                }
                 result.push(lines[j].to_string());
                 j += 1;
-                if depth < 0 { result.pop(); break; }
+                if depth < 0 {
+                    result.pop();
+                    break;
+                }
             }
             (result, j)
         }
@@ -800,19 +868,27 @@ fn fix_switch_fallthrough(src: &str) -> String {
             if bare_case(raw) {
                 // Next non-blank line.
                 let mut j = i + 1;
-                while j < n && lines[j].trim().is_empty() { j += 1; }
+                while j < n && lines[j].trim().is_empty() {
+                    j += 1;
+                }
 
                 if j < n && is_case(lines[j]) {
                     // Cascade detected: collect all bare labels in this run.
                     let mut group: Vec<usize> = vec![i];
                     while j < n {
-                        if lines[j].trim().is_empty() { j += 1; continue; }
+                        if lines[j].trim().is_empty() {
+                            j += 1;
+                            continue;
+                        }
                         if bare_case(lines[j]) {
                             // Include in run only if followed by another case start.
                             let mut k = j + 1;
-                            while k < n && lines[k].trim().is_empty() { k += 1; }
+                            while k < n && lines[k].trim().is_empty() {
+                                k += 1;
+                            }
                             if k < n && is_case(lines[k]) {
-                                group.push(j); j += 1;
+                                group.push(j);
+                                j += 1;
                             } else {
                                 break; // j is the last label with body following.
                             }
@@ -826,30 +902,36 @@ fn fix_switch_fallthrough(src: &str) -> String {
                     // duplicate copies to avoid VariableAlreadyDeclared errors.
                     // naga does not scope switch cases separately, so the same
                     // variable name can't appear twice.
-                    let decl_names: Vec<String> = body.iter().filter_map(|b| {
-                        let bt = b.trim();
-                        for kw in &["vec2 ", "vec3 ", "vec4 ",
-                                    "ivec2 ", "ivec3 ", "ivec4 ",
-                                    "uvec2 ", "uvec3 ", "uvec4 ",
-                                    "float ", "int ", "uint ", "bool ",
-                                    "mat2 ", "mat3 ", "mat4 "] {
-                            if bt.starts_with(kw) {
-                                // Extract variable name (token after type keyword).
-                                let after = &bt[kw.len()..];
-                                let name: String = after.chars()
-                                    .take_while(|c| c.is_alphanumeric() || *c == '_')
-                                    .collect();
-                                if !name.is_empty() {
-                                    return Some(name);
+                    let decl_names: Vec<String> = body
+                        .iter()
+                        .filter_map(|b| {
+                            let bt = b.trim();
+                            for kw in &[
+                                "vec2 ", "vec3 ", "vec4 ", "ivec2 ", "ivec3 ", "ivec4 ", "uvec2 ",
+                                "uvec3 ", "uvec4 ", "float ", "int ", "uint ", "bool ", "mat2 ",
+                                "mat3 ", "mat4 ",
+                            ] {
+                                if bt.starts_with(kw) {
+                                    // Extract variable name (token after type keyword).
+                                    let after = &bt[kw.len()..];
+                                    let name: String = after
+                                        .chars()
+                                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                                        .collect();
+                                    if !name.is_empty() {
+                                        return Some(name);
+                                    }
                                 }
                             }
-                        }
-                        None
-                    }).collect();
+                            None
+                        })
+                        .collect();
                     for (gi, &li) in group.iter().enumerate() {
                         p1.push(lines[li].to_string());
                         if decl_names.is_empty() {
-                            for bl in &body { p1.push(bl.clone()); }
+                            for bl in &body {
+                                p1.push(bl.clone());
+                            }
                         } else {
                             // Rename declared variables with a unique suffix.
                             for bl in &body {
@@ -906,10 +988,11 @@ fn fix_switch_fallthrough(src: &str) -> String {
             // Detect `case X: {` or `default: {` — label immediately opening a block.
             let is_case_with_block =
                 (code.starts_with("case ") || code.starts_with("default:") || code == "default:")
-                && code.contains(':') && {
-                    let colon = code.rfind(':').unwrap_or(0);
-                    code[colon + 1..].trim().starts_with('{')
-                };
+                    && code.contains(':')
+                    && {
+                        let colon = code.rfind(':').unwrap_or(0);
+                        code[colon + 1..].trim().starts_with('{')
+                    };
             if is_case_with_block {
                 let indent = &raw[..raw.len() - raw.trim_start().len()];
 
@@ -921,7 +1004,9 @@ fn fix_switch_fallthrough(src: &str) -> String {
                     let lc = strip_glsl_comment(p1r[j].trim());
                     block_indices.push(j);
                     let delta = lc.chars().fold(0i32, |d, ch| match ch {
-                        '{' => d + 1, '}' => d - 1, _ => d,
+                        '{' => d + 1,
+                        '}' => d - 1,
+                        _ => d,
                     });
                     depth += delta;
                     j += 1;
@@ -938,16 +1023,19 @@ fn fix_switch_fallthrough(src: &str) -> String {
                     let lc = strip_glsl_comment(p1r[li].trim());
                     // Check at current depth BEFORE updating (depth 0 = direct child).
                     if inner_depth == 0 {
-                        let is_term_stmt =
-                            (lc.starts_with("break") || lc.starts_with("return") ||
-                             lc.starts_with("discard") || lc.starts_with("continue"))
+                        let is_term_stmt = (lc.starts_with("break")
+                            || lc.starts_with("return")
+                            || lc.starts_with("discard")
+                            || lc.starts_with("continue"))
                             && lc.ends_with(';');
                         if is_term_stmt {
                             last_term_bi = Some(bi);
                         }
                     }
                     let delta = lc.chars().fold(0i32, |d, ch| match ch {
-                        '{' => d + 1, '}' => d - 1, _ => d,
+                        '{' => d + 1,
+                        '}' => d - 1,
+                        _ => d,
                     });
                     inner_depth += delta;
                 }
@@ -1008,8 +1096,8 @@ fn fix_switch_fallthrough(src: &str) -> String {
         // does not leak from an inactive `#ifdef WR_VERTEX_SHADER` block into
         // the `#ifdef WR_FRAGMENT_SHADER` block or vice-versa.
         if !code.starts_with('#') {
-            let is_switch_kw = code.starts_with("switch")
-                && code[6..].trim_start().starts_with('(');
+            let is_switch_kw =
+                code.starts_with("switch") && code[6..].trim_start().starts_with('(');
             if is_switch_kw {
                 next_open_is_switch = true;
             }
@@ -1019,7 +1107,8 @@ fn fix_switch_fallthrough(src: &str) -> String {
         // If we are inside a switch body and the current line is a case/default
         // label, but the previous code line was not a terminator, insert break.
         let indent = &raw[..raw.len() - raw.trim_start().len()];
-        if !sw_depths.is_empty() && !last_was_term
+        if !sw_depths.is_empty()
+            && !last_was_term
             && (code.starts_with("case ") || code.starts_with("default:") || code == "default:")
             && code.contains(':')
         {
@@ -1062,8 +1151,8 @@ fn fix_switch_fallthrough(src: &str) -> String {
 
         if !code.is_empty() && !code.starts_with("//") {
             last_was_term = is_term(raw);
-            last_was_switch_open = code.ends_with('{') &&
-                (code.starts_with("switch") || code == "{");
+            last_was_switch_open =
+                code.ends_with('{') && (code.starts_with("switch") || code == "{");
         }
     }
 
@@ -1101,13 +1190,19 @@ fn fix_switch_fallthrough(src: &str) -> String {
                     let lc = strip_glsl_comment(p3r[j].trim());
                     for ch in lc.chars() {
                         match ch {
-                            '{' => { depth += 1; }
-                            '}' => { depth -= 1; }
+                            '{' => {
+                                depth += 1;
+                            }
+                            '}' => {
+                                depth -= 1;
+                            }
                             _ => {}
                         }
                     }
                     header_end = j;
-                    if depth > 0 { break; } // found the opening `{`
+                    if depth > 0 {
+                        break;
+                    } // found the opening `{`
                     j += 1;
                 }
             }
@@ -1125,13 +1220,17 @@ fn fix_switch_fallthrough(src: &str) -> String {
             let mut depth: i32 = 0;
 
             loop {
-                if i >= n4 { break; }
+                if i >= n4 {
+                    break;
+                }
                 let raw2 = p3r[i];
                 let lc = strip_glsl_comment(raw2.trim());
 
                 // Compute depth change.
                 let new_depth = lc.chars().fold(depth, |d, ch| match ch {
-                    '{' => d + 1, '}' => d - 1, _ => d
+                    '{' => d + 1,
+                    '}' => d - 1,
+                    _ => d,
                 });
 
                 // Switch-closing `}` at depth 0.
@@ -1155,7 +1254,9 @@ fn fix_switch_fallthrough(src: &str) -> String {
                         }
                     }
                     for sec in sections {
-                        for ln in sec { p4.push(ln); }
+                        for ln in sec {
+                            p4.push(ln);
+                        }
                     }
                     p4.push(raw2.to_string()); // closing `}`
                     i += 1;
@@ -1201,14 +1302,23 @@ fn fix_switch_fallthrough(src: &str) -> String {
     // Extract selector expression from `switch (EXPR) {`, or None.
     let switch_expr = |raw: &str| -> Option<String> {
         let code = strip_glsl_comment(raw.trim());
-        if code.starts_with('#') || !code.starts_with("switch") { return None; }
+        if code.starts_with('#') || !code.starts_with("switch") {
+            return None;
+        }
         let rest = code[6..].trim_start();
-        if !rest.starts_with('(') { return None; }
+        if !rest.starts_with('(') {
+            return None;
+        }
         let mut depth = 0i32;
         for (k, ch) in rest.char_indices() {
             match ch {
                 '(' => depth += 1,
-                ')' => { depth -= 1; if depth == 0 { return Some(rest[1..k].trim().to_string()); } }
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(rest[1..k].trim().to_string());
+                    }
+                }
                 _ => {}
             }
         }
@@ -1221,13 +1331,14 @@ fn fix_switch_fallthrough(src: &str) -> String {
             let c = strip_glsl_comment(ln.trim());
             c.starts_with("return") && c.ends_with(';')
         });
-        has_return && body.iter().all(|ln| {
-            let c = strip_glsl_comment(ln.trim());
-            c.is_empty()
-                || c.starts_with("//")
-                || (c.starts_with("return") && c.ends_with(';'))
-                || (c.starts_with("break") && c.ends_with(';'))
-        })
+        has_return
+            && body.iter().all(|ln| {
+                let c = strip_glsl_comment(ln.trim());
+                c.is_empty()
+                    || c.starts_with("//")
+                    || (c.starts_with("return") && c.ends_with(';'))
+                    || (c.starts_with("break") && c.ends_with(';'))
+            })
     };
 
     let mut i5 = 0;
@@ -1242,10 +1353,16 @@ fn fix_switch_fallthrough(src: &str) -> String {
             loop {
                 let lc = strip_glsl_comment(p4r[j5].trim());
                 for ch in lc.chars() {
-                    match ch { '{' => hdr_depth += 1, '}' => hdr_depth -= 1, _ => {} }
+                    match ch {
+                        '{' => hdr_depth += 1,
+                        '}' => hdr_depth -= 1,
+                        _ => {}
+                    }
                 }
                 j5 += 1;
-                if hdr_depth > 0 || j5 >= n5 { break; }
+                if hdr_depth > 0 || j5 >= n5 {
+                    break;
+                }
             }
 
             // Collect switch body lines until the matching closing `}`.
@@ -1254,10 +1371,14 @@ fn fix_switch_fallthrough(src: &str) -> String {
             while j5 < n5 && body_depth > 0 {
                 let lc = strip_glsl_comment(p4r[j5].trim());
                 let delta = lc.chars().fold(0i32, |d, ch| match ch {
-                    '{' => d + 1, '}' => d - 1, _ => d,
+                    '{' => d + 1,
+                    '}' => d - 1,
+                    _ => d,
                 });
                 body_depth += delta;
-                if body_depth > 0 { sw_body.push(j5); }
+                if body_depth > 0 {
+                    sw_body.push(j5);
+                }
                 j5 += 1;
             }
             // j5 now points to the line after the switch-closing `}`.
@@ -1269,24 +1390,31 @@ fn fix_switch_fallthrough(src: &str) -> String {
             for &li in &sw_body {
                 let lc = strip_glsl_comment(p4r[li].trim());
                 if sec_depth == 0 && is_case(p4r[li]) {
-                    if !cur_sec.is_empty() { sections.push(std::mem::take(&mut cur_sec)); }
+                    if !cur_sec.is_empty() {
+                        sections.push(std::mem::take(&mut cur_sec));
+                    }
                 }
                 cur_sec.push(p4r[li].to_string());
                 let delta = lc.chars().fold(0i32, |d, ch| match ch {
-                    '{' => d + 1, '}' => d - 1, _ => d,
+                    '{' => d + 1,
+                    '}' => d - 1,
+                    _ => d,
                 });
                 sec_depth += delta;
             }
-            if !cur_sec.is_empty() { sections.push(cur_sec); }
+            if !cur_sec.is_empty() {
+                sections.push(cur_sec);
+            }
 
             // Determine whether all case bodies are return-only.
-            let all_return = !sections.is_empty() && sections.iter().all(|sec| {
-                is_return_only_body(&sec[1..])
-            });
+            let all_return =
+                !sections.is_empty() && sections.iter().all(|sec| is_return_only_body(&sec[1..]));
 
             if !all_return {
                 // Not a return-only switch: emit verbatim.
-                for k in i5..j5 { p5.push(p4r[k].to_string()); }
+                for k in i5..j5 {
+                    p5.push(p4r[k].to_string());
+                }
                 i5 = j5;
                 continue;
             }
@@ -1295,11 +1423,11 @@ fn fix_switch_fallthrough(src: &str) -> String {
             let mut first_case = true;
             for sec in &sections {
                 let label_code = strip_glsl_comment(sec[0].trim());
-                let is_default = label_code == "default:"
-                    || label_code.starts_with("default:");
+                let is_default = label_code == "default:" || label_code.starts_with("default:");
 
                 // Body: all lines except bare `break;` added by earlier passes.
-                let body_emit: Vec<&String> = sec[1..].iter()
+                let body_emit: Vec<&String> = sec[1..]
+                    .iter()
                     .filter(|ln| {
                         let c = strip_glsl_comment(ln.trim());
                         !(c.starts_with("break") && c.ends_with(';'))
@@ -1308,7 +1436,9 @@ fn fix_switch_fallthrough(src: &str) -> String {
 
                 if is_default {
                     p5.push(format!("{}}} else {{", sw_indent));
-                    for bl in &body_emit { p5.push((*bl).clone()); }
+                    for bl in &body_emit {
+                        p5.push((*bl).clone());
+                    }
                 } else {
                     // Extract value: strip "case " prefix and trailing ":".
                     let colon = label_code.rfind(':').unwrap_or(label_code.len());
@@ -1317,10 +1447,14 @@ fn fix_switch_fallthrough(src: &str) -> String {
                         p5.push(format!("{}if ({} == {}) {{", sw_indent, sel_expr, val));
                         first_case = false;
                     } else {
-                        p5.push(format!("{}}} else if ({} == {}) {{",
-                            sw_indent, sel_expr, val));
+                        p5.push(format!(
+                            "{}}} else if ({} == {}) {{",
+                            sw_indent, sel_expr, val
+                        ));
                     }
-                    for bl in &body_emit { p5.push((*bl).clone()); }
+                    for bl in &body_emit {
+                        p5.push((*bl).clone());
+                    }
                 }
             }
             // Close the last branch.
@@ -1355,10 +1489,16 @@ fn fix_switch_fallthrough(src: &str) -> String {
                 loop {
                     let lc = strip_glsl_comment(p5_lines[j].trim());
                     for ch in lc.chars() {
-                        match ch { '{' => hdr_depth += 1, '}' => hdr_depth -= 1, _ => {} }
+                        match ch {
+                            '{' => hdr_depth += 1,
+                            '}' => hdr_depth -= 1,
+                            _ => {}
+                        }
                     }
                     j += 1;
-                    if hdr_depth > 0 || j >= n6 { break; }
+                    if hdr_depth > 0 || j >= n6 {
+                        break;
+                    }
                 }
 
                 let mut body_depth: i32 = 1;
@@ -1366,7 +1506,9 @@ fn fix_switch_fallthrough(src: &str) -> String {
                 while j < n6 && body_depth > 0 {
                     let lc = strip_glsl_comment(p5_lines[j].trim());
                     let delta = lc.chars().fold(0i32, |d, ch| match ch {
-                        '{' => d + 1, '}' => d - 1, _ => d,
+                        '{' => d + 1,
+                        '}' => d - 1,
+                        _ => d,
                     });
                     body_depth += delta;
                     j += 1;
@@ -1381,7 +1523,9 @@ fn fix_switch_fallthrough(src: &str) -> String {
 
                 if !has_case_return {
                     // No case-level returns: emit verbatim.
-                    for k in i..switch_end { p6.push(p5_lines[k].to_string()); }
+                    for k in i..switch_end {
+                        p6.push(p5_lines[k].to_string());
+                    }
                     i = switch_end;
                     continue;
                 }
@@ -1390,10 +1534,13 @@ fn fix_switch_fallthrough(src: &str) -> String {
                 p6.push(format!("{}bool _naga_early_ret = false;", sw_indent));
                 for k in i..switch_end {
                     let c = strip_glsl_comment(p5_lines[k].trim());
-                    if (c.starts_with("return") || c == "return;") && c.ends_with(';')
-                        && k >= switch_body_start && k < switch_end
+                    if (c.starts_with("return") || c == "return;")
+                        && c.ends_with(';')
+                        && k >= switch_body_start
+                        && k < switch_end
                     {
-                        let line_indent = &p5_lines[k][..p5_lines[k].len() - p5_lines[k].trim_start().len()];
+                        let line_indent =
+                            &p5_lines[k][..p5_lines[k].len() - p5_lines[k].trim_start().len()];
                         p6.push(format!("{}_naga_early_ret = true;", line_indent));
                         p6.push(format!("{}break;", line_indent));
                     } else {
@@ -1410,7 +1557,11 @@ fn fix_switch_fallthrough(src: &str) -> String {
                 while func_end < n6 {
                     let lc = strip_glsl_comment(p5_lines[func_end].trim());
                     for ch in lc.chars() {
-                        match ch { '{' => depth += 1, '}' => depth -= 1, _ => {} }
+                        match ch {
+                            '{' => depth += 1,
+                            '}' => depth -= 1,
+                            _ => {}
+                        }
                     }
                     if depth < 0 {
                         // This is the function closing `}`.
@@ -1455,9 +1606,9 @@ fn fix_switch_fallthrough(src: &str) -> String {
 fn storage_qual(code: &str) -> Option<&'static str> {
     for token in code.split_whitespace() {
         match token {
-            "in"        => return Some("in"),
-            "out"       => return Some("out"),
-            "varying"   => return Some("varying"),
+            "in" => return Some("in"),
+            "out" => return Some("out"),
+            "varying" => return Some("varying"),
             "attribute" => return Some("attribute"),
             // Allowed to precede the storage qualifier:
             // interpolation qualifiers (GLSL built-in) and WR instance macros.
@@ -1480,12 +1631,12 @@ fn storage_qual(code: &str) -> Option<&'static str> {
 #[cfg(feature = "wgpu_backend")]
 fn resolve_stage_ifdefs(src: &str, stage: naga::ShaderStage) -> String {
     let active_define = match stage {
-        naga::ShaderStage::Vertex   => "WR_VERTEX_SHADER",
+        naga::ShaderStage::Vertex => "WR_VERTEX_SHADER",
         naga::ShaderStage::Fragment => "WR_FRAGMENT_SHADER",
         _ => return src.to_string(),
     };
     let inactive_define = match stage {
-        naga::ShaderStage::Vertex   => "WR_FRAGMENT_SHADER",
+        naga::ShaderStage::Vertex => "WR_FRAGMENT_SHADER",
         naga::ShaderStage::Fragment => "WR_VERTEX_SHADER",
         _ => return src.to_string(),
     };
@@ -1586,12 +1737,12 @@ fn resolve_stage_ifdefs(src: &str, stage: naga::ShaderStage) -> String {
 fn decompose_matrix_varyings(src: &str, stage: naga::ShaderStage) -> String {
     // Describes one matrix varying that needs decomposition.
     struct MatVarying {
-        name:      String,   // e.g. "v_color_mat"
-        qualifiers: String,  // e.g. "flat" (everything before "varying")
-        mat_kw:    String,   // "mat3" or "mat4"
-        vec_kw:    String,   // "vec3" or "vec4"
-        cols:      usize,    // 3 or 4
-        guard:     Option<String>, // enclosing #ifdef condition, e.g. "WR_FEATURE_YUV"
+        name: String,          // e.g. "v_color_mat"
+        qualifiers: String,    // e.g. "flat" (everything before "varying")
+        mat_kw: String,        // "mat3" or "mat4"
+        vec_kw: String,        // "vec3" or "vec4"
+        cols: usize,           // 3 or 4
+        guard: Option<String>, // enclosing #ifdef condition, e.g. "WR_FEATURE_YUV"
     }
 
     let lines: Vec<&str> = src.lines().collect();
@@ -1614,11 +1765,16 @@ fn decompose_matrix_varyings(src: &str, stage: naga::ShaderStage) -> String {
         } else if trimmed.starts_with("#if ") {
             ifdef_stack.push(trimmed["#if ".len()..].trim().to_string());
             continue;
-        } else if trimmed == "#endif" || trimmed.starts_with("#endif ")
-                   || trimmed.starts_with("#endif//") {
+        } else if trimmed == "#endif"
+            || trimmed.starts_with("#endif ")
+            || trimmed.starts_with("#endif//")
+        {
             ifdef_stack.pop();
             continue;
-        } else if trimmed.starts_with("#elif ") || trimmed == "#else" || trimmed.starts_with("#else ") {
+        } else if trimmed.starts_with("#elif ")
+            || trimmed == "#else"
+            || trimmed.starts_with("#else ")
+        {
             // Replace top of stack with the new branch condition (approximate).
             ifdef_stack.pop();
             ifdef_stack.push(trimmed.to_string());
@@ -1627,13 +1783,17 @@ fn decompose_matrix_varyings(src: &str, stage: naga::ShaderStage) -> String {
 
         let code = match trimmed.find("//") {
             Some(i) => trimmed[..i].trim_end(),
-            None    => trimmed,
+            None => trimmed,
         };
-        if !code.ends_with(';') { continue; }
+        if !code.ends_with(';') {
+            continue;
+        }
 
         let tokens: Vec<&str> = code.trim_end_matches(';').split_whitespace().collect();
         let vary_pos = tokens.iter().position(|&t| t == "varying");
-        if vary_pos.is_none() { continue; }
+        if vary_pos.is_none() {
+            continue;
+        }
         let vary_pos = vary_pos.unwrap();
 
         let name = match tokens.last() {
@@ -1641,13 +1801,15 @@ fn decompose_matrix_varyings(src: &str, stage: naga::ShaderStage) -> String {
             None => continue,
         };
         let type_idx = tokens.len() - 2;
-        if type_idx <= vary_pos { continue; }
+        if type_idx <= vary_pos {
+            continue;
+        }
         let mat_kw = tokens[type_idx];
 
         let (vec_kw, cols) = match mat_kw {
             "mat3" => ("vec3", 3usize),
             "mat4" => ("vec4", 4usize),
-            _      => continue,
+            _ => continue,
         };
 
         let qualifiers = tokens[..vary_pos].join(" ");
@@ -1674,7 +1836,7 @@ fn decompose_matrix_varyings(src: &str, stage: naga::ShaderStage) -> String {
         let trimmed = line.trim();
         let code = match trimmed.find("//") {
             Some(i) => trimmed[..i].trim_end(),
-            None    => trimmed,
+            None => trimmed,
         };
 
         // Check if this line declares one of our matrix varyings.
@@ -1682,8 +1844,9 @@ fn decompose_matrix_varyings(src: &str, stage: naga::ShaderStage) -> String {
         if code.ends_with(';') {
             for mv in &varyings {
                 let has_varying = code.split_whitespace().any(|t| t == "varying");
-                let has_name    = code.trim_end_matches(';').split_whitespace().last() == Some(mv.name.as_str());
-                let has_mat     = code.split_whitespace().any(|t| t == mv.mat_kw.as_str());
+                let has_name =
+                    code.trim_end_matches(';').split_whitespace().last() == Some(mv.name.as_str());
+                let has_mat = code.split_whitespace().any(|t| t == mv.mat_kw.as_str());
                 if has_varying && has_name && has_mat {
                     matched_varying = Some(mv);
                     break;
@@ -1748,7 +1911,9 @@ fn decompose_matrix_varyings(src: &str, stage: naga::ShaderStage) -> String {
                     .collect();
                 glue.push(format!(
                     "    {} = {}({});",
-                    mv.name, mv.mat_kw, cols.join(", ")
+                    mv.name,
+                    mv.mat_kw,
+                    cols.join(", ")
                 ));
                 if mv.guard.is_some() {
                     glue.push("#endif".to_string());
@@ -1773,17 +1938,28 @@ fn find_main_close(lines: &[String]) -> Option<usize> {
         let trimmed = line.trim();
         if !in_main {
             if (trimmed.starts_with("void main(") || trimmed.contains(" main("))
-                && trimmed.contains('(') && !trimmed.ends_with(';')
+                && trimmed.contains('(')
+                && !trimmed.ends_with(';')
             {
                 in_main = true;
                 for ch in trimmed.chars() {
-                    match ch { '{' => depth += 1, '}' => depth -= 1, _ => {} }
+                    match ch {
+                        '{' => depth += 1,
+                        '}' => depth -= 1,
+                        _ => {}
+                    }
                 }
-                if depth <= 0 && trimmed.contains('{') { return Some(i); }
+                if depth <= 0 && trimmed.contains('{') {
+                    return Some(i);
+                }
             }
         } else {
             for ch in trimmed.chars() {
-                match ch { '{' => depth += 1, '}' => depth -= 1, _ => {} }
+                match ch {
+                    '{' => depth += 1,
+                    '}' => depth -= 1,
+                    _ => {}
+                }
             }
             if depth <= 0 {
                 return Some(i);
@@ -1800,7 +1976,8 @@ fn find_main_open(lines: &[String]) -> Option<usize> {
     for (i, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
         if (trimmed.starts_with("void main(") || trimmed.contains(" main("))
-            && trimmed.contains('(') && !trimmed.ends_with(';')
+            && trimmed.contains('(')
+            && !trimmed.ends_with(';')
         {
             // The `{` might be on this line or the next.
             if trimmed.contains('{') {
@@ -1835,21 +2012,26 @@ fn decompose_array_struct_stores(src: &str) -> String {
             let lhs = trimmed[..eq_pos].trim();
             let rhs = trimmed[eq_pos + 1..].trim();
             // Check lhs is "word.word" (struct field access, no indexing)
-            let is_struct_field = lhs.contains('.') && !lhs.contains('[')
-                && lhs.split('.').all(|p| !p.is_empty() && p.chars().all(|c| c.is_alphanumeric() || c == '_'));
+            let is_struct_field = lhs.contains('.')
+                && !lhs.contains('[')
+                && lhs
+                    .split('.')
+                    .all(|p| !p.is_empty() && p.chars().all(|c| c.is_alphanumeric() || c == '_'));
             if is_struct_field {
                 // Check rhs starts with "typeword[N]("
                 let bracket = rhs.find('[');
-                let paren   = rhs.find('(');
+                let paren = rhs.find('(');
                 if let (Some(bi), Some(pi)) = (bracket, paren) {
                     if bi < pi {
                         let type_word = &rhs[..bi];
                         let count_str = &rhs[bi + 1..rhs.find(']').unwrap_or(bi + 1)];
-                        let is_type = type_word.chars().all(|c| c.is_alphanumeric() || c == '_') && !type_word.is_empty();
+                        let is_type = type_word.chars().all(|c| c.is_alphanumeric() || c == '_')
+                            && !type_word.is_empty();
                         if is_type {
                             if let Ok(count) = count_str.parse::<usize>() {
                                 // Collect all text from after "(" until closing ");".
-                                let indent = &lines[i][..lines[i].len() - lines[i].trim_start().len()];
+                                let indent =
+                                    &lines[i][..lines[i].len() - lines[i].trim_start().len()];
                                 let after_paren = &rhs[pi + 1..];
                                 let mut full_args = after_paren.to_string();
                                 let mut j = i + 1;
@@ -1863,7 +2045,8 @@ fn decompose_array_struct_stores(src: &str) -> String {
                                     full_args = full_args[..close].to_string();
                                 }
                                 // Split args by comma.
-                                let args: Vec<&str> = full_args.split(',').map(|a| a.trim()).collect();
+                                let args: Vec<&str> =
+                                    full_args.split(',').map(|a| a.trim()).collect();
                                 if args.len() == count && count > 0 {
                                     for (idx, arg) in args.iter().enumerate() {
                                         out.push(format!("{}{}[{}] = {};", indent, lhs, idx, arg));
@@ -1905,13 +2088,17 @@ fn rewrite_sampler_params(src: &str) -> String {
 
         // Detect function definition with sampler2D parameter.
         // Pattern: returnType funcName(sampler2D paramName, ...)  {
-        if trimmed.contains("sampler2D") && trimmed.contains('(') && !trimmed.starts_with("//")
-            && !trimmed.starts_with("uniform ") && !trimmed.starts_with("#")
+        if trimmed.contains("sampler2D")
+            && trimmed.contains('(')
+            && !trimmed.starts_with("//")
+            && !trimmed.starts_with("uniform ")
+            && !trimmed.starts_with("#")
         {
             // Extract parameter name: find "sampler2D " then the next identifier.
             if let Some(samp_pos) = trimmed.find("sampler2D ") {
                 let after = &trimmed[samp_pos + "sampler2D ".len()..];
-                let param_name: String = after.chars()
+                let param_name: String = after
+                    .chars()
                     .take_while(|c| c.is_alphanumeric() || *c == '_')
                     .collect();
                 if !param_name.is_empty() {
@@ -1927,16 +2114,23 @@ fn rewrite_sampler_params(src: &str) -> String {
                     while i < n {
                         let lt = lines[i].trim();
                         for ch in lt.chars() {
-                            match ch { '{' => depth += 1, '}' => depth -= 1, _ => {} }
+                            match ch {
+                                '{' => depth += 1,
+                                '}' => depth -= 1,
+                                _ => {}
+                            }
                         }
                         // Rewrite texture(paramName, ...) → texture(sampler2D(paramName, global_sampler), ...)
                         let old_tex = format!("texture({},", new_param);
                         let new_tex = format!("texture(sampler2D({}, global_sampler),", new_param);
-                        let line_out = lines[i].replace(&param_name, new_param)
-                                                .replace(&old_tex, &new_tex);
+                        let line_out = lines[i]
+                            .replace(&param_name, new_param)
+                            .replace(&old_tex, &new_tex);
                         out.push(line_out);
                         i += 1;
-                        if depth <= 0 { break; }
+                        if depth <= 0 {
+                            break;
+                        }
                     }
                     continue;
                 }
@@ -1979,19 +2173,19 @@ fn preprocess_for_naga(src: &str, stage: naga::ShaderStage) -> String {
     // texture type.  The constructor keyword (used in `texture()` wrappers) is
     // the same as the combined type.
     const SAMPLER_TYPES: &[(&str, &str)] = &[
-        ("sampler2D",      "texture2D"),
-        ("isampler2D",     "itexture2D"),
-        ("usampler2D",     "utexture2D"),
+        ("sampler2D", "texture2D"),
+        ("isampler2D", "itexture2D"),
+        ("usampler2D", "utexture2D"),
         ("sampler2DArray", "texture2DArray"),
-        ("sampler2DRect",  "texture2DRect"),
-        ("sampler2DMS",    "texture2DMS"),
-        ("samplerCube",    "textureCube"),
+        ("sampler2DRect", "texture2DRect"),
+        ("sampler2DMS", "texture2DMS"),
+        ("samplerCube", "textureCube"),
     ];
 
     // ── Pre-scan: identify combined-sampler variable names ───────────────────
     // Build a set of uniform variable names whose type is a combined sampler so
     // that Pass 2 can rewrite `texture(sName, ...)` call sites.
-    let mut sampler_names: HashSet<String>  = HashSet::new();
+    let mut sampler_names: HashSet<String> = HashSet::new();
     // Map: sampler var-name → combined type ("sampler2D", "isampler2D", ...)
     let mut sampler_type_map: HashMap<String, &'static str> = HashMap::new();
 
@@ -2021,9 +2215,9 @@ fn preprocess_for_naga(src: &str, stage: naga::ShaderStage) -> String {
     // ── Pass 1: line-by-line rewriting ───────────────────────────────────────
     let mut name_to_binding: HashMap<String, u32> = HashMap::new();
     let mut next_binding: u32 = 0;
-    let mut next_attr_loc: u32 = 0;     // vertex attribute input locations
-    let mut next_vary_loc: u32 = 0;     // varying interface locations (vertex out / fragment in)
-    let is_vertex   = stage == naga::ShaderStage::Vertex;
+    let mut next_attr_loc: u32 = 0; // vertex attribute input locations
+    let mut next_vary_loc: u32 = 0; // varying interface locations (vertex out / fragment in)
+    let is_vertex = stage == naga::ShaderStage::Vertex;
     let is_fragment = stage == naga::ShaderStage::Fragment;
     let mut global_sampler_injected = false;
 
@@ -2042,21 +2236,22 @@ fn preprocess_for_naga(src: &str, stage: naga::ShaderStage) -> String {
             // Inject the shared sampler right after the version so it is
             // available to all shader stages.
             if !global_sampler_injected {
-                out.push("layout(binding = 0, set = 1) uniform sampler global_sampler;".to_string());
+                out.push(
+                    "layout(binding = 0, set = 1) uniform sampler global_sampler;".to_string(),
+                );
                 global_sampler_injected = true;
             }
-
         } else if trimmed.starts_with("#extension") {
             // naga rejects unknown #extension directives even in dead branches.
-
         } else if code.starts_with("precision ") && code.ends_with(';') {
             // GLES precision statements are invalid in GLSL 4.50 core.
-
-        } else if code.starts_with("uniform ") && code.ends_with(';')
+        } else if code.starts_with("uniform ")
+            && code.ends_with(';')
             && !code.starts_with("uniform struct ")
         {
             // Determine the variable name (last whitespace-delimited token).
-            let var_name = code.trim_end_matches(';')
+            let var_name = code
+                .trim_end_matches(';')
                 .split_whitespace()
                 .last()
                 .unwrap_or("unknown")
@@ -2085,10 +2280,11 @@ fn preprocess_for_naga(src: &str, stage: naga::ShaderStage) -> String {
             } else {
                 out.push(format!(
                     "{}layout(binding = {}, set = 0) {}",
-                    indent, binding, strip_precision(trimmed)
+                    indent,
+                    binding,
+                    strip_precision(trimmed)
                 ));
             }
-
         } else if code.ends_with(';') && !code.contains("layout(") {
             // Detect interface variable declarations:
             // [flat | smooth | noperspective | PER_INSTANCE] [varying | in | out | attribute] ...;
@@ -2096,28 +2292,46 @@ fn preprocess_for_naga(src: &str, stage: naga::ShaderStage) -> String {
             match storage_qual(code) {
                 Some("attribute") | Some("in") if is_vertex => {
                     // Vertex attribute inputs — unique sequential locations.
-                    out.push(format!("{}layout(location = {}) {}", indent, next_attr_loc, strip_precision(trimmed)));
+                    out.push(format!(
+                        "{}layout(location = {}) {}",
+                        indent,
+                        next_attr_loc,
+                        strip_precision(trimmed)
+                    ));
                     next_attr_loc += 1;
                 }
                 Some("in") | Some("varying") if is_fragment => {
                     // Fragment varying inputs — must match vertex varying output locations.
-                    out.push(format!("{}layout(location = {}) {}", indent, next_vary_loc, strip_precision(trimmed)));
+                    out.push(format!(
+                        "{}layout(location = {}) {}",
+                        indent,
+                        next_vary_loc,
+                        strip_precision(trimmed)
+                    ));
                     next_vary_loc += 1;
                 }
                 Some("out") | Some("varying") if is_vertex => {
                     // Vertex varying outputs — must match fragment varying input locations.
-                    out.push(format!("{}layout(location = {}) {}", indent, next_vary_loc, strip_precision(trimmed)));
+                    out.push(format!(
+                        "{}layout(location = {}) {}",
+                        indent,
+                        next_vary_loc,
+                        strip_precision(trimmed)
+                    ));
                     next_vary_loc += 1;
                 }
                 Some("out") if is_fragment => {
                     // Fragment render-target output: WR uses a single colour target.
-                    out.push(format!("{}layout(location = 0) {}", indent, strip_precision(trimmed)));
+                    out.push(format!(
+                        "{}layout(location = 0) {}",
+                        indent,
+                        strip_precision(trimmed)
+                    ));
                 }
                 _ => {
                     out.push(raw_line.to_string());
                 }
             }
-
         } else if trimmed.starts_with("#define TEX_SAMPLE(") {
             // Rewrite the macro body so the `sampler` parameter (which will be a
             // `texture2D` variable) is wrapped with the required combined-type
@@ -2130,7 +2344,6 @@ fn preprocess_for_naga(src: &str, stage: naga::ShaderStage) -> String {
                 "texture(sampler2D(sampler, global_sampler), ",
             );
             out.push(rewritten);
-
         } else {
             out.push(raw_line.to_string());
         }
@@ -2216,18 +2429,27 @@ fn translate_to_wgsl(
     let outcome = std::panic::catch_unwind(move || {
         let module = glsl::Frontend::default()
             .parse(&glsl::Options::from(stage), &glsl_owned)
-            .map_err(|e| format!(
-                "GLSL->naga parse failed [shader={} config={:?}]: {:?}", name_s, config_s, e
-            ))?;
+            .map_err(|e| {
+                format!(
+                    "GLSL->naga parse failed [shader={} config={:?}]: {:?}",
+                    name_s, config_s, e
+                )
+            })?;
 
         let info = Validator::new(ValidationFlags::all(), Capabilities::all())
             .validate(&module)
-            .map_err(|e| format!(
-                "naga validation failed [shader={} config={:?}]: {:?}", name_s, config_s, e
-            ))?;
-        wgsl::write_string(&module, &info, wgsl::WriterFlags::empty()).map_err(|e| format!(
-            "WGSL emit failed [shader={} config={:?}]: {:?}", name_s, config_s, e
-        ))
+            .map_err(|e| {
+                format!(
+                    "naga validation failed [shader={} config={:?}]: {:?}",
+                    name_s, config_s, e
+                )
+            })?;
+        wgsl::write_string(&module, &info, wgsl::WriterFlags::empty()).map_err(|e| {
+            format!(
+                "WGSL emit failed [shader={} config={:?}]: {:?}",
+                name_s, config_s, e
+            )
+        })
     });
 
     match outcome {
@@ -2240,7 +2462,10 @@ fn translate_to_wgsl(
             } else {
                 "unknown panic".to_string()
             };
-            Err(format!("naga panicked [shader={} config={:?}]: {}", name, config, msg))
+            Err(format!(
+                "naga panicked [shader={} config={:?}]: {}",
+                name, config, msg
+            ))
         }
     }
 }
@@ -2282,34 +2507,23 @@ fn write_wgsl_shaders(
         let mut sorted_configs = configs.clone();
         sorted_configs.sort();
         for config in &sorted_configs {
-            let feature_list: Vec<&str> = config
-                .split(',')
-                .filter(|f| !f.is_empty())
-                .collect();
-            let (vert_glsl, frag_glsl) = build_shader_strings(
-                ShaderVersion::Gl,
-                &feature_list,
-                shader_name,
-                &|f| Cow::Owned(shader_source_from_file(&shader_dir.join(format!("{}.glsl", f)))),
-            );
+            let feature_list: Vec<&str> = config.split(',').filter(|f| !f.is_empty()).collect();
+            let (vert_glsl, frag_glsl) =
+                build_shader_strings(ShaderVersion::Gl, &feature_list, shader_name, &|f| {
+                    Cow::Owned(shader_source_from_file(
+                        &shader_dir.join(format!("{}.glsl", f)),
+                    ))
+                });
 
             // Preprocess: version-bump, strip #extension and precision,
             // split sampler2D declarations, assign locations and bindings.
             let vert_glsl = preprocess_for_naga(&vert_glsl, naga::ShaderStage::Vertex);
             let frag_glsl = preprocess_for_naga(&frag_glsl, naga::ShaderStage::Fragment);
 
-            let vert_wgsl = translate_to_wgsl(
-                &vert_glsl,
-                naga::ShaderStage::Vertex,
-                shader_name,
-                config,
-            );
-            let frag_wgsl = translate_to_wgsl(
-                &frag_glsl,
-                naga::ShaderStage::Fragment,
-                shader_name,
-                config,
-            );
+            let vert_wgsl =
+                translate_to_wgsl(&vert_glsl, naga::ShaderStage::Vertex, shader_name, config);
+            let frag_wgsl =
+                translate_to_wgsl(&frag_glsl, naga::ShaderStage::Fragment, shader_name, config);
 
             // Filesystem-safe key: replace commas with underscores.
             let safe_key = if config.is_empty() {
@@ -2334,10 +2548,16 @@ fn write_wgsl_shaders(
                 }
                 (vert_res, frag_res) => {
                     if let Err(ref e) = vert_res {
-                        println!("cargo:warning=WGSL translation skipped [{}#{}]: (vert) {}", shader_name, config, e);
+                        println!(
+                            "cargo:warning=WGSL translation skipped [{}#{}]: (vert) {}",
+                            shader_name, config, e
+                        );
                     }
                     if let Err(ref e) = frag_res {
-                        println!("cargo:warning=WGSL translation skipped [{}#{}]: (frag) {}", shader_name, config, e);
+                        println!(
+                            "cargo:warning=WGSL translation skipped [{}#{}]: (frag) {}",
+                            shader_name, config, e
+                        );
                     }
                     fail_count += 1;
                 }
@@ -2437,7 +2657,10 @@ fn main() -> Result<(), std::io::Error> {
     } else {
         // Emit empty GL shader maps so shader_source.rs compiles
         // regardless of backend.
-        writeln!(shader_file, "  pub static ref SHADERS: HashMap<&'static str, SourceWithDigest> = {{")?;
+        writeln!(
+            shader_file,
+            "  pub static ref SHADERS: HashMap<&'static str, SourceWithDigest> = {{"
+        )?;
         writeln!(shader_file, "    HashMap::new()")?;
         writeln!(shader_file, "  }};")?;
         writeln!(shader_file, "")?;

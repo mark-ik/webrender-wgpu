@@ -51,14 +51,14 @@ pub fn parse_function(s: &str) -> (&str, Vec<&str>, &str) {
         p.o = p.itr.next();
     }
 
-    let name = &s[p.start .. end];
+    let name = &s[p.start..end];
     let mut args = Vec::new();
 
     p.skip_whitespace();
 
     if let Some(k) = p.o {
         if k.1 != '(' {
-            return (name, args, &s[p.start ..]);
+            return (name, args, &s[p.start..]);
         }
         p.start = k.0 + k.1.len_utf8();
         p.o = p.itr.next();
@@ -97,7 +97,7 @@ pub fn parse_function(s: &str) -> (&str, Vec<&str>, &str) {
             p.o = p.itr.next();
         }
 
-        args.push(&s[p.start .. end]);
+        args.push(&s[p.start..end]);
 
         p.skip_whitespace();
 
@@ -115,7 +115,7 @@ pub fn parse_function(s: &str) -> (&str, Vec<&str>, &str) {
             break;
         }
     }
-    (name, args, &s[p.start ..])
+    (name, args, &s[p.start..])
 }
 
 #[test]
@@ -126,9 +126,21 @@ fn test() {
     assert_eq!(parse_function("  rotate  (  40 )").1[0], "40");
     assert_eq!(parse_function("rotate(-40.0)").1[0], "-40.0");
     assert_eq!(parse_function("drop-shadow(0, [1, 2, 3, 4], 5)").1[0], "0");
-    assert_eq!(parse_function("drop-shadow(0, [1, 2, 3, 4], 5)").1[1], "[1, 2, 3, 4]");
+    assert_eq!(
+        parse_function("drop-shadow(0, [1, 2, 3, 4], 5)").1[1],
+        "[1, 2, 3, 4]"
+    );
     assert_eq!(parse_function("drop-shadow(0, [1, 2, 3, 4], 5)").1[2], "5");
-    assert_eq!(parse_function("drop-shadow(0, [1, 2, [3, 4]], 5)").1[1], "[1, 2, [3, 4]]");
-    assert_eq!(parse_function("func(nest([1, 2]), [3, 4])").1[0], "nest([1, 2])");
-    assert_eq!(parse_function("func(nest([1, 2]), [nest(3), nest(4)])").1[1], "[nest(3), nest(4)]");
+    assert_eq!(
+        parse_function("drop-shadow(0, [1, 2, [3, 4]], 5)").1[1],
+        "[1, 2, [3, 4]]"
+    );
+    assert_eq!(
+        parse_function("func(nest([1, 2]), [3, 4])").1[0],
+        "nest([1, 2])"
+    );
+    assert_eq!(
+        parse_function("func(nest([1, 2]), [nest(3), nest(4)])").1[1],
+        "[nest(3), nest(4)]"
+    );
 }

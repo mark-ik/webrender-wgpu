@@ -90,7 +90,7 @@ impl GpuFrameProfile {
             samplers: QuerySet::new(),
             frame_id: GpuFrameId::new(0),
             inside_frame: false,
-            debug_method
+            debug_method,
         }
     }
 
@@ -251,7 +251,7 @@ impl GpuProfiler {
             gl: Some(gl),
             next_frame: 0,
             frames,
-            debug_method
+            debug_method,
         }
     }
 
@@ -314,16 +314,22 @@ impl GpuProfiler {
 
     pub fn build_samples(&mut self) -> (GpuFrameId, Vec<GpuTimer>, Vec<GpuSampler>) {
         #[cfg(feature = "gl_backend")]
-        { self.frames[self.next_frame].build_samples() }
+        {
+            self.frames[self.next_frame].build_samples()
+        }
         #[cfg(not(feature = "gl_backend"))]
-        { (self.frame_id, Vec::new(), Vec::new()) }
+        {
+            (self.frame_id, Vec::new(), Vec::new())
+        }
     }
 
     pub fn begin_frame(&mut self, frame_id: GpuFrameId) {
         #[cfg(feature = "gl_backend")]
         self.frames[self.next_frame].begin_frame(frame_id);
         #[cfg(not(feature = "gl_backend"))]
-        { self.frame_id = frame_id; }
+        {
+            self.frame_id = frame_id;
+        }
     }
 
     pub fn end_frame(&mut self) {
@@ -336,16 +342,23 @@ impl GpuProfiler {
 
     pub fn start_timer(&mut self, tag: GpuProfileTag) -> GpuTimeQuery {
         #[cfg(feature = "gl_backend")]
-        { self.frames[self.next_frame].start_timer(tag) }
+        {
+            self.frames[self.next_frame].start_timer(tag)
+        }
         #[cfg(not(feature = "gl_backend"))]
-        { let _ = tag; GpuTimeQuery }
+        {
+            let _ = tag;
+            GpuTimeQuery
+        }
     }
 
     pub fn start_sampler(&mut self, tag: GpuProfileTag) -> GpuSampleQuery {
         #[cfg(feature = "gl_backend")]
         self.frames[self.next_frame].start_sampler(tag);
         #[cfg(not(feature = "gl_backend"))]
-        { let _ = tag; }
+        {
+            let _ = tag;
+        }
         GpuSampleQuery
     }
 
@@ -363,7 +376,10 @@ impl GpuProfiler {
             }
         }
         #[cfg(not(feature = "gl_backend"))]
-        { let _ = label; GpuMarker }
+        {
+            let _ = label;
+            GpuMarker
+        }
     }
 
     pub fn place_marker(&mut self, label: &str) {
@@ -372,7 +388,9 @@ impl GpuProfiler {
             GpuMarker::fire(gl, label, self.debug_method)
         }
         #[cfg(not(feature = "gl_backend"))]
-        { let _ = label; }
+        {
+            let _ = label;
+        }
     }
 }
 
@@ -391,13 +409,13 @@ impl GpuMarker {
     fn new(gl: &Rc<dyn gl::Gl>, message: &str, debug_method: GpuDebugMethod) -> Self {
         let gl = match debug_method {
             GpuDebugMethod::KHR => {
-              gl.push_debug_group_khr(gl::DEBUG_SOURCE_APPLICATION, 0, message);
-              Some((Rc::clone(gl), debug_method))
-            },
+                gl.push_debug_group_khr(gl::DEBUG_SOURCE_APPLICATION, 0, message);
+                Some((Rc::clone(gl), debug_method))
+            }
             GpuDebugMethod::MarkerEXT => {
-              gl.push_group_marker_ext(message);
-              Some((Rc::clone(gl), debug_method))
-            },
+                gl.push_group_marker_ext(message);
+                Some((Rc::clone(gl), debug_method))
+            }
             GpuDebugMethod::None => None,
         };
         GpuMarker { gl }
@@ -405,7 +423,13 @@ impl GpuMarker {
 
     fn fire(gl: &Rc<dyn gl::Gl>, message: &str, debug_method: GpuDebugMethod) {
         match debug_method {
-            GpuDebugMethod::KHR => gl.debug_message_insert_khr(gl::DEBUG_SOURCE_APPLICATION, gl::DEBUG_TYPE_MARKER, 0, gl::DEBUG_SEVERITY_NOTIFICATION, message),
+            GpuDebugMethod::KHR => gl.debug_message_insert_khr(
+                gl::DEBUG_SOURCE_APPLICATION,
+                gl::DEBUG_TYPE_MARKER,
+                0,
+                gl::DEBUG_SEVERITY_NOTIFICATION,
+                message,
+            ),
             GpuDebugMethod::MarkerEXT => gl.insert_event_marker_ext(message),
             GpuDebugMethod::None => {}
         };

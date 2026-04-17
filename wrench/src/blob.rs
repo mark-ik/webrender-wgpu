@@ -43,8 +43,7 @@ fn render_blob(
 ) -> BlobImageResult {
     // Allocate storage for the result. Right now the resource cache expects the
     // tiles to have have no stride or offset.
-    let buf_size = descriptor.rect.area() *
-        descriptor.format.bytes_per_pixel();
+    let buf_size = descriptor.rect.area() * descriptor.format.bytes_per_pixel();
     let mut texels = vec![0u8; (buf_size) as usize];
 
     // Generate a per-tile pattern to see it in the demo. For a real use case it would not
@@ -58,8 +57,8 @@ fn render_blob(
 
     let rasterized_rect = tx.transform_box(&dirty_rect);
 
-    for y in rasterized_rect.min.y .. rasterized_rect.max.y {
-        for x in rasterized_rect.min.x .. rasterized_rect.max.x {
+    for y in rasterized_rect.min.y..rasterized_rect.max.y {
+        for x in rasterized_rect.min.x..rasterized_rect.max.x {
             // Apply the tile's offset. This is important: all drawing commands should be
             // translated by this offset to give correct results with tiled blob images.
             let x2 = x + descriptor.rect.min.x;
@@ -78,7 +77,7 @@ fn render_blob(
                 ImageFormat::BGRA8 => {
                     let a = color.a * checker + tc;
                     let pixel_offset = ((y * descriptor.rect.width() + x) * 4) as usize;
-                    texels[pixel_offset    ] = premul(color.b * checker + tc, a);
+                    texels[pixel_offset] = premul(color.b * checker + tc, a);
                     texels[pixel_offset + 1] = premul(color.g * checker + tc, a);
                     texels[pixel_offset + 2] = premul(color.r * checker + tc, a);
                     texels[pixel_offset + 3] = a;
@@ -87,9 +86,10 @@ fn render_blob(
                     texels[(y * descriptor.rect.width() + x) as usize] = color.a * checker + tc;
                 }
                 _ => {
-                    return Err(BlobImageError::Other(
-                        format!("Unsupported image format {:?}", descriptor.format),
-                    ));
+                    return Err(BlobImageError::Other(format!(
+                        "Unsupported image format {:?}",
+                        descriptor.format
+                    )));
                 }
             }
         }
@@ -109,7 +109,9 @@ pub struct BlobCallbacks {
 
 impl BlobCallbacks {
     pub fn new() -> Self {
-        BlobCallbacks { request: Box::new(|_|()) }
+        BlobCallbacks {
+            request: Box::new(|_| ()),
+        }
     }
 }
 
@@ -132,14 +134,24 @@ impl BlobImageHandler for CheckerboardRenderer {
         Box::new(CheckerboardRenderer::new(Arc::clone(&self.callbacks)))
     }
 
-    fn add(&mut self, key: BlobImageKey, cmds: Arc<BlobImageData>,
-           _visible_rect: &DeviceIntRect, tile_size: TileSize) {
+    fn add(
+        &mut self,
+        key: BlobImageKey,
+        cmds: Arc<BlobImageData>,
+        _visible_rect: &DeviceIntRect,
+        tile_size: TileSize,
+    ) {
         self.image_cmds
             .insert(key, (deserialize_blob(&cmds[..]).unwrap(), tile_size));
     }
 
-    fn update(&mut self, key: BlobImageKey, cmds: Arc<BlobImageData>,
-              _visible_rect: &DeviceIntRect, _dirty_rect: &BlobDirtyRect) {
+    fn update(
+        &mut self,
+        key: BlobImageKey,
+        cmds: Arc<BlobImageData>,
+        _visible_rect: &DeviceIntRect,
+        _dirty_rect: &BlobDirtyRect,
+    ) {
         // Here, updating is just replacing the current version of the commands with
         // the new one (no incremental updates).
         self.image_cmds.get_mut(&key).unwrap().0 = deserialize_blob(&cmds[..]).unwrap();
@@ -166,7 +178,9 @@ impl BlobImageHandler for CheckerboardRenderer {
     }
 
     fn create_blob_rasterizer(&mut self) -> Box<dyn AsyncBlobImageRasterizer> {
-        Box::new(Rasterizer { image_cmds: self.image_cmds.clone() })
+        Box::new(Rasterizer {
+            image_cmds: self.image_cmds.clone(),
+        })
     }
 
     fn enable_multithreading(&mut self, _enable: bool) {}
@@ -192,8 +206,9 @@ impl AsyncBlobImageRasterizer for Rasterizer {
         _low_priority: bool,
         _tile_pool: &mut BlobTilePool,
     ) -> Vec<(BlobImageRequest, BlobImageResult)> {
-        let requests: Vec<Command> = requests.iter().map(
-            |item| {
+        let requests: Vec<Command> = requests
+            .iter()
+            .map(|item| {
                 let (color, tile_size) = self.image_cmds[&item.request.key];
 
                 Command {
@@ -204,11 +219,23 @@ impl AsyncBlobImageRasterizer for Rasterizer {
                     descriptor: item.descriptor,
                     dirty_rect: item.dirty_rect,
                 }
-            }
-        ).collect();
+            })
+            .collect();
 
-        requests.iter().map(|cmd| {
-            (cmd.request, render_blob(cmd.color, &cmd.descriptor, cmd.tile, cmd.tile_size, &cmd.dirty_rect))
-        }).collect()
+        requests
+            .iter()
+            .map(|cmd| {
+                (
+                    cmd.request,
+                    render_blob(
+                        cmd.color,
+                        &cmd.descriptor,
+                        cmd.tile,
+                        cmd.tile_size,
+                        &cmd.dirty_rect,
+                    ),
+                )
+            })
+            .collect()
     }
 }

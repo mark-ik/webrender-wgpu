@@ -18,7 +18,6 @@ use webrender::render_api::*;
 use webrender::api::units::*;
 use winit::dpi::LogicalPosition;
 
-
 const EXT_SCROLL_ID_ROOT: u64 = 1;
 const EXT_SCROLL_ID_CONTENT: u64 = 2;
 
@@ -77,7 +76,7 @@ impl Example for App {
                 ClipChainId::INVALID,
                 info.spatial_id,
                 info.flags,
-                (0, 1)
+                (0, 1),
             );
             builder.push_rect(&info, info.clip_rect, ColorF::new(1.0, 1.0, 1.0, 1.0));
 
@@ -88,14 +87,17 @@ impl Example for App {
                 ClipChainId::INVALID,
                 info.spatial_id,
                 info.flags,
-                (0, 2)
+                (0, 2),
             );
             builder.push_rect(&info, info.clip_rect, ColorF::new(0.0, 0.0, 1.0, 1.0));
 
             // and a 50x50 green square next to it with an offset clip
             // to see what that looks like
             let info = CommonItemProperties::new(
-                (50, 0).to(100, 50).intersection(&(60, 10).to(110, 60)).unwrap(),
+                (50, 0)
+                    .to(100, 50)
+                    .intersection(&(60, 10).to(110, 60))
+                    .unwrap(),
                 space_and_clip1,
             );
             builder.push_hit_test(
@@ -103,7 +105,7 @@ impl Example for App {
                 ClipChainId::INVALID,
                 info.spatial_id,
                 info.flags,
-                (0, 3)
+                (0, 3),
             );
             builder.push_rect(&info, info.clip_rect, ColorF::new(0.0, 1.0, 0.0, 1.0));
 
@@ -127,16 +129,13 @@ impl Example for App {
 
             // give it a giant gray background just to distinguish it and to easily
             // visually identify the nested scrollbox
-            let info = CommonItemProperties::new(
-                (-1000, -1000).to(5000, 5000),
-                space_and_clip2,
-            );
+            let info = CommonItemProperties::new((-1000, -1000).to(5000, 5000), space_and_clip2);
             builder.push_hit_test(
                 info.clip_rect,
                 ClipChainId::INVALID,
                 info.spatial_id,
                 info.flags,
-                (0, 4)
+                (0, 4),
             );
             builder.push_rect(&info, info.clip_rect, ColorF::new(0.5, 0.5, 0.5, 1.0));
 
@@ -148,7 +147,7 @@ impl Example for App {
                 ClipChainId::INVALID,
                 info.spatial_id,
                 info.flags,
-                (0, 5)
+                (0, 5),
             );
             builder.push_rect(&info, info.clip_rect, ColorF::new(0.0, 1.0, 1.0, 1.0));
 
@@ -179,26 +178,19 @@ impl Example for App {
                 ClipChainId::INVALID,
                 info.spatial_id,
                 info.flags,
-                (0, 6)
+                (0, 6),
             );
-            builder.push_rect(
-                &info,
-                info.clip_rect,
-                ColorF::new(0.5, 0.5, 1.0, 1.0),
-            );
+            builder.push_rect(&info, info.clip_rect, ColorF::new(0.5, 0.5, 1.0, 1.0));
 
             // just for good measure add another teal square further down and to
             // the right, which can be scrolled into view by the user
-            let info = CommonItemProperties::new(
-                (250, 350).to(300, 400),
-                space_and_clip2,
-            );
+            let info = CommonItemProperties::new((250, 350).to(300, 400), space_and_clip2);
             builder.push_hit_test(
                 info.clip_rect,
                 ClipChainId::INVALID,
                 info.spatial_id,
                 info.flags,
-                (0, 7)
+                (0, 7),
             );
             builder.push_rect(&info, info.clip_rect, ColorF::new(0.0, 1.0, 1.0, 1.0));
 
@@ -218,11 +210,12 @@ impl Example for App {
         let mut txn = Transaction::new();
         match event {
             winit::event::WindowEvent::KeyboardInput {
-                input: winit::event::KeyboardInput {
-                    state: winit::event::ElementState::Pressed,
-                    virtual_keycode: Some(key),
-                    ..
-                },
+                input:
+                    winit::event::KeyboardInput {
+                        state: winit::event::ElementState::Pressed,
+                        virtual_keycode: Some(key),
+                        ..
+                    },
                 ..
             } => {
                 let offset = match key {
@@ -262,18 +255,15 @@ impl Example for App {
                 txn.set_scroll_offsets(
                     ExternalScrollId(EXT_SCROLL_ID_CONTENT, PipelineId::dummy()),
                     vec![SampledScrollOffset {
-                            offset: self.scroll_offset,
-                            generation: APZScrollGeneration::default(),
+                        offset: self.scroll_offset,
+                        generation: APZScrollGeneration::default(),
                     }],
                 );
 
                 txn.generate_frame(0, true, false, RenderReasons::empty());
             }
             winit::event::WindowEvent::MouseInput { .. } => {
-                let results = api.hit_test(
-                    document_id,
-                    self.cursor_position,
-                );
+                let results = api.hit_test(document_id, self.cursor_position);
 
                 println!("Hit test results:");
                 for item in &results.items {

@@ -11,7 +11,8 @@ use std::{marker::PhantomData, num::NonZeroUsize, ops};
 use api::units::*;
 use crate::{
     device::{
-        Device, GpuDevice, Texture, TextureFilter, TextureUploader, UploadPBOPool, VertexUsageHint, VAO,
+        Device, GpuDevice, Texture, TextureFilter, TextureUploader, UploadPBOPool, VertexUsageHint,
+        VAO,
     },
     frame_builder::Frame,
     gpu_types::{PrimitiveHeaderI, PrimitiveHeaderF, TransformData},
@@ -890,7 +891,11 @@ impl<T> VertexDataTexture<T> {
         self.texture.as_ref().map_or(0, |t| t.size_in_bytes())
     }
 
-    fn ensure_texture<D: GpuDevice<Texture = Texture>>(&mut self, device: &mut D, needed_height: i32) {
+    fn ensure_texture<D: GpuDevice<Texture = Texture>>(
+        &mut self,
+        device: &mut D,
+        needed_height: i32,
+    ) {
         let existing_height = self
             .texture
             .as_ref()
@@ -964,22 +969,14 @@ impl<T> VertexDataTexture<T> {
         // (like Intel iGPUs) that prefers power-of-two sizes of textures ([1]).
         //
         // [1] https://software.intel.com/en-us/articles/opengl-performance-tips-power-of-two-textures-have-better-performance
-        let logical_width = layout::logical_width(data.len(), texels_per_item, needed_height as usize);
+        let logical_width =
+            layout::logical_width(data.len(), texels_per_item, needed_height as usize);
 
-        let rect = DeviceIntRect::from_size(
-            DeviceIntSize::new(logical_width as i32, needed_height),
-        );
+        let rect =
+            DeviceIntRect::from_size(DeviceIntSize::new(logical_width as i32, needed_height));
 
         debug_assert!(len <= data.capacity(), "CPU copy will read out of bounds");
-        texture_uploader.upload(
-            device,
-            self.texture(),
-            rect,
-            None,
-            None,
-            data.as_ptr(),
-            len,
-        );
+        texture_uploader.upload(device, self.texture(), rect, None, None, data.as_ptr(), len);
     }
 
     pub fn deinit<D: GpuDevice<Texture = Texture>>(mut self, device: &mut D) {
@@ -1086,14 +1083,19 @@ impl RendererVertexData {
     #[cfg(feature = "gl_backend")]
     pub fn new_gl() -> Self {
         let mut textures = Vec::new();
-        for _ in 0 .. super::VERTEX_DATA_TEXTURE_COUNT {
+        for _ in 0..super::VERTEX_DATA_TEXTURE_COUNT {
             textures.push(VertexDataTextures::new());
         }
-        Self::Gl(GlRendererVertexData { textures, current: 0 })
+        Self::Gl(GlRendererVertexData {
+            textures,
+            current: 0,
+        })
     }
 
     #[cfg(feature = "wgpu_backend")]
-    pub fn new_wgpu() -> Self { Self::Wgpu(WgpuRendererVertexData) }
+    pub fn new_wgpu() -> Self {
+        Self::Wgpu(WgpuRendererVertexData)
+    }
 
     #[cfg(feature = "gl_backend")]
     fn gl(&self) -> &GlRendererVertexData {
@@ -1129,10 +1131,14 @@ impl RendererVertexData {
         match self {
             #[cfg(feature = "gl_backend")]
             Self::Gl(state) => {
-                for textures in state.textures { textures.deinit(device); }
+                for textures in state.textures {
+                    textures.deinit(device);
+                }
             }
             #[cfg(feature = "wgpu_backend")]
-            Self::Wgpu(..) => { let _ = device; }
+            Self::Wgpu(..) => {
+                let _ = device;
+            }
         }
     }
 
@@ -1183,11 +1189,13 @@ impl RendererVAOs {
         match indexed_quads {
             Some(count) => {
                 assert!(count.get() < u16::MAX as usize);
-                let quad_indices = (0 .. count.get() as u16)
-                    .flat_map(|instance| QUAD_INDICES.iter().map(move |&index| instance * 4 + index))
+                let quad_indices = (0..count.get() as u16)
+                    .flat_map(|instance| {
+                        QUAD_INDICES.iter().map(move |&index| instance * 4 + index)
+                    })
                     .collect::<Vec<_>>();
                 device.update_vao_indices(&prim_vao, &quad_indices, VertexUsageHint::Static);
-                let quad_vertices = (0 .. count.get() as u16)
+                let quad_vertices = (0..count.get() as u16)
                     .flat_map(|_| QUAD_VERTICES.iter().cloned())
                     .collect::<Vec<_>>();
                 device.update_vao_main_vertices(&prim_vao, &quad_vertices, VertexUsageHint::Static);
@@ -1206,13 +1214,18 @@ impl RendererVAOs {
             border_vao: device.create_vao_with_new_instances(&desc::BORDER, &prim_vao),
             scale_vao: device.create_vao_with_new_instances(&desc::SCALE, &prim_vao),
             line_vao: device.create_vao_with_new_instances(&desc::LINE, &prim_vao),
-            fast_linear_gradient_vao: device.create_vao_with_new_instances(&desc::FAST_LINEAR_GRADIENT, &prim_vao),
-            linear_gradient_vao: device.create_vao_with_new_instances(&desc::LINEAR_GRADIENT, &prim_vao),
-            radial_gradient_vao: device.create_vao_with_new_instances(&desc::RADIAL_GRADIENT, &prim_vao),
-            conic_gradient_vao: device.create_vao_with_new_instances(&desc::CONIC_GRADIENT, &prim_vao),
+            fast_linear_gradient_vao: device
+                .create_vao_with_new_instances(&desc::FAST_LINEAR_GRADIENT, &prim_vao),
+            linear_gradient_vao: device
+                .create_vao_with_new_instances(&desc::LINEAR_GRADIENT, &prim_vao),
+            radial_gradient_vao: device
+                .create_vao_with_new_instances(&desc::RADIAL_GRADIENT, &prim_vao),
+            conic_gradient_vao: device
+                .create_vao_with_new_instances(&desc::CONIC_GRADIENT, &prim_vao),
             resolve_vao: device.create_vao_with_new_instances(&desc::RESOLVE, &prim_vao),
             svg_filter_vao: device.create_vao_with_new_instances(&desc::SVG_FILTER, &prim_vao),
-            svg_filter_node_vao: device.create_vao_with_new_instances(&desc::SVG_FILTER_NODE, &prim_vao),
+            svg_filter_node_vao: device
+                .create_vao_with_new_instances(&desc::SVG_FILTER_NODE, &prim_vao),
             composite_vao: device.create_vao_with_new_instances(&desc::COMPOSITE, &prim_vao),
             clear_vao: device.create_vao_with_new_instances(&desc::CLEAR, &prim_vao),
             copy_vao: device.create_vao_with_new_instances(&desc::COPY, &prim_vao),
@@ -1260,7 +1273,9 @@ impl RendererVaoState {
     }
 
     #[cfg(feature = "wgpu_backend")]
-    pub fn new_wgpu() -> Self { Self::Wgpu(WgpuRendererVaos) }
+    pub fn new_wgpu() -> Self {
+        Self::Wgpu(WgpuRendererVaos)
+    }
 
     #[cfg(feature = "gl_backend")]
     pub fn vao(&self, kind: VertexArrayKind) -> &VAO {
@@ -1308,7 +1323,9 @@ impl RendererVaoState {
             #[cfg(feature = "gl_backend")]
             Self::Gl(vaos) => vaos.deinit(device),
             #[cfg(feature = "wgpu_backend")]
-            Self::Wgpu(..) => { let _ = device; }
+            Self::Wgpu(..) => {
+                let _ = device;
+            }
         }
     }
 }

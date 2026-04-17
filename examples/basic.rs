@@ -19,13 +19,11 @@ use webrender::render_api::*;
 use webrender::api::units::*;
 
 fn main() {
-    let mut app = App {
-    };
+    let mut app = App {};
     boilerplate::main_wrapper(&mut app, None);
 }
 
-struct App {
-}
+struct App {}
 
 impl Example for App {
     // Make this the only example to test all shaders for compile errors.
@@ -53,18 +51,18 @@ impl Example for App {
         let complex = ComplexClipRegion::new(
             (50, 50).to(150, 150),
             BorderRadius::uniform(20.0),
-            ClipMode::Clip
+            ClipMode::Clip,
         );
-        let clip_id = builder.define_clip_rounded_rect(
-            root_space_and_clip.spatial_id,
-            complex,
-        );
+        let clip_id = builder.define_clip_rounded_rect(root_space_and_clip.spatial_id, complex);
         let clip_chain_id = builder.define_clip_chain(None, [clip_id]);
 
         builder.push_rect(
             &CommonItemProperties::new(
                 (100, 100).to(200, 200),
-                SpaceAndClipInfo { spatial_id, clip_chain_id },
+                SpaceAndClipInfo {
+                    spatial_id,
+                    clip_chain_id,
+                },
             ),
             (100, 100).to(200, 200),
             ColorF::new(0.0, 1.0, 0.0, 1.0),
@@ -73,7 +71,10 @@ impl Example for App {
         builder.push_rect(
             &CommonItemProperties::new(
                 (250, 100).to(350, 200),
-                SpaceAndClipInfo { spatial_id, clip_chain_id },
+                SpaceAndClipInfo {
+                    spatial_id,
+                    clip_chain_id,
+                },
             ),
             (250, 100).to(350, 200),
             ColorF::new(0.0, 1.0, 0.0, 1.0),
@@ -96,7 +97,10 @@ impl Example for App {
         builder.push_border(
             &CommonItemProperties::new(
                 bounds,
-                SpaceAndClipInfo { spatial_id, clip_chain_id },
+                SpaceAndClipInfo {
+                    spatial_id,
+                    clip_chain_id,
+                },
             ),
             bounds,
             border_widths,

@@ -119,9 +119,7 @@ impl RendererBackend {
     pub fn create_gl_device(self, options: &mut WebRenderOptions) -> Device {
         options.prepare_for_device_creation();
         match self {
-            RendererBackend::Gl { gl } => {
-                Device::new(gl, options.take_device_config())
-            }
+            RendererBackend::Gl { gl } => Device::new(gl, options.take_device_config()),
             #[cfg(feature = "wgpu_backend")]
             _ => panic!("create_gl_device called on a non-GL RendererBackend"),
         }

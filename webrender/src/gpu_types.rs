@@ -18,7 +18,6 @@ use crate::util::{MatrixHelpers, TransformedRectKind};
 use glyph_rasterizer::SubpixelDirection;
 use crate::util::pack_as_float;
 
-
 // Contains type that must exactly match the same structures declared in GLSL.
 
 pub const VECS_PER_TRANSFORM: usize = 8;
@@ -147,7 +146,11 @@ pub struct ScalingInstance {
 }
 
 impl ScalingInstance {
-    pub fn new(target_rect: DeviceRect, source_rect: DeviceRect, source_rect_normalized: bool) -> Self {
+    pub fn new(
+        target_rect: DeviceRect,
+        source_rect: DeviceRect,
+        source_rect_normalized: bool,
+    ) -> Self {
         let source_rect_type = match source_rect_normalized {
             true => UV_TYPE_NORMALIZED,
             false => UV_TYPE_UNNORMALIZED,
@@ -296,8 +299,8 @@ pub struct CompositeInstance {
     // Packed into a single vec4 (aParams)
     _padding: f32,
     color_space_or_uv_type: f32, // YuvColorSpace for YUV;
-                                 // UV coordinate space for RGB
-    yuv_format: f32,            // YuvFormat
+    // UV coordinate space for RGB
+    yuv_format: f32, // YuvFormat
     yuv_channel_bit_depth: f32,
 
     // UV rectangles (pixel space) for color / yuv texture planes
@@ -378,7 +381,6 @@ impl CompositeInstance {
         flip: (bool, bool),
         clip: Option<&CompositorClip>,
     ) -> Self {
-
         let (rounded_clip_rect, rounded_clip_radii) = Self::vertex_clip_params(clip, rect);
 
         CompositeInstance {
@@ -439,20 +441,16 @@ impl CompositeInstance {
         default_rect: DeviceRect,
     ) -> (DeviceRect, [f32; 4]) {
         match clip {
-            Some(clip) => {
-                (
-                    clip.rect.cast_unit(),
-                    [
-                        clip.radius.top_left.width,
-                        clip.radius.bottom_left.width,
-                        clip.radius.top_right.width,
-                        clip.radius.bottom_right.width,
-                    ],
-                )
-            }
-            None => {
-                (default_rect, [0.0; 4])
-            }
+            Some(clip) => (
+                clip.rect.cast_unit(),
+                [
+                    clip.radius.top_left.width,
+                    clip.radius.bottom_left.width,
+                    clip.radius.top_right.width,
+                    clip.radius.bottom_right.width,
+                ],
+            ),
+            None => (default_rect, [0.0; 4]),
         }
     }
 }
@@ -556,18 +554,15 @@ pub struct GlyphInstance {
 }
 
 impl GlyphInstance {
-    pub fn new(
-        prim_header_index: PrimitiveHeaderIndex,
-    ) -> Self {
-        GlyphInstance {
-            prim_header_index,
-        }
+    pub fn new(prim_header_index: PrimitiveHeaderIndex) -> Self {
+        GlyphInstance { prim_header_index }
     }
 
     // TODO(gw): Some of these fields can be moved to the primitive
     //           header since they are constant, and some can be
     //           compressed to a smaller size.
-    pub fn build(&self,
+    pub fn build(
+        &self,
         clip_task: RenderTaskAddress,
         subpx_dir: SubpixelDirection,
         glyph_index_in_text_run: i32,
@@ -579,8 +574,8 @@ impl GlyphInstance {
                 self.prim_header_index.0 as i32,
                 clip_task.0 as i32,
                 (subpx_dir as u32 as i32) << 24
-                | (color_mode as u32 as i32) << 16
-                | glyph_index_in_text_run,
+                    | (color_mode as u32 as i32) << 16
+                    | glyph_index_in_text_run,
                 glyph_uv_rect.as_int(),
             ],
         }
@@ -633,12 +628,10 @@ impl From<QuadInstance> for PrimitiveInstanceData {
             data: [
                 instance.prim_address_i.as_int(),
                 instance.prim_address_f.as_int(),
-
-                ((instance.quad_flags as i32)    << 24) |
-                ((instance.edge_flags as i32)    << 16) |
-                ((instance.part_index as i32)    <<  8) |
-                ((instance.segment_index as i32) <<  0),
-
+                ((instance.quad_flags as i32) << 24)
+                    | ((instance.edge_flags as i32) << 16)
+                    | ((instance.part_index as i32) << 8)
+                    | ((instance.segment_index as i32) << 0),
                 instance.dst_task_address.0,
             ],
         }
@@ -681,7 +674,6 @@ pub struct MaskInstance {
     pub clip_space: u32,
     pub unused: i32,
 }
-
 
 // Note: This can use up to 12 bits due to how it will
 // be packed in the instance data.
@@ -753,10 +745,10 @@ impl From<BrushInstance> for PrimitiveInstanceData {
                 instance.prim_header_index.0,
                 instance.clip_task_address.0,
                 instance.segment_index
-                | ((instance.brush_flags.bits() as i32) << 16)
-                | ((instance.edge_flags.bits() as i32) << 28),
+                    | ((instance.brush_flags.bits() as i32) << 16)
+                    | ((instance.edge_flags.bits() as i32) << 28),
                 instance.resource_address,
-            ]
+            ],
         }
     }
 }
@@ -869,10 +861,7 @@ pub struct TransformPalette {
 }
 
 impl TransformPalette {
-    pub fn new(
-        count: usize,
-        memory: &FrameMemory,
-    ) -> Self {
+    pub fn new(count: usize, memory: &FrameMemory) -> Self {
         let _ = VECS_PER_TRANSFORM;
 
         let mut transforms = memory.new_vec_with_capacity(count);
@@ -909,22 +898,14 @@ impl TransformPalette {
             let metadata = &mut self.metadata;
             let transforms = &mut self.transforms;
 
-            *self.map
-                .entry(key)
-                .or_insert_with(|| {
-                    let transform = spatial_tree.get_relative_transform(
-                        child_index,
-                        parent_index,
-                    )
+            *self.map.entry(key).or_insert_with(|| {
+                let transform = spatial_tree
+                    .get_relative_transform(child_index, parent_index)
                     .into_transform()
                     .with_destination::<PicturePixel>();
 
-                    register_transform(
-                        metadata,
-                        transforms,
-                        transform,
-                    )
-                })
+                register_transform(metadata, transforms, transform)
+            })
         }
     }
 
@@ -938,33 +919,16 @@ impl TransformPalette {
         to_index: SpatialNodeIndex,
         spatial_tree: &SpatialTree,
     ) -> TransformPaletteId {
-        let index = self.get_index(
-            from_index,
-            to_index,
-            spatial_tree,
-        );
+        let index = self.get_index(from_index, to_index, spatial_tree);
         let transform_kind = self.metadata[index].transform_kind as u32;
-        TransformPaletteId(
-            (index as u32) |
-            (transform_kind << 23)
-        )
+        TransformPaletteId((index as u32) | (transform_kind << 23))
     }
 
-    pub fn get_custom(
-        &mut self,
-        transform: LayoutToPictureTransform,
-    ) -> TransformPaletteId {
-        let index = register_transform(
-            &mut self.metadata,
-            &mut self.transforms,
-            transform,
-        );
+    pub fn get_custom(&mut self, transform: LayoutToPictureTransform) -> TransformPaletteId {
+        let index = register_transform(&mut self.metadata, &mut self.transforms, transform);
 
         let transform_kind = self.metadata[index].transform_kind as u32;
-        TransformPaletteId(
-            (index as u32) |
-            (transform_kind << 23)
-        )
+        TransformPaletteId((index as u32) | (transform_kind << 23))
     }
 }
 
@@ -1009,16 +973,17 @@ impl ImageSource {
     pub fn write_gpu_blocks(&self, request: &mut GpuDataRequest) {
         // see fetch_image_resource in GLSL
         // has to be VECS_PER_IMAGE_RESOURCE vectors
-        request.push([
-            self.p0.x,
-            self.p0.y,
-            self.p1.x,
-            self.p1.y,
-        ]);
+        request.push([self.p0.x, self.p0.y, self.p1.x, self.p1.y]);
         request.push(self.user_data);
 
         // If this is a polygon uv kind, then upload the four vertices.
-        if let UvRectKind::Quad { top_left, top_right, bottom_left, bottom_right } = self.uv_rect_kind {
+        if let UvRectKind::Quad {
+            top_left,
+            top_right,
+            bottom_left,
+            bottom_right,
+        } = self.uv_rect_kind
+        {
             // see fetch_image_resource_extra in GLSL
             //Note: we really need only 3 components per point here: X, Y, and W
             request.push(top_left);
@@ -1043,7 +1008,7 @@ fn register_transform(
         .unwrap_or_else(PictureToLayoutTransform::identity);
 
     let metadata = TransformMetadata {
-        transform_kind: transform.transform_kind()
+        transform_kind: transform.transform_kind(),
     };
     let data = TransformData {
         transform,

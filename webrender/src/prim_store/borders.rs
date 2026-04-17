@@ -12,10 +12,9 @@ use crate::gpu_cache::GpuDataRequest;
 use crate::intern;
 use crate::internal_types::{LayoutPrimitiveInfo, FrameId};
 use crate::prim_store::{
-    BorderSegmentInfo, BrushSegment, NinePatchDescriptor, PrimKey,
-    PrimTemplate, PrimTemplateCommonData,
-    PrimitiveInstanceKind, PrimitiveOpacity,
-    PrimitiveStore, InternablePrimitive,
+    BorderSegmentInfo, BrushSegment, NinePatchDescriptor, PrimKey, PrimTemplate,
+    PrimTemplateCommonData, PrimitiveInstanceKind, PrimitiveOpacity, PrimitiveStore,
+    InternablePrimitive,
 };
 use crate::resource_cache::ImageRequest;
 use crate::render_task::RenderTask;
@@ -34,10 +33,7 @@ pub struct NormalBorderPrim {
 pub type NormalBorderKey = PrimKey<NormalBorderPrim>;
 
 impl NormalBorderKey {
-    pub fn new(
-        info: &LayoutPrimitiveInfo,
-        normal_border: NormalBorderPrim,
-    ) -> Self {
+    pub fn new(info: &LayoutPrimitiveInfo, normal_border: NormalBorderPrim) -> Self {
         NormalBorderKey {
             common: info.into(),
             kind: normal_border,
@@ -75,34 +71,19 @@ impl NormalBorderData {
         common.opacity = PrimitiveOpacity::translucent();
     }
 
-    fn write_prim_gpu_blocks(
-        &self,
-        request: &mut GpuDataRequest,
-        prim_size: LayoutSize
-    ) {
+    fn write_prim_gpu_blocks(&self, request: &mut GpuDataRequest, prim_size: LayoutSize) {
         // Border primitives currently used for
         // image borders, and run through the
         // normal brush_image shader.
         request.push(PremultipliedColorF::WHITE);
         request.push(PremultipliedColorF::WHITE);
-        request.push([
-            prim_size.width,
-            prim_size.height,
-            0.0,
-            0.0,
-        ]);
+        request.push([prim_size.width, prim_size.height, 0.0, 0.0]);
     }
 
-    fn write_segment_gpu_blocks(
-        &self,
-        request: &mut GpuDataRequest,
-    ) {
+    fn write_segment_gpu_blocks(&self, request: &mut GpuDataRequest) {
         for segment in &self.brush_segments {
             // has to match VECS_PER_SEGMENT
-            request.write_segment(
-                segment.local_rect,
-                segment.extra_data,
-            );
+            request.write_segment(segment.local_rect, segment.extra_data);
         }
     }
 }
@@ -137,7 +118,7 @@ impl From<NormalBorderKey> for NormalBorderTemplate {
                 border_segments,
                 border,
                 widths,
-            }
+            },
         }
     }
 }
@@ -152,14 +133,8 @@ impl intern::Internable for NormalBorderPrim {
 }
 
 impl InternablePrimitive for NormalBorderPrim {
-    fn into_key(
-        self,
-        info: &LayoutPrimitiveInfo,
-    ) -> NormalBorderKey {
-        NormalBorderKey::new(
-            info,
-            self,
-        )
+    fn into_key(self, info: &LayoutPrimitiveInfo) -> NormalBorderKey {
+        NormalBorderKey::new(info, self)
     }
 
     fn make_instance_kind(
@@ -175,12 +150,7 @@ impl InternablePrimitive for NormalBorderPrim {
 }
 
 impl CreateShadow for NormalBorderPrim {
-    fn create_shadow(
-        &self,
-        shadow: &Shadow,
-        _: bool,
-        _: RasterSpace,
-    ) -> Self {
+    fn create_shadow(&self, shadow: &Shadow, _: bool, _: RasterSpace) -> Self {
         let border = self.border.with_color(shadow.color.into());
         NormalBorderPrim {
             border,
@@ -209,10 +179,7 @@ pub struct ImageBorder {
 pub type ImageBorderKey = PrimKey<ImageBorder>;
 
 impl ImageBorderKey {
-    pub fn new(
-        info: &LayoutPrimitiveInfo,
-        image_border: ImageBorder,
-    ) -> Self {
+    pub fn new(info: &LayoutPrimitiveInfo, image_border: ImageBorder) -> Self {
         ImageBorderKey {
             common: info.into(),
             kind: image_border,
@@ -221,7 +188,6 @@ impl ImageBorderKey {
 }
 
 impl intern::InternDebug for ImageBorderKey {}
-
 
 #[cfg_attr(feature = "capture", derive(Serialize))]
 #[cfg_attr(feature = "replay", derive(Deserialize))]
@@ -254,14 +220,15 @@ impl ImageBorderData {
         if self.frame_id != frame_id {
             self.frame_id = frame_id;
 
-            let size = frame_state.resource_cache.request_image(
-                self.request,
-                frame_state.gpu_cache,
-            );
+            let size = frame_state
+                .resource_cache
+                .request_image(self.request, frame_state.gpu_cache);
 
-            let task_id = frame_state.rg_builder.add().init(
-                RenderTask::new_image(size, self.request, false)
-            );
+            let task_id =
+                frame_state
+                    .rg_builder
+                    .add()
+                    .init(RenderTask::new_image(size, self.request, false));
 
             self.src_color = Some(task_id);
 
@@ -274,37 +241,24 @@ impl ImageBorderData {
                 .unwrap_or(true);
         }
 
-        common.opacity = PrimitiveOpacity { is_opaque: self.is_opaque };
+        common.opacity = PrimitiveOpacity {
+            is_opaque: self.is_opaque,
+        };
     }
 
-    fn write_prim_gpu_blocks(
-        &self,
-        request: &mut GpuDataRequest,
-        prim_size: &LayoutSize,
-    ) {
+    fn write_prim_gpu_blocks(&self, request: &mut GpuDataRequest, prim_size: &LayoutSize) {
         // Border primitives currently used for
         // image borders, and run through the
         // normal brush_image shader.
         request.push(PremultipliedColorF::WHITE);
         request.push(PremultipliedColorF::WHITE);
-        request.push([
-            prim_size.width,
-            prim_size.height,
-            0.0,
-            0.0,
-        ]);
+        request.push([prim_size.width, prim_size.height, 0.0, 0.0]);
     }
 
-    fn write_segment_gpu_blocks(
-        &self,
-        request: &mut GpuDataRequest,
-    ) {
+    fn write_segment_gpu_blocks(&self, request: &mut GpuDataRequest) {
         for segment in &self.brush_segments {
             // has to match VECS_PER_SEGMENT
-            request.write_segment(
-                segment.local_rect,
-                segment.extra_data,
-            );
+            request.write_segment(segment.local_rect, segment.extra_data);
         }
     }
 }
@@ -324,7 +278,7 @@ impl From<ImageBorderKey> for ImageBorderTemplate {
                 src_color: None,
                 frame_id: FrameId::INVALID,
                 is_opaque: false,
-            }
+            },
         }
     }
 }
@@ -339,14 +293,8 @@ impl intern::Internable for ImageBorder {
 }
 
 impl InternablePrimitive for ImageBorder {
-    fn into_key(
-        self,
-        info: &LayoutPrimitiveInfo,
-    ) -> ImageBorderKey {
-        ImageBorderKey::new(
-            info,
-            self,
-        )
+    fn into_key(self, info: &LayoutPrimitiveInfo) -> ImageBorderKey {
+        ImageBorderKey::new(info, self)
     }
 
     fn make_instance_kind(
@@ -354,9 +302,7 @@ impl InternablePrimitive for ImageBorder {
         data_handle: ImageBorderDataHandle,
         _: &mut PrimitiveStore,
     ) -> PrimitiveInstanceKind {
-        PrimitiveInstanceKind::ImageBorder {
-            data_handle
-        }
+        PrimitiveInstanceKind::ImageBorder { data_handle }
     }
 }
 
@@ -376,10 +322,34 @@ fn test_struct_sizes() {
     //     test expectations and move on.
     // (b) You made a structure larger. This is not necessarily a problem, but should only
     //     be done with care, and after checking if talos performance regresses badly.
-    assert_eq!(mem::size_of::<NormalBorderPrim>(), 84, "NormalBorderPrim size changed");
-    assert_eq!(mem::size_of::<NormalBorderTemplate>(), 216, "NormalBorderTemplate size changed");
-    assert_eq!(mem::size_of::<NormalBorderKey>(), 104, "NormalBorderKey size changed");
-    assert_eq!(mem::size_of::<ImageBorder>(), 68, "ImageBorder size changed");
-    assert_eq!(mem::size_of::<ImageBorderTemplate>(), 104, "ImageBorderTemplate size changed");
-    assert_eq!(mem::size_of::<ImageBorderKey>(), 88, "ImageBorderKey size changed");
+    assert_eq!(
+        mem::size_of::<NormalBorderPrim>(),
+        84,
+        "NormalBorderPrim size changed"
+    );
+    assert_eq!(
+        mem::size_of::<NormalBorderTemplate>(),
+        216,
+        "NormalBorderTemplate size changed"
+    );
+    assert_eq!(
+        mem::size_of::<NormalBorderKey>(),
+        104,
+        "NormalBorderKey size changed"
+    );
+    assert_eq!(
+        mem::size_of::<ImageBorder>(),
+        68,
+        "ImageBorder size changed"
+    );
+    assert_eq!(
+        mem::size_of::<ImageBorderTemplate>(),
+        104,
+        "ImageBorderTemplate size changed"
+    );
+    assert_eq!(
+        mem::size_of::<ImageBorderKey>(),
+        88,
+        "ImageBorderKey size changed"
+    );
 }

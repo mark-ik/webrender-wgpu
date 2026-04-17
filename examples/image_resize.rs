@@ -32,12 +32,7 @@ impl Example for App {
         _document_id: DocumentId,
     ) {
         let (image_descriptor, image_data) = image_helper::make_checkerboard(32, 32);
-        txn.add_image(
-            self.image_key,
-            image_descriptor,
-            image_data,
-            None,
-        );
+        txn.add_image(self.image_key, image_descriptor, image_data, None);
 
         let bounds = (0, 0).to(512, 512);
         let space_and_clip = SpaceAndClipInfo::root_scroll(pipeline_id);
@@ -86,16 +81,17 @@ impl Example for App {
     ) -> bool {
         match event {
             winit::event::WindowEvent::KeyboardInput {
-                input: winit::event::KeyboardInput {
-                    state: winit::event::ElementState::Pressed,
-                    virtual_keycode: Some(winit::event::VirtualKeyCode::Space),
-                    ..
-                },
+                input:
+                    winit::event::KeyboardInput {
+                        state: winit::event::ElementState::Pressed,
+                        virtual_keycode: Some(winit::event::VirtualKeyCode::Space),
+                        ..
+                    },
                 ..
             } => {
                 let mut image_data = Vec::new();
-                for y in 0 .. 64 {
-                    for x in 0 .. 64 {
+                for y in 0..64 {
+                    for x in 0..64 {
                         let r = 255 * ((y & 32) == 0) as u8;
                         let g = 255 * ((x & 32) == 0) as u8;
                         image_data.extend_from_slice(&[0, g, r, 0xff]);
@@ -105,7 +101,12 @@ impl Example for App {
                 let mut txn = Transaction::new();
                 txn.update_image(
                     self.image_key,
-                    ImageDescriptor::new(64, 64, ImageFormat::BGRA8, ImageDescriptorFlags::IS_OPAQUE),
+                    ImageDescriptor::new(
+                        64,
+                        64,
+                        ImageFormat::BGRA8,
+                        ImageDescriptorFlags::IS_OPAQUE,
+                    ),
                     ImageData::new(image_data),
                     &DirtyRect::All,
                 );

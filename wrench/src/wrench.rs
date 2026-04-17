@@ -2,7 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-
 use crate::blob;
 use crossbeam::sync::chase_lev;
 #[cfg(windows)]
@@ -42,8 +41,13 @@ pub struct DisplayList {
 //           use better types for things like the style and stretch.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum FontDescriptor {
-    Path { path: PathBuf, font_index: u32 },
-    Family { name: String },
+    Path {
+        path: PathBuf,
+        font_index: u32,
+    },
+    Family {
+        name: String,
+    },
     Properties {
         family: String,
         weight: u32,
@@ -197,10 +201,17 @@ impl WrenchThing for CapturedSequence {
     }
 
     fn do_frame(&mut self, wrench: &mut Wrench) -> u32 {
-        let mut documents = wrench.api.load_capture(self.root.clone(), Some(self.frame_set[self.frame]));
-        println!("loaded {:?} from {:?}",
-            documents.iter().map(|cd| cd.document_id).collect::<Vec<_>>(),
-            self.frame_set[self.frame]);
+        let mut documents = wrench
+            .api
+            .load_capture(self.root.clone(), Some(self.frame_set[self.frame]));
+        println!(
+            "loaded {:?} from {:?}",
+            documents
+                .iter()
+                .map(|cd| cd.document_id)
+                .collect::<Vec<_>>(),
+            self.frame_set[self.frame]
+        );
         let captured = documents.swap_remove(0);
         wrench.document_id = captured.document_id;
         self.frame as u32
@@ -292,24 +303,19 @@ impl Wrench {
 
         let (timing_sender, timing_receiver) = chase_lev::deque();
         let notifier = notifier.unwrap_or_else(|| {
-            let data = Arc::new(Mutex::new(NotifierData::new(proxy, timing_receiver, verbose)));
+            let data = Arc::new(Mutex::new(NotifierData::new(
+                proxy,
+                timing_receiver,
+                verbose,
+            )));
             Box::new(Notifier(data))
         });
 
         let (renderer, sender) = if let Some(backend) = backend {
-            webrender::create_webrender_instance_with_backend(
-                backend,
-                notifier,
-                opts,
-                None,
-            ).unwrap()
+            webrender::create_webrender_instance_with_backend(backend, notifier, opts, None)
+                .unwrap()
         } else {
-            webrender::create_webrender_instance(
-                window.clone_gl(),
-                notifier,
-                opts,
-                None,
-            ).unwrap()
+            webrender::create_webrender_instance(window.clone_gl(), notifier, opts, None).unwrap()
         };
 
         let api = sender.create_api();
@@ -360,7 +366,8 @@ impl Wrench {
     ) -> (Vec<u32>, Vec<LayoutPoint>, LayoutRect) {
         // Map the string codepoints to glyph indices in this font.
         // Just drop any glyph that isn't present in this font.
-        let indices: Vec<u32> = self.api
+        let indices: Vec<u32> = self
+            .api
             .get_glyph_indices(font_key, text)
             .iter()
             .filter_map(|idx| *idx)
@@ -376,21 +383,36 @@ impl Wrench {
         let direction = if flags.contains(FontInstanceFlags::TRANSPOSE) {
             LayoutVector2D::new(
                 0.0,
-                if flags.contains(FontInstanceFlags::FLIP_Y) { -1.0 } else { 1.0 },
+                if flags.contains(FontInstanceFlags::FLIP_Y) {
+                    -1.0
+                } else {
+                    1.0
+                },
             )
         } else {
             LayoutVector2D::new(
-                if flags.contains(FontInstanceFlags::FLIP_X) { -1.0 } else { 1.0 },
+                if flags.contains(FontInstanceFlags::FLIP_X) {
+                    -1.0
+                } else {
+                    1.0
+                },
                 0.0,
             )
         };
         for metric in metrics {
             positions.push(cursor);
 
-            if let Some(GlyphDimensions { left, top, width, height, advance }) = metric {
+            if let Some(GlyphDimensions {
+                left,
+                top,
+                width,
+                height,
+                advance,
+            }) = metric
+            {
                 let glyph_rect = LayoutRect::from_origin_and_size(
                     LayoutPoint::new(cursor.x + left as f32, cursor.y - top as f32),
-                    LayoutSize::new(width as f32, height as f32)
+                    LayoutSize::new(width as f32, height as f32),
                 );
                 bounding_rect = bounding_rect.union(&glyph_rect);
                 cursor += direction * advance;
@@ -416,9 +438,7 @@ impl Wrench {
     pub fn set_title(&mut self, extra: &str) {
         self.window_title_to_set = Some(format!(
             "Wrench: {} - {} - {}",
-            extra,
-            self.graphics_api.renderer,
-            self.graphics_api.version
+            extra, self.graphics_api.renderer, self.graphics_api.version
         ));
     }
 
@@ -537,7 +557,8 @@ impl Wrench {
         key
     }
 
-    pub fn add_font_instance(&mut self,
+    pub fn add_font_instance(
+        &mut self,
         font_key: FontKey,
         size: f32,
         flags: FontInstanceFlags,
@@ -680,9 +701,13 @@ impl Wrench {
 
         loop {
             match rx.recv() {
-                Ok(NotifierEvent::ShutDown) => { break; }
+                Ok(NotifierEvent::ShutDown) => {
+                    break;
+                }
                 Ok(_) => {}
-                Err(e) => { panic!("Did not shut down properly: {:?}.", e); }
+                Err(e) => {
+                    panic!("Did not shut down properly: {:?}.", e);
+                }
             }
         }
 

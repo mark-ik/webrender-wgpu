@@ -64,7 +64,8 @@ fn string_to_color(color: &str) -> Option<ColorF> {
         "magenta" => Some(ColorF::new(1.0, 0.0, 1.0, 1.0)),
         "transparent" => Some(ColorF::new(1.0, 1.0, 1.0, 0.0)),
         s => {
-            let items: Vec<f32> = s.split_whitespace()
+            let items: Vec<f32> = s
+                .split_whitespace()
                 .map(|s| f32::from_str(s).unwrap())
                 .collect();
             if items.len() == 3 {
@@ -161,13 +162,7 @@ define_string_enum!(
     ]
 );
 
-define_string_enum!(
-    ColorSpace,
-    [
-        Srgb = "srgb",
-        LinearRgb = "linear-rgb"
-    ]
-);
+define_string_enum!(ColorSpace, [Srgb = "srgb", LinearRgb = "linear-rgb"]);
 
 // Rotate around `axis` by `degrees` angle
 fn make_rotation(
@@ -187,10 +182,7 @@ fn make_rotation(
     pre_transform.then(&transform).then(&post_transform)
 }
 
-pub fn make_perspective(
-    origin: LayoutPoint,
-    perspective: f32,
-) -> LayoutTransform {
+pub fn make_perspective(origin: LayoutPoint, perspective: f32) -> LayoutTransform {
     let pre_transform = LayoutTransform::translation(-origin.x, -origin.y, -0.0);
     let post_transform = LayoutTransform::translation(origin.x, origin.y, 0.0);
     let transform = LayoutTransform::perspective(perspective);
@@ -198,10 +190,7 @@ pub fn make_perspective(
 }
 
 // Create a skew matrix, specified in degrees.
-fn make_skew(
-    skew_x: f32,
-    skew_y: f32,
-) -> LayoutTransform {
+fn make_skew(skew_x: f32, skew_y: f32) -> LayoutTransform {
     let alpha = Angle::radians(skew_x.to_radians());
     let beta = Angle::radians(skew_y.to_radians());
     LayoutTransform::skew(alpha, beta)
@@ -226,11 +215,13 @@ impl YamlHelper for Yaml {
 
     fn as_vec_f32(&self) -> Option<Vec<f32>> {
         match *self {
-            Yaml::String(ref s) | Yaml::Real(ref s) => s.split_whitespace()
+            Yaml::String(ref s) | Yaml::Real(ref s) => s
+                .split_whitespace()
                 .map(f32::from_str)
                 .collect::<Result<Vec<_>, _>>()
                 .ok(),
-            Yaml::Array(ref v) => v.iter()
+            Yaml::Array(ref v) => v
+                .iter()
                 .map(|v| match *v {
                     Yaml::Integer(k) => Ok(k as f32),
                     Yaml::String(ref k) | Yaml::Real(ref k) => f32::from_str(k).map_err(|_| false),
@@ -244,11 +235,13 @@ impl YamlHelper for Yaml {
     }
 
     fn as_vec_u32(&self) -> Option<Vec<u32>> {
-        self.as_vec().map(|v| v.iter().map(|v| v.as_i64().unwrap() as u32).collect())
+        self.as_vec()
+            .map(|v| v.iter().map(|v| v.as_i64().unwrap() as u32).collect())
     }
 
     fn as_vec_u64(&self) -> Option<Vec<u64>> {
-        self.as_vec().map(|v| v.iter().map(|v| v.as_i64().unwrap() as u64).collect())
+        self.as_vec()
+            .map(|v| v.iter().map(|v| v.as_i64().unwrap() as u64).collect())
     }
 
     fn as_pipeline_id(&self) -> Option<PipelineId> {
@@ -314,10 +307,8 @@ impl YamlHelper for Yaml {
         if let Some(nums) = self.as_vec_f32() {
             assert_eq!(nums.len(), 16, "expected 16 floats, got '{:?}'", self);
             Some(LayoutTransform::new(
-                nums[0], nums[1], nums[2], nums[3],
-                nums[4], nums[5], nums[6], nums[7],
-                nums[8], nums[9], nums[10], nums[11],
-                nums[12], nums[13], nums[14], nums[15],
+                nums[0], nums[1], nums[2], nums[3], nums[4], nums[5], nums[6], nums[7], nums[8],
+                nums[9], nums[10], nums[11], nums[12], nums[13], nums[14], nums[15],
             ))
         } else {
             None
@@ -376,12 +367,8 @@ impl YamlHelper for Yaml {
                             let skew_y = args.get(1).and_then(|a| a.parse().ok()).unwrap_or(0.0);
                             make_skew(args[0].parse().unwrap(), skew_y)
                         }
-                        "skew-x" if args.len() == 1 => {
-                            make_skew(args[0].parse().unwrap(), 0.0)
-                        }
-                        "skew-y" if args.len() == 1 => {
-                            make_skew(0.0, args[0].parse().unwrap())
-                        }
+                        "skew-x" if args.len() == 1 => make_skew(args[0].parse().unwrap(), 0.0),
+                        "skew-y" if args.len() == 1 => make_skew(0.0, args[0].parse().unwrap()),
                         "perspective" if args.len() == 1 => {
                             LayoutTransform::perspective(args[0].parse().unwrap())
                         }
@@ -395,14 +382,13 @@ impl YamlHelper for Yaml {
                 Some(transform)
             }
             Yaml::Array(ref array) => {
-                let transform = array.iter().fold(
-                    LayoutTransform::identity(),
-                    |u, yaml| if let Some(transform) = yaml.as_transform(transform_origin) {
+                let transform = array.iter().fold(LayoutTransform::identity(), |u, yaml| {
+                    if let Some(transform) = yaml.as_transform(transform_origin) {
                         transform.then(&u)
                     } else {
                         u
-                    },
-                );
+                    }
+                });
                 Some(transform)
             }
             Yaml::BadValue => None,
@@ -418,18 +404,27 @@ impl YamlHelper for Yaml {
     /// This matches CSS-style, but requires conversion for `ColorF`.
     fn as_colorf(&self) -> Option<ColorF> {
         if let Some(nums) = self.as_vec_f32() {
-            assert!(nums.iter().take(3).all(|x| (0.0 ..= 255.0).contains(x)),
-                "r, g, b values should be in the 0-255 range, got {:?}", nums);
+            assert!(
+                nums.iter().take(3).all(|x| (0.0..=255.0).contains(x)),
+                "r, g, b values should be in the 0-255 range, got {:?}",
+                nums
+            );
 
             let color: ColorF = match *nums.as_slice() {
                 [r, g, b] => ColorF { r, g, b, a: 1.0 },
                 [r, g, b, a] => ColorF { r, g, b, a },
-                _ => panic!("color expected a color name, or 3-4 floats; got '{:?}'", self),
-            }.scale_rgb(1.0 / 255.0);
+                _ => panic!(
+                    "color expected a color name, or 3-4 floats; got '{:?}'",
+                    self
+                ),
+            }
+            .scale_rgb(1.0 / 255.0);
 
-            assert!((0.0 ..= 1.0).contains(&color.a),
-                    "alpha value should be in the 0-1 range, got {:?}",
-                    color.a);
+            assert!(
+                (0.0..=1.0).contains(&color.a),
+                "alpha value should be in the 0-1 range, got {:?}",
+                color.a
+            );
 
             Some(color)
         } else if let Some(s) = self.as_str() {
@@ -442,13 +437,17 @@ impl YamlHelper for Yaml {
     fn as_vec_colorf(&self) -> Option<Vec<ColorF>> {
         if let Some(v) = self.as_vec() {
             Some(v.iter().map(|v| v.as_colorf().unwrap()).collect())
-        } else { self.as_colorf().map(|color| vec![color]) }
+        } else {
+            self.as_colorf().map(|color| vec![color])
+        }
     }
 
     fn as_vec_string(&self) -> Option<Vec<String>> {
         if let Some(v) = self.as_vec() {
             Some(v.iter().map(|v| v.as_str().unwrap().to_owned()).collect())
-        } else { self.as_str().map(|s| vec![s.to_owned()]) }
+        } else {
+            self.as_str().map(|s| vec![s.to_owned()])
+        }
     }
 
     fn as_border_radius_component(&self) -> LayoutSize {
@@ -505,17 +504,13 @@ impl YamlHelper for Yaml {
     }
 
     fn as_raster_space(&self) -> Option<RasterSpace> {
-        self.as_str().map(|s| {
-            match parse_function(s) {
-                ("screen", _, _) => {
-                    RasterSpace::Screen
-                }
-                ("local", ref args, _) if args.len() == 1 => {
-                    RasterSpace::Local(args[0].parse().unwrap())
-                }
-                f => {
-                    panic!("error parsing raster space {:?}", f);
-                }
+        self.as_str().map(|s| match parse_function(s) {
+            ("screen", _, _) => RasterSpace::Screen,
+            ("local", ref args, _) if args.len() == 1 => {
+                RasterSpace::Local(args[0].parse().unwrap())
+            }
+            f => {
+                panic!("error parsing raster space {:?}", f);
             }
         })
     }
@@ -530,7 +525,7 @@ impl YamlHelper for Yaml {
 
     fn as_graph_picture_reference(&self) -> Option<FilterOpGraphPictureReference> {
         match self.as_i64() {
-            Some(n) => Some(FilterOpGraphPictureReference{
+            Some(n) => Some(FilterOpGraphPictureReference {
                 buffer_id: FilterOpGraphPictureBufferId::BufferId(n as i16),
             }),
             None => None,
@@ -539,23 +534,24 @@ impl YamlHelper for Yaml {
 
     fn as_filter_op(&self) -> Option<FilterOp> {
         if let Some(filter_op) = self["svgfe"].as_str() {
-            let subregion = self["subregion"].as_rect().unwrap_or(
-                LayoutRect::new(
-                    LayoutPoint::new(0.0, 0.0),
-                    LayoutPoint::new(1024.0, 1024.0),
-                ));
+            let subregion = self["subregion"].as_rect().unwrap_or(LayoutRect::new(
+                LayoutPoint::new(0.0, 0.0),
+                LayoutPoint::new(1024.0, 1024.0),
+            ));
 
             let node = FilterOpGraphNode {
                 linear: self["linear"].as_bool().unwrap_or(true),
                 subregion,
                 input: self["in"].as_graph_picture_reference().unwrap_or(
-                    FilterOpGraphPictureReference{
+                    FilterOpGraphPictureReference {
                         buffer_id: FilterOpGraphPictureBufferId::None,
-                    }),
+                    },
+                ),
                 input2: self["in2"].as_graph_picture_reference().unwrap_or(
-                    FilterOpGraphPictureReference{
+                    FilterOpGraphPictureReference {
                         buffer_id: FilterOpGraphPictureBufferId::None,
-                    }),
+                    },
+                ),
             };
             let debug_print_input = |input: FilterOpGraphPictureReference| -> String {
                 match input.buffer_id {
@@ -563,44 +559,58 @@ impl YamlHelper for Yaml {
                     FilterOpGraphPictureBufferId::None => "None".into(),
                 }
             };
-            log!(Level::Debug, "svgfe parsed: {} linear: {} in: {} in2: {} subregion: [{}, {}, {}, {}]",
-                filter_op, node.linear,
-                debug_print_input(node.input), debug_print_input(node.input2),
-                node.subregion.min.x, node.subregion.min.y, node.subregion.max.x, node.subregion.max.y,
+            log!(
+                Level::Debug,
+                "svgfe parsed: {} linear: {} in: {} in2: {} subregion: [{}, {}, {}, {}]",
+                filter_op,
+                node.linear,
+                debug_print_input(node.input),
+                debug_print_input(node.input2),
+                node.subregion.min.x,
+                node.subregion.min.y,
+                node.subregion.max.x,
+                node.subregion.max.y,
             );
             return match filter_op {
-                "identity" => Some(FilterOp::SVGFEIdentity{node}),
+                "identity" => Some(FilterOp::SVGFEIdentity { node }),
                 "opacity" => {
                     let value = self["value"].as_f32().unwrap();
-                    Some(FilterOp::SVGFEOpacity{node, valuebinding: value.into(), value})
-                },
-                "toalpha" => Some(FilterOp::SVGFEToAlpha{node}),
-                "blendcolor" => Some(FilterOp::SVGFEBlendColor{node}),
-                "blendcolorburn" => Some(FilterOp::SVGFEBlendColorBurn{node}),
-                "blendcolordodge" => Some(FilterOp::SVGFEBlendColorDodge{node}),
-                "blenddarken" => Some(FilterOp::SVGFEBlendDarken{node}),
-                "blenddifference" => Some(FilterOp::SVGFEBlendDifference{node}),
-                "blendexclusion" => Some(FilterOp::SVGFEBlendExclusion{node}),
-                "blendhardlight" => Some(FilterOp::SVGFEBlendHardLight{node}),
-                "blendhue" => Some(FilterOp::SVGFEBlendHue{node}),
-                "blendlighten" => Some(FilterOp::SVGFEBlendLighten{node}),
-                "blendluminosity" => Some(FilterOp::SVGFEBlendLuminosity{node}),
-                "blendmultiply" => Some(FilterOp::SVGFEBlendMultiply{node}),
-                "blendnormal" => Some(FilterOp::SVGFEBlendNormal{node}),
-                "blendoverlay" => Some(FilterOp::SVGFEBlendOverlay{node}),
-                "blendsaturation" => Some(FilterOp::SVGFEBlendSaturation{node}),
-                "blendscreen" => Some(FilterOp::SVGFEBlendScreen{node}),
-                "blendsoftlight" => Some(FilterOp::SVGFEBlendSoftLight{node}),
+                    Some(FilterOp::SVGFEOpacity {
+                        node,
+                        valuebinding: value.into(),
+                        value,
+                    })
+                }
+                "toalpha" => Some(FilterOp::SVGFEToAlpha { node }),
+                "blendcolor" => Some(FilterOp::SVGFEBlendColor { node }),
+                "blendcolorburn" => Some(FilterOp::SVGFEBlendColorBurn { node }),
+                "blendcolordodge" => Some(FilterOp::SVGFEBlendColorDodge { node }),
+                "blenddarken" => Some(FilterOp::SVGFEBlendDarken { node }),
+                "blenddifference" => Some(FilterOp::SVGFEBlendDifference { node }),
+                "blendexclusion" => Some(FilterOp::SVGFEBlendExclusion { node }),
+                "blendhardlight" => Some(FilterOp::SVGFEBlendHardLight { node }),
+                "blendhue" => Some(FilterOp::SVGFEBlendHue { node }),
+                "blendlighten" => Some(FilterOp::SVGFEBlendLighten { node }),
+                "blendluminosity" => Some(FilterOp::SVGFEBlendLuminosity { node }),
+                "blendmultiply" => Some(FilterOp::SVGFEBlendMultiply { node }),
+                "blendnormal" => Some(FilterOp::SVGFEBlendNormal { node }),
+                "blendoverlay" => Some(FilterOp::SVGFEBlendOverlay { node }),
+                "blendsaturation" => Some(FilterOp::SVGFEBlendSaturation { node }),
+                "blendscreen" => Some(FilterOp::SVGFEBlendScreen { node }),
+                "blendsoftlight" => Some(FilterOp::SVGFEBlendSoftLight { node }),
                 "colormatrix" => {
                     let m: Vec<f32> = self["matrix"].as_vec_f32().unwrap();
                     let mut matrix: [f32; 20] = [0.0; 20];
                     matrix.clone_from_slice(&m);
-                    Some(FilterOp::SVGFEColorMatrix{node, values: matrix})
+                    Some(FilterOp::SVGFEColorMatrix {
+                        node,
+                        values: matrix,
+                    })
                 }
-                "componenttransfer" => Some(FilterOp::SVGFEComponentTransfer{node}),
+                "componenttransfer" => Some(FilterOp::SVGFEComponentTransfer { node }),
                 "compositearithmetic" => {
                     let k: Vec<f32> = self["k"].as_vec_f32().unwrap();
-                    Some(FilterOp::SVGFECompositeArithmetic{
+                    Some(FilterOp::SVGFECompositeArithmetic {
                         node,
                         k1: k[0],
                         k2: k[1],
@@ -608,12 +618,12 @@ impl YamlHelper for Yaml {
                         k4: k[3],
                     })
                 }
-                "compositeatop" => Some(FilterOp::SVGFECompositeATop{node}),
-                "compositein" => Some(FilterOp::SVGFECompositeIn{node}),
-                "compositelighter" => Some(FilterOp::SVGFECompositeLighter{node}),
-                "compositeout" => Some(FilterOp::SVGFECompositeOut{node}),
-                "compositeover" => Some(FilterOp::SVGFECompositeOver{node}),
-                "compositexor" => Some(FilterOp::SVGFECompositeXOR{node}),
+                "compositeatop" => Some(FilterOp::SVGFECompositeATop { node }),
+                "compositein" => Some(FilterOp::SVGFECompositeIn { node }),
+                "compositelighter" => Some(FilterOp::SVGFECompositeLighter { node }),
+                "compositeout" => Some(FilterOp::SVGFECompositeOut { node }),
+                "compositeover" => Some(FilterOp::SVGFECompositeOver { node }),
+                "compositexor" => Some(FilterOp::SVGFECompositeXOR { node }),
                 "convolvematrixedgemodeduplicate" => {
                     let order_x = self["order_x"].as_i64().unwrap() as i32;
                     let order_y = self["order_y"].as_i64().unwrap() as i32;
@@ -631,11 +641,20 @@ impl YamlHelper for Yaml {
                         Some(false) => 0,
                         _ => 1,
                     };
-                    Some(FilterOp::SVGFEConvolveMatrixEdgeModeDuplicate{
-                         node, order_x, order_y, kernel, divisor, bias,
-                         target_x, target_y, kernel_unit_length_x,
-                         kernel_unit_length_y, preserve_alpha})
-                },
+                    Some(FilterOp::SVGFEConvolveMatrixEdgeModeDuplicate {
+                        node,
+                        order_x,
+                        order_y,
+                        kernel,
+                        divisor,
+                        bias,
+                        target_x,
+                        target_y,
+                        kernel_unit_length_x,
+                        kernel_unit_length_y,
+                        preserve_alpha,
+                    })
+                }
                 "convolvematrixedgemodenone" => {
                     let order_x = self["order_x"].as_i64().unwrap() as i32;
                     let order_y = self["order_y"].as_i64().unwrap() as i32;
@@ -653,11 +672,20 @@ impl YamlHelper for Yaml {
                         Some(false) => 0,
                         _ => 1,
                     };
-                    Some(FilterOp::SVGFEConvolveMatrixEdgeModeNone{
-                         node, order_x, order_y, kernel, divisor, bias,
-                         target_x, target_y, kernel_unit_length_x,
-                         kernel_unit_length_y, preserve_alpha})
-                },
+                    Some(FilterOp::SVGFEConvolveMatrixEdgeModeNone {
+                        node,
+                        order_x,
+                        order_y,
+                        kernel,
+                        divisor,
+                        bias,
+                        target_x,
+                        target_y,
+                        kernel_unit_length_x,
+                        kernel_unit_length_y,
+                        preserve_alpha,
+                    })
+                }
                 "convolvematrixedgemodewrap" => {
                     let order_x = self["order_x"].as_i64().unwrap() as i32;
                     let order_y = self["order_y"].as_i64().unwrap() as i32;
@@ -675,11 +703,20 @@ impl YamlHelper for Yaml {
                         Some(false) => 0,
                         _ => 1,
                     };
-                    Some(FilterOp::SVGFEConvolveMatrixEdgeModeWrap{
-                         node, order_x, order_y, kernel, divisor, bias,
-                         target_x, target_y, kernel_unit_length_x,
-                         kernel_unit_length_y, preserve_alpha})
-                },
+                    Some(FilterOp::SVGFEConvolveMatrixEdgeModeWrap {
+                        node,
+                        order_x,
+                        order_y,
+                        kernel,
+                        divisor,
+                        bias,
+                        target_x,
+                        target_y,
+                        kernel_unit_length_x,
+                        kernel_unit_length_y,
+                        preserve_alpha,
+                    })
+                }
                 "diffuselightingdistant" => {
                     let surface_scale = self["surface_scale"].as_f32().unwrap();
                     let diffuse_constant = self["diffuse_constant"].as_f32().unwrap();
@@ -687,11 +724,16 @@ impl YamlHelper for Yaml {
                     let kernel_unit_length_y = self["kernel_unit_length_y"].as_f32().unwrap();
                     let azimuth = self["azimuth"].as_f32().unwrap();
                     let elevation = self["elevation"].as_f32().unwrap();
-                    Some(FilterOp::SVGFEDiffuseLightingDistant{
-                         node, surface_scale, diffuse_constant,
-                         kernel_unit_length_x, kernel_unit_length_y,
-                         azimuth, elevation})
-                },
+                    Some(FilterOp::SVGFEDiffuseLightingDistant {
+                        node,
+                        surface_scale,
+                        diffuse_constant,
+                        kernel_unit_length_x,
+                        kernel_unit_length_y,
+                        azimuth,
+                        elevation,
+                    })
+                }
                 "diffuselightingpoint" => {
                     let surface_scale = self["surface_scale"].as_f32().unwrap();
                     let diffuse_constant = self["diffuse_constant"].as_f32().unwrap();
@@ -700,10 +742,17 @@ impl YamlHelper for Yaml {
                     let x = self["x"].as_f32().unwrap();
                     let y = self["y"].as_f32().unwrap();
                     let z = self["z"].as_f32().unwrap();
-                    Some(FilterOp::SVGFEDiffuseLightingPoint{
-                         node, surface_scale, diffuse_constant,
-                         kernel_unit_length_x, kernel_unit_length_y, x, y, z})
-                },
+                    Some(FilterOp::SVGFEDiffuseLightingPoint {
+                        node,
+                        surface_scale,
+                        diffuse_constant,
+                        kernel_unit_length_x,
+                        kernel_unit_length_y,
+                        x,
+                        y,
+                        z,
+                    })
+                }
                 "diffuselightingspot" => {
                     let surface_scale = self["surface_scale"].as_f32().unwrap();
                     let diffuse_constant = self["diffuse_constant"].as_f32().unwrap();
@@ -717,32 +766,61 @@ impl YamlHelper for Yaml {
                     let points_at_z = self["points_at_z"].as_f32().unwrap();
                     let cone_exponent = self["cone_exponent"].as_f32().unwrap();
                     let limiting_cone_angle = self["limiting_cone_angle"].as_f32().unwrap();
-                    Some(FilterOp::SVGFEDiffuseLightingSpot{
-                         node, surface_scale, diffuse_constant,
-                         kernel_unit_length_x, kernel_unit_length_y, x, y, z,
-                         points_at_x, points_at_y, points_at_z, cone_exponent,
-                         limiting_cone_angle})
-                },
+                    Some(FilterOp::SVGFEDiffuseLightingSpot {
+                        node,
+                        surface_scale,
+                        diffuse_constant,
+                        kernel_unit_length_x,
+                        kernel_unit_length_y,
+                        x,
+                        y,
+                        z,
+                        points_at_x,
+                        points_at_y,
+                        points_at_z,
+                        cone_exponent,
+                        limiting_cone_angle,
+                    })
+                }
                 "displacementmap" => {
                     let scale = self["scale"].as_f32().unwrap();
                     let x_channel_selector = self["x_channel_selector"].as_i64().unwrap() as u32;
                     let y_channel_selector = self["y_channel_selector"].as_i64().unwrap() as u32;
-                    Some(FilterOp::SVGFEDisplacementMap{node, scale, x_channel_selector, y_channel_selector})
-                },
+                    Some(FilterOp::SVGFEDisplacementMap {
+                        node,
+                        scale,
+                        x_channel_selector,
+                        y_channel_selector,
+                    })
+                }
                 "dropshadow" => {
                     let color = self["color"].as_colorf().unwrap();
                     let dx = self["dx"].as_f32().unwrap();
                     let dy = self["dy"].as_f32().unwrap();
                     let std_deviation_x = self["std_deviation_x"].as_f32().unwrap();
                     let std_deviation_y = self["std_deviation_y"].as_f32().unwrap();
-                    Some(FilterOp::SVGFEDropShadow{node, color, dx, dy, std_deviation_x, std_deviation_y})
-                },
-                "flood" => Some(FilterOp::SVGFEFlood{node, color: self["color"].as_colorf().unwrap()}),
+                    Some(FilterOp::SVGFEDropShadow {
+                        node,
+                        color,
+                        dx,
+                        dy,
+                        std_deviation_x,
+                        std_deviation_y,
+                    })
+                }
+                "flood" => Some(FilterOp::SVGFEFlood {
+                    node,
+                    color: self["color"].as_colorf().unwrap(),
+                }),
                 "gaussianblur" => {
                     let std_deviation_x = self["std_deviation_x"].as_f32().unwrap();
                     let std_deviation_y = self["std_deviation_y"].as_f32().unwrap();
-                    Some(FilterOp::SVGFEGaussianBlur{node, std_deviation_x, std_deviation_y})
-                },
+                    Some(FilterOp::SVGFEGaussianBlur {
+                        node,
+                        std_deviation_x,
+                        std_deviation_y,
+                    })
+                }
                 "image" => {
                     let sampling_filter = match self["sampling_filter"].as_str() {
                         Some("GOOD") => 0,
@@ -753,26 +831,42 @@ impl YamlHelper for Yaml {
                     let m: Vec<f32> = self["matrix"].as_vec_f32().unwrap();
                     let mut matrix: [f32; 6] = [0.0; 6];
                     matrix.clone_from_slice(&m);
-                    Some(FilterOp::SVGFEImage{node, sampling_filter, matrix})
-                },
+                    Some(FilterOp::SVGFEImage {
+                        node,
+                        sampling_filter,
+                        matrix,
+                    })
+                }
                 "morphologydilate" => {
                     let radius_x = self["radius_x"].as_f32().unwrap();
                     let radius_y = self["radius_y"].as_f32().unwrap();
-                    Some(FilterOp::SVGFEMorphologyDilate{node, radius_x, radius_y})
-                },
+                    Some(FilterOp::SVGFEMorphologyDilate {
+                        node,
+                        radius_x,
+                        radius_y,
+                    })
+                }
                 "morphologyerode" => {
                     let radius_x = self["radius_x"].as_f32().unwrap();
                     let radius_y = self["radius_y"].as_f32().unwrap();
-                    Some(FilterOp::SVGFEMorphologyErode{node, radius_x, radius_y})
-                },
+                    Some(FilterOp::SVGFEMorphologyErode {
+                        node,
+                        radius_x,
+                        radius_y,
+                    })
+                }
                 "offset" => {
                     let offset = self["offset"].as_vec_f32().unwrap();
-                    Some(FilterOp::SVGFEOffset{node, offset_x: offset[0], offset_y: offset[1]})
-                },
-                "SourceAlpha" => Some(FilterOp::SVGFESourceAlpha{node}),
-                "SourceGraphic" => Some(FilterOp::SVGFESourceGraphic{node}),
-                "sourcealpha" => Some(FilterOp::SVGFESourceAlpha{node}),
-                "sourcegraphic" => Some(FilterOp::SVGFESourceGraphic{node}),
+                    Some(FilterOp::SVGFEOffset {
+                        node,
+                        offset_x: offset[0],
+                        offset_y: offset[1],
+                    })
+                }
+                "SourceAlpha" => Some(FilterOp::SVGFESourceAlpha { node }),
+                "SourceGraphic" => Some(FilterOp::SVGFESourceGraphic { node }),
+                "sourcealpha" => Some(FilterOp::SVGFESourceAlpha { node }),
+                "sourcegraphic" => Some(FilterOp::SVGFESourceGraphic { node }),
                 "specularlightingdistant" => {
                     let surface_scale = self["surface_scale"].as_f32().unwrap();
                     let specular_constant = self["specular_constant"].as_f32().unwrap();
@@ -781,11 +875,17 @@ impl YamlHelper for Yaml {
                     let kernel_unit_length_y = self["kernel_unit_length_y"].as_f32().unwrap();
                     let azimuth = self["azimuth"].as_f32().unwrap();
                     let elevation = self["elevation"].as_f32().unwrap();
-                    Some(FilterOp::SVGFESpecularLightingDistant{
-                        node, surface_scale, specular_constant,
-                         specular_exponent, kernel_unit_length_x,
-                         kernel_unit_length_y, azimuth, elevation})
-                },
+                    Some(FilterOp::SVGFESpecularLightingDistant {
+                        node,
+                        surface_scale,
+                        specular_constant,
+                        specular_exponent,
+                        kernel_unit_length_x,
+                        kernel_unit_length_y,
+                        azimuth,
+                        elevation,
+                    })
+                }
                 "specularlightingpoint" => {
                     let surface_scale = self["surface_scale"].as_f32().unwrap();
                     let specular_constant = self["specular_constant"].as_f32().unwrap();
@@ -795,11 +895,18 @@ impl YamlHelper for Yaml {
                     let x = self["x"].as_f32().unwrap();
                     let y = self["y"].as_f32().unwrap();
                     let z = self["z"].as_f32().unwrap();
-                    Some(FilterOp::SVGFESpecularLightingPoint{
-                         node, surface_scale, specular_constant,
-                         specular_exponent, kernel_unit_length_x,
-                         kernel_unit_length_y, x, y, z})
-                },
+                    Some(FilterOp::SVGFESpecularLightingPoint {
+                        node,
+                        surface_scale,
+                        specular_constant,
+                        specular_exponent,
+                        kernel_unit_length_x,
+                        kernel_unit_length_y,
+                        x,
+                        y,
+                        z,
+                    })
+                }
                 "specularlightingspot" => {
                     let surface_scale = self["surface_scale"].as_f32().unwrap();
                     let specular_constant = self["specular_constant"].as_f32().unwrap();
@@ -814,60 +921,89 @@ impl YamlHelper for Yaml {
                     let points_at_z = self["points_at_z"].as_f32().unwrap();
                     let cone_exponent = self["cone_exponent"].as_f32().unwrap();
                     let limiting_cone_angle = self["limiting_cone_angle"].as_f32().unwrap();
-                    Some(FilterOp::SVGFESpecularLightingSpot{
-                         node, surface_scale, specular_constant,
-                         specular_exponent, kernel_unit_length_x,
-                         kernel_unit_length_y, x, y, z, points_at_x,
-                         points_at_y, points_at_z, limiting_cone_angle,
-                         cone_exponent})
-                },
-                "tile" => Some(FilterOp::SVGFETile{node}),
+                    Some(FilterOp::SVGFESpecularLightingSpot {
+                        node,
+                        surface_scale,
+                        specular_constant,
+                        specular_exponent,
+                        kernel_unit_length_x,
+                        kernel_unit_length_y,
+                        x,
+                        y,
+                        z,
+                        points_at_x,
+                        points_at_y,
+                        points_at_z,
+                        limiting_cone_angle,
+                        cone_exponent,
+                    })
+                }
+                "tile" => Some(FilterOp::SVGFETile { node }),
                 "turbulencewithfractalnoisewithnostitching" => {
                     let base_frequency_x = self["base_frequency_x"].as_f32().unwrap();
                     let base_frequency_y = self["base_frequency_y"].as_f32().unwrap();
                     let num_octaves = self["num_octaves"].as_i64().unwrap() as u32;
                     let seed = self["seed"].as_i64().unwrap() as u32;
-                    Some(FilterOp::SVGFETurbulenceWithFractalNoiseWithNoStitching{
-                        node, base_frequency_x, base_frequency_y, num_octaves, seed})
-                },
+                    Some(FilterOp::SVGFETurbulenceWithFractalNoiseWithNoStitching {
+                        node,
+                        base_frequency_x,
+                        base_frequency_y,
+                        num_octaves,
+                        seed,
+                    })
+                }
                 "turbulencewithfractalnoisewithstitching" => {
                     let base_frequency_x = self["base_frequency_x"].as_f32().unwrap();
                     let base_frequency_y = self["base_frequency_y"].as_f32().unwrap();
                     let num_octaves = self["num_octaves"].as_i64().unwrap() as u32;
                     let seed = self["seed"].as_i64().unwrap() as u32;
-                    Some(FilterOp::SVGFETurbulenceWithFractalNoiseWithStitching{
-                        node, base_frequency_x, base_frequency_y, num_octaves, seed})
-                },
+                    Some(FilterOp::SVGFETurbulenceWithFractalNoiseWithStitching {
+                        node,
+                        base_frequency_x,
+                        base_frequency_y,
+                        num_octaves,
+                        seed,
+                    })
+                }
                 "turbulencewithturbulencenoisewithnostitching" => {
                     let base_frequency_x = self["base_frequency_x"].as_f32().unwrap();
                     let base_frequency_y = self["base_frequency_y"].as_f32().unwrap();
                     let num_octaves = self["num_octaves"].as_i64().unwrap() as u32;
                     let seed = self["seed"].as_i64().unwrap() as u32;
-                    Some(FilterOp::SVGFETurbulenceWithTurbulenceNoiseWithNoStitching{
-                        node, base_frequency_x, base_frequency_y, num_octaves, seed})
-                },
+                    Some(
+                        FilterOp::SVGFETurbulenceWithTurbulenceNoiseWithNoStitching {
+                            node,
+                            base_frequency_x,
+                            base_frequency_y,
+                            num_octaves,
+                            seed,
+                        },
+                    )
+                }
                 "turbulencewithturbulencenoisewithstitching" => {
                     let base_frequency_x = self["base_frequency_x"].as_f32().unwrap();
                     let base_frequency_y = self["base_frequency_y"].as_f32().unwrap();
                     let num_octaves = self["num_octaves"].as_i64().unwrap() as u32;
                     let seed = self["seed"].as_i64().unwrap() as u32;
-                    Some(FilterOp::SVGFETurbulenceWithTurbulenceNoiseWithStitching{
-                        node, base_frequency_x, base_frequency_y, num_octaves, seed})
-                },
+                    Some(FilterOp::SVGFETurbulenceWithTurbulenceNoiseWithStitching {
+                        node,
+                        base_frequency_x,
+                        base_frequency_y,
+                        num_octaves,
+                        seed,
+                    })
+                }
                 _ => None,
-            }
+            };
         }
         if let Some(s) = self.as_str() {
             match parse_function(s) {
-                ("identity", _, _) => {
-                    Some(FilterOp::Identity)
-                }
-                ("component-transfer", _, _) => {
-                    Some(FilterOp::ComponentTransfer)
-                }
-                ("blur", ref args, _) if args.len() == 2 => {
-                    Some(FilterOp::Blur(args[0].parse().unwrap(), args[1].parse().unwrap()))
-                }
+                ("identity", _, _) => Some(FilterOp::Identity),
+                ("component-transfer", _, _) => Some(FilterOp::ComponentTransfer),
+                ("blur", ref args, _) if args.len() == 2 => Some(FilterOp::Blur(
+                    args[0].parse().unwrap(),
+                    args[1].parse().unwrap(),
+                )),
                 ("brightness", ref args, _) if args.len() == 1 => {
                     Some(FilterOp::Brightness(args[0].parse().unwrap()))
                 }
@@ -893,16 +1029,20 @@ impl YamlHelper for Yaml {
                 ("sepia", ref args, _) if args.len() == 1 => {
                     Some(FilterOp::Sepia(args[0].parse().unwrap()))
                 }
-                ("srgb-to-linear", _, _)  => Some(FilterOp::SrgbToLinear),
-                ("linear-to-srgb", _, _)  => Some(FilterOp::LinearToSrgb),
+                ("srgb-to-linear", _, _) => Some(FilterOp::SrgbToLinear),
+                ("linear-to-srgb", _, _) => Some(FilterOp::LinearToSrgb),
                 ("drop-shadow", ref args, _) if args.len() == 3 => {
-                    let str = format!("---\noffset: {}\nblur-radius: {}\ncolor: {}\n", args[0], args[1], args[2]);
-                    let mut yaml_doc = YamlLoader::load_from_str(&str).expect("Failed to parse drop-shadow");
+                    let str = format!(
+                        "---\noffset: {}\nblur-radius: {}\ncolor: {}\n",
+                        args[0], args[1], args[2]
+                    );
+                    let mut yaml_doc =
+                        YamlLoader::load_from_str(&str).expect("Failed to parse drop-shadow");
                     let yaml = yaml_doc.pop().unwrap();
                     Some(FilterOp::DropShadow(Shadow {
                         offset: yaml["offset"].as_vector().unwrap(),
                         blur_radius: yaml["blur-radius"].as_f32().unwrap(),
-                        color: yaml["color"].as_colorf().unwrap()
+                        color: yaml["color"].as_colorf().unwrap(),
                     }))
                 }
                 ("color-matrix", ref args, _) if args.len() == 20 => {
@@ -913,7 +1053,8 @@ impl YamlHelper for Yaml {
                 }
                 ("flood", ref args, _) if args.len() == 1 => {
                     let str = format!("---\ncolor: {}\n", args[0]);
-                    let mut yaml_doc = YamlLoader::load_from_str(&str).expect("Failed to parse flood");
+                    let mut yaml_doc =
+                        YamlLoader::load_from_str(&str).expect("Failed to parse flood");
                     let yaml = yaml_doc.pop().unwrap();
                     Some(FilterOp::Flood(yaml["color"].as_colorf().unwrap()))
                 }
@@ -937,17 +1078,26 @@ impl YamlHelper for Yaml {
         // The remaining entries are arrays of floats.
         if let Yaml::Array(ref array) = *self {
             if array.len() != 5 {
-                panic!("Invalid filter data specified, base array doesn't have five entries: {:?}", self);
+                panic!(
+                    "Invalid filter data specified, base array doesn't have five entries: {:?}",
+                    self
+                );
             }
             if let Some(func_types_p) = array[0].as_vec_string() {
                 if func_types_p.len() != 4 {
                     panic!("Invalid filter data specified, func type array doesn't have five entries: {:?}", self);
                 }
-                let func_types: Vec<ComponentTransferFuncType> =
-                    func_types_p.into_iter().map(|x|
-                        StringEnum::from_str(&x).unwrap_or_else(||
-                            panic!("Invalid filter data specified, invalid func type name: {:?}", self))
-                    ).collect();
+                let func_types: Vec<ComponentTransferFuncType> = func_types_p
+                    .into_iter()
+                    .map(|x| {
+                        StringEnum::from_str(&x).unwrap_or_else(|| {
+                            panic!(
+                                "Invalid filter data specified, invalid func type name: {:?}",
+                                self
+                            )
+                        })
+                    })
+                    .collect();
                 if let Some(r_values_p) = array[1].as_vec_f32() {
                     if let Some(g_values_p) = array[2].as_vec_f32() {
                         if let Some(b_values_p) = array[3].as_vec_f32() {
@@ -962,7 +1112,7 @@ impl YamlHelper for Yaml {
                                     func_a_type: func_types[3],
                                     a_values: a_values_p,
                                 };
-                                return Some(filter_data)
+                                return Some(filter_data);
                             }
                         }
                     }
@@ -1001,36 +1151,26 @@ impl YamlHelper for Yaml {
     fn as_filter_primitive(&self) -> Option<FilterPrimitive> {
         if let Some(filter_type) = self["type"].as_str() {
             let kind = match filter_type {
-                "identity" => {
-                    FilterPrimitiveKind::Identity(IdentityPrimitive {
-                        input: self["in"].as_filter_input().unwrap(),
-                    })
-                }
-                "blend" => {
-                    FilterPrimitiveKind::Blend(BlendPrimitive {
-                        input1: self["in1"].as_filter_input().unwrap(),
-                        input2: self["in2"].as_filter_input().unwrap(),
-                        mode: self["blend-mode"].as_mix_blend_mode().unwrap(),
-                    })
-                }
-                "flood" => {
-                    FilterPrimitiveKind::Flood(FloodPrimitive {
-                        color: self["color"].as_colorf().unwrap(),
-                    })
-                }
-                "blur" => {
-                    FilterPrimitiveKind::Blur(BlurPrimitive {
-                        input: self["in"].as_filter_input().unwrap(),
-                        width: self["width"].as_f32().unwrap(),
-                        height: self["height"].as_f32().unwrap(),
-                    })
-                }
-                "opacity" => {
-                    FilterPrimitiveKind::Opacity(OpacityPrimitive {
-                        input: self["in"].as_filter_input().unwrap(),
-                        opacity: self["opacity"].as_f32().unwrap(),
-                    })
-                }
+                "identity" => FilterPrimitiveKind::Identity(IdentityPrimitive {
+                    input: self["in"].as_filter_input().unwrap(),
+                }),
+                "blend" => FilterPrimitiveKind::Blend(BlendPrimitive {
+                    input1: self["in1"].as_filter_input().unwrap(),
+                    input2: self["in2"].as_filter_input().unwrap(),
+                    mode: self["blend-mode"].as_mix_blend_mode().unwrap(),
+                }),
+                "flood" => FilterPrimitiveKind::Flood(FloodPrimitive {
+                    color: self["color"].as_colorf().unwrap(),
+                }),
+                "blur" => FilterPrimitiveKind::Blur(BlurPrimitive {
+                    input: self["in"].as_filter_input().unwrap(),
+                    width: self["width"].as_f32().unwrap(),
+                    height: self["height"].as_f32().unwrap(),
+                }),
+                "opacity" => FilterPrimitiveKind::Opacity(OpacityPrimitive {
+                    input: self["in"].as_filter_input().unwrap(),
+                    opacity: self["opacity"].as_f32().unwrap(),
+                }),
                 "color-matrix" => {
                     let m: Vec<f32> = self["matrix"].as_vec_f32().unwrap();
                     let mut matrix: [f32; 20] = [0.0; 20];
@@ -1041,27 +1181,23 @@ impl YamlHelper for Yaml {
                         matrix,
                     })
                 }
-                "drop-shadow" => {
-                    FilterPrimitiveKind::DropShadow(DropShadowPrimitive {
-                        input: self["in"].as_filter_input().unwrap(),
-                        shadow: Shadow {
-                            offset: self["offset"].as_vector().unwrap(),
-                            color: self["color"].as_colorf().unwrap(),
-                            blur_radius: self["radius"].as_f32().unwrap(),
-                        }
-                    })
-                }
+                "drop-shadow" => FilterPrimitiveKind::DropShadow(DropShadowPrimitive {
+                    input: self["in"].as_filter_input().unwrap(),
+                    shadow: Shadow {
+                        offset: self["offset"].as_vector().unwrap(),
+                        color: self["color"].as_colorf().unwrap(),
+                        blur_radius: self["radius"].as_f32().unwrap(),
+                    },
+                }),
                 "component-transfer" => {
                     FilterPrimitiveKind::ComponentTransfer(ComponentTransferPrimitive {
                         input: self["in"].as_filter_input().unwrap(),
                     })
                 }
-                "offset" => {
-                    FilterPrimitiveKind::Offset(OffsetPrimitive {
-                        input: self["in"].as_filter_input().unwrap(),
-                        offset: self["offset"].as_vector().unwrap(),
-                    })
-                }
+                "offset" => FilterPrimitiveKind::Offset(OffsetPrimitive {
+                    input: self["in"].as_filter_input().unwrap(),
+                    offset: self["offset"].as_vector().unwrap(),
+                }),
                 "composite" => {
                     let operator = match self["operator"].as_str().unwrap() {
                         "over" => CompositeOperator::Over,
@@ -1072,7 +1208,10 @@ impl YamlHelper for Yaml {
                         "lighter" => CompositeOperator::Lighter,
                         "arithmetic" => {
                             let k_vals = self["k-values"].as_vec_f32().unwrap();
-                            assert!(k_vals.len() == 4, "Must be 4 k values for arithmetic composite operator");
+                            assert!(
+                                k_vals.len() == 4,
+                                "Must be 4 k values for arithmetic composite operator"
+                            );
                             let k_vals = [k_vals[0], k_vals[1], k_vals[2], k_vals[3]];
                             CompositeOperator::Arithmetic(k_vals)
                         }
@@ -1089,7 +1228,9 @@ impl YamlHelper for Yaml {
 
             Some(FilterPrimitive {
                 kind,
-                color_space: self["color-space"].as_color_space().unwrap_or(ColorSpace::LinearRgb),
+                color_space: self["color-space"]
+                    .as_color_space()
+                    .unwrap_or(ColorSpace::LinearRgb),
             })
         } else {
             None
@@ -1115,9 +1256,7 @@ impl YamlHelper for Yaml {
         let radius = self["radius"]
             .as_border_radius()
             .unwrap_or_else(BorderRadius::zero);
-        let mode = self["clip-mode"]
-            .as_clip_mode()
-            .unwrap_or(ClipMode::Clip);
+        let mode = self["clip-mode"].as_clip_mode().unwrap_or(ClipMode::Clip);
         ComplexClipRegion::new(rect, radius, mode)
     }
 
@@ -1138,15 +1277,13 @@ impl YamlHelper for Yaml {
             .as_vec()
             .expect("gradient must have stops")
             .chunks(2)
-            .map(|chunk| {
-                GradientStop {
-                    offset: chunk[0]
-                        .as_force_f32()
-                        .expect("gradient stop offset is not f32"),
-                    color: chunk[1]
-                        .as_colorf()
-                        .expect("gradient stop color is not color"),
-                }
+            .map(|chunk| GradientStop {
+                offset: chunk[0]
+                    .as_force_f32()
+                    .expect("gradient stop offset is not f32"),
+                color: chunk[1]
+                    .as_colorf()
+                    .expect("gradient stop color is not color"),
             })
             .collect::<Vec<_>>();
         let extend_mode = if self["repeat"].as_bool().unwrap_or(false) {
@@ -1159,21 +1296,23 @@ impl YamlHelper for Yaml {
     }
 
     fn as_radial_gradient(&self, dl: &mut DisplayListBuilder) -> RadialGradient {
-        let center = self["center"].as_point().expect("radial gradient must have center");
-        let radius = self["radius"].as_size().expect("radial gradient must have a radius");
+        let center = self["center"]
+            .as_point()
+            .expect("radial gradient must have center");
+        let radius = self["radius"]
+            .as_size()
+            .expect("radial gradient must have a radius");
         let stops = self["stops"]
             .as_vec()
             .expect("radial gradient must have stops")
             .chunks(2)
-            .map(|chunk| {
-                GradientStop {
-                    offset: chunk[0]
-                        .as_force_f32()
-                        .expect("gradient stop offset is not f32"),
-                    color: chunk[1]
-                        .as_colorf()
-                        .expect("gradient stop color is not color"),
-                }
+            .map(|chunk| GradientStop {
+                offset: chunk[0]
+                    .as_force_f32()
+                    .expect("gradient stop offset is not f32"),
+                color: chunk[1]
+                    .as_colorf()
+                    .expect("gradient stop color is not color"),
             })
             .collect::<Vec<_>>();
         let extend_mode = if self["repeat"].as_bool().unwrap_or(false) {
@@ -1186,21 +1325,23 @@ impl YamlHelper for Yaml {
     }
 
     fn as_conic_gradient(&self, dl: &mut DisplayListBuilder) -> ConicGradient {
-        let center = self["center"].as_point().expect("conic gradient must have center");
-        let angle = self["angle"].as_force_f32().expect("conic gradient must have an angle");
+        let center = self["center"]
+            .as_point()
+            .expect("conic gradient must have center");
+        let angle = self["angle"]
+            .as_force_f32()
+            .expect("conic gradient must have an angle");
         let stops = self["stops"]
             .as_vec()
             .expect("conic gradient must have stops")
             .chunks(2)
-            .map(|chunk| {
-                GradientStop {
-                    offset: chunk[0]
-                        .as_force_f32()
-                        .expect("gradient stop offset is not f32"),
-                    color: chunk[1]
-                        .as_colorf()
-                        .expect("gradient stop color is not color"),
-                }
+            .map(|chunk| GradientStop {
+                offset: chunk[0]
+                    .as_force_f32()
+                    .expect("gradient stop offset is not f32"),
+                color: chunk[1]
+                    .as_colorf()
+                    .expect("gradient stop color is not color"),
             })
             .collect::<Vec<_>>();
         let extend_mode = if self["repeat"].as_bool().unwrap_or(false) {
@@ -1214,10 +1355,7 @@ impl YamlHelper for Yaml {
 
     fn as_complex_clip_regions(&self) -> Vec<ComplexClipRegion> {
         match *self {
-            Yaml::Array(ref array) => array
-                .iter()
-                .map(Yaml::as_complex_clip_region)
-                .collect(),
+            Yaml::Array(ref array) => array.iter().map(Yaml::as_complex_clip_region).collect(),
             Yaml::BadValue => vec![],
             _ => {
                 println!("Unable to parse complex clip region {:?}", self);

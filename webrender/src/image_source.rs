@@ -37,12 +37,11 @@ pub fn resolve_image(
                     // the render thread...
                     let cache_handle = gpu_cache.push_deferred_per_frame_blocks(BLOCKS_PER_UV_RECT);
 
-                    let deferred_resolve_index = DeferredResolveIndex(deferred_resolves.len() as u32);
+                    let deferred_resolve_index =
+                        DeferredResolveIndex(deferred_resolves.len() as u32);
 
                     let image_buffer_kind = match external_image.image_type {
-                        ExternalImageType::TextureHandle(target) => {
-                            target
-                        }
+                        ExternalImageType::TextureHandle(target) => target,
                         ExternalImageType::Buffer => {
                             // The ExternalImageType::Buffer should be handled by resource_cache.
                             // It should go through the non-external case.
@@ -57,9 +56,7 @@ pub fn resolve_image(
                             normalized_uvs: external_image.normalized_uvs,
                         }),
                         uv_rect_handle: cache_handle,
-                        uv_rect: DeviceIntRect::from_size(
-                            image_properties.descriptor.size,
-                        ),
+                        uv_rect: DeviceIntRect::from_size(image_properties.descriptor.size),
                         user_data: [0.0; 4],
                     };
 
@@ -82,9 +79,7 @@ pub fn resolve_image(
                 }
             }
         }
-        None => {
-            CacheItem::invalid()
-        }
+        None => CacheItem::invalid(),
     }
 }
 
@@ -92,8 +87,9 @@ pub fn resolve_cached_render_task(
     handle: &RenderTaskCacheEntryHandle,
     resource_cache: &ResourceCache,
 ) -> CacheItem {
-    let rt_cache_entry = resource_cache
-        .get_cached_render_task(&handle);
+    let rt_cache_entry = resource_cache.get_cached_render_task(&handle);
 
-    resource_cache.get_texture_cache_item(&rt_cache_entry.handle).unwrap()
+    resource_cache
+        .get_texture_cache_item(&rt_cache_entry.handle)
+        .unwrap()
 }

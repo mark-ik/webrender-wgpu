@@ -2,7 +2,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use api::{ColorF, DebugFlags, ExternalScrollId, FontRenderMode, ImageKey, MinimapData, PremultipliedColorF};
+use api::{
+    ColorF, DebugFlags, ExternalScrollId, FontRenderMode, ImageKey, MinimapData,
+    PremultipliedColorF,
+};
 use api::units::*;
 use plane_split::BspSplitter;
 use crate::batch::{BatchBuilder, AlphaBatchBuilder, AlphaBatchContainer};
@@ -101,18 +104,13 @@ impl FrameGlobalResources {
         }
     }
 
-    pub fn update(
-        &mut self,
-        gpu_cache: &mut GpuCache,
-    ) {
+    pub fn update(&mut self, gpu_cache: &mut GpuCache) {
         if let Some(mut request) = gpu_cache.request(&mut self.default_image_handle) {
             request.push(PremultipliedColorF::WHITE);
             request.push(PremultipliedColorF::WHITE);
             request.push([
-                -1.0,       // -ve means use prim rect for stretch size
-                0.0,
-                0.0,
-                0.0,
+                -1.0, // -ve means use prim rect for stretch size
+                0.0, 0.0, 0.0,
             ]);
         }
 
@@ -225,11 +223,7 @@ impl<'a> FrameBuildingState<'a> {
     }
 
     /// Push a command to a set of command buffers
-    pub fn push_cmd(
-        &mut self,
-        cmd: &PrimitiveCommand,
-        targets: &[CommandBufferIndex],
-    ) {
+    pub fn push_cmd(&mut self, cmd: &PrimitiveCommand, targets: &[CommandBufferIndex]) {
         for cmd_buffer_index in targets {
             let cmd_buffer = self.cmd_buffers.get_mut(*cmd_buffer_index);
             cmd_buffer.add_cmd(cmd);
@@ -237,11 +231,7 @@ impl<'a> FrameBuildingState<'a> {
     }
 
     /// Set the active list of segments in a set of command buffers
-    pub fn set_segments(
-        &mut self,
-        segments: &[QuadSegment],
-        targets: &[CommandBufferIndex],
-    ) {
+    pub fn set_segments(&mut self, segments: &[QuadSegment], targets: &[CommandBufferIndex]) {
         for cmd_buffer_index in targets {
             let cmd_buffer = self.cmd_buffers.get_mut(*cmd_buffer_index);
             cmd_buffer.set_segments(segments);
@@ -313,7 +303,8 @@ impl FrameBuilder {
 
         // Reset all plane splitters. These are retained from frame to frame to reduce
         // per-frame allocations
-        self.plane_splitters.resize_with(scene.num_plane_splitters, BspSplitter::new);
+        self.plane_splitters
+            .resize_with(scene.num_plane_splitters, BspSplitter::new);
         for splitter in &mut self.plane_splitters {
             splitter.reset();
         }
@@ -332,10 +323,9 @@ impl FrameBuilder {
             root_spatial_node_index,
         };
 
-        scene.picture_graph.build_update_passes(
-            &mut scene.prim_store.pictures,
-            &frame_context,
-        );
+        scene
+            .picture_graph
+            .build_update_passes(&mut scene.prim_store.pictures, &frame_context);
 
         scene.picture_graph.assign_surfaces(
             &mut scene.prim_store.pictures,
@@ -420,10 +410,10 @@ impl FrameBuilder {
                 // generation counter is incremented early in the frame,
                 // before the main visibility pass visits the image items.
                 let pic = &scene.prim_store.pictures[pic_index.0];
-                let snapshot = pic.snapshot
-                    .unwrap();
+                let snapshot = pic.snapshot.unwrap();
                 let key = snapshot.key.as_image();
-                visibility_state.resource_cache
+                visibility_state
+                    .resource_cache
                     .increment_image_generation(key);
 
                 if let Some(node) = pic.clip_root {
@@ -451,7 +441,11 @@ impl FrameBuilder {
                 let pic = &mut scene.prim_store.pictures[pic_index.0];
 
                 match pic.raster_config {
-                    Some(RasterConfig { surface_index, composite_mode: PictureCompositeMode::TileCache { slice_id }, .. }) => {
+                    Some(RasterConfig {
+                        surface_index,
+                        composite_mode: PictureCompositeMode::TileCache { slice_id },
+                        ..
+                    }) => {
                         let tile_cache = tile_caches
                             .get_mut(&slice_id)
                             .expect("bug: non-existent tile cache");
@@ -483,11 +477,10 @@ impl FrameBuilder {
 
                         // Push a new surface, supplying the list of clips that should be
                         // ignored, since they are handled by clipping when drawing this surface.
-                        visibility_state.push_surface(
-                            *pic_index,
-                            surface_index,
-                        );
-                        visibility_state.clip_tree.push_clip_root_node(tile_cache.shared_clip_node_id);
+                        visibility_state.push_surface(*pic_index, surface_index);
+                        visibility_state
+                            .clip_tree
+                            .push_clip_root_node(tile_cache.shared_clip_node_id);
 
                         update_prim_visibility(
                             *pic_index,
@@ -509,7 +502,8 @@ impl FrameBuilder {
 
                         visibility_state.clip_tree.pop_clip_root();
                         visibility_state.pop_surface();
-                        visibility_state.scratch.frame.surface_stack = visibility_state.surface_stack.take();
+                        visibility_state.scratch.frame.surface_stack =
+                            visibility_state.surface_stack.take();
                     }
                     _ => {
                         panic!("bug: not a tile cache");
@@ -547,18 +541,13 @@ impl FrameBuilder {
             visited_pictures: &mut visited_pictures,
         };
 
-
         if !scene.snapshot_pictures.is_empty() {
             // Push a default dirty region which does not cull any
             // primitive.
-            let mut default_dirty_region = DirtyRegion::new(
-                root_spatial_node_index,
-                root_spatial_node_index,
-            );
-            default_dirty_region.add_dirty_region(
-                PictureRect::max_rect(),
-                frame_context.spatial_tree,
-            );
+            let mut default_dirty_region =
+                DirtyRegion::new(root_spatial_node_index, root_spatial_node_index);
+            default_dirty_region
+                .add_dirty_region(PictureRect::max_rect(), frame_context.spatial_tree);
             frame_state.push_dirty_region(default_dirty_region);
 
             frame_state.surface_builder.push_surface(
@@ -572,7 +561,6 @@ impl FrameBuilder {
         }
 
         for pic_index in &scene.snapshot_pictures {
-
             prepare_picture(
                 *pic_index,
                 &mut scene.prim_store,
@@ -583,7 +571,7 @@ impl FrameBuilder {
                 data_stores,
                 &mut scratch.primitive,
                 tile_caches,
-                &mut scene.prim_instances
+                &mut scene.prim_instances,
             );
         }
 
@@ -595,10 +583,8 @@ impl FrameBuilder {
         // Push a default dirty region which culls primitives
         // against the screen world rect, in absence of any
         // other dirty regions.
-        let mut default_dirty_region = DirtyRegion::new(
-            root_spatial_node_index,
-            root_spatial_node_index,
-        );
+        let mut default_dirty_region =
+            DirtyRegion::new(root_spatial_node_index, root_spatial_node_index);
         default_dirty_region.add_dirty_region(
             frame_context.global_screen_world_rect.cast_unit(),
             frame_context.spatial_tree,
@@ -620,24 +606,24 @@ impl FrameBuilder {
                 data_stores,
                 &mut scratch.primitive,
                 tile_caches,
-                &mut scene.prim_instances
+                &mut scene.prim_instances,
             );
         }
 
         frame_state.pop_dirty_region();
         frame_state.surface_builder.finalize();
         profile.end_time(profiler::FRAME_PREPARE_TIME);
-        profile.set(profiler::VISIBLE_PRIMITIVES, frame_state.num_visible_primitives);
+        profile.set(
+            profiler::VISIBLE_PRIMITIVES,
+            frame_state.num_visible_primitives,
+        );
 
         scratch.frame.dirty_region_stack = frame_state.dirty_region_stack.take();
 
         {
             profile_marker!("BlockOnResources");
 
-            resource_cache.block_until_all_resources_added(
-                gpu_cache,
-                profile,
-            );
+            resource_cache.block_until_all_resources_added(gpu_cache, profile);
         }
     }
 
@@ -667,7 +653,10 @@ impl FrameBuilder {
         let mut frame_memory = FrameMemory::new(chunk_pool, stamp.frame_id());
 
         profile.set(profiler::PRIMITIVES, scene.prim_instances.len());
-        profile.set(profiler::PICTURE_CACHE_SLICES, scene.tile_cache_config.picture_cache_slice_count);
+        profile.set(
+            profiler::PICTURE_CACHE_SLICES,
+            scene.tile_cache_config.picture_cache_slice_count,
+        );
         scratch.begin_frame();
         gpu_cache.begin_frame(stamp);
         resource_cache.begin_frame(stamp, gpu_cache, profile);
@@ -688,7 +677,8 @@ impl FrameBuilder {
         let global_device_pixel_scale = DevicePixelScale::new(1.0);
 
         let output_size = scene.output_rect.size();
-        let screen_world_rect = (scene.output_rect.to_f32() / global_device_pixel_scale).round_out();
+        let screen_world_rect =
+            (scene.output_rect.to_f32() / global_device_pixel_scale).round_out();
 
         let mut composite_state = CompositeState::new(
             scene.config.compositor_kind,
@@ -698,7 +688,8 @@ impl FrameBuilder {
             &frame_memory,
         );
 
-        self.composite_state_prealloc.preallocate(&mut composite_state);
+        self.composite_state_prealloc
+            .preallocate(&mut composite_state);
 
         let mut cmd_buffers = CommandBufferList::new();
 
@@ -748,8 +739,10 @@ impl FrameBuilder {
         let mut passes = frame_memory.new_vec();
         let mut has_texture_cache_tasks = false;
         let mut prim_headers = PrimitiveHeaders::new(&frame_memory);
-        self.prim_headers_prealloc.preallocate_framevec(&mut prim_headers.headers_int);
-        self.prim_headers_prealloc.preallocate_framevec(&mut prim_headers.headers_float);
+        self.prim_headers_prealloc
+            .preallocate_framevec(&mut prim_headers.headers_int);
+        self.prim_headers_prealloc
+            .preallocate_framevec(&mut prim_headers.headers_float);
 
         {
             profile_marker!("Batching");
@@ -840,7 +833,8 @@ impl FrameBuilder {
 
         resource_cache.end_frame(profile);
 
-        self.prim_headers_prealloc.record_vec(&prim_headers.headers_int);
+        self.prim_headers_prealloc
+            .record_vec(&prim_headers.headers_int);
         self.composite_state_prealloc.record(&composite_state);
 
         composite_state.end_frame();
@@ -876,136 +870,177 @@ impl FrameBuilder {
         &self,
         scratch: &mut PrimitiveScratchBuffer,
         spatial_tree: &SpatialTree,
-        minimap_data_store: FastHashMap<ExternalScrollId, MinimapData>) {
-      // TODO: Replace minimap_data_store with Option<FastHastMap>?
-      if minimap_data_store.is_empty() {
-        return
-      }
-
-      // In our main walk over the spatial tree (below), for nodes inside a
-      // subtree rooted at a root-content node, we need some information from
-      // that enclosing root-content node. To collect this information, do an
-      // preliminary walk over the spatial tree now and collect the root-content
-      // info in a HashMap.
-      struct RootContentInfo {
-        transform: LayoutToWorldTransform,
-        clip: LayoutRect
-      }
-      let mut root_content_info = FastHashMap::<ExternalScrollId, RootContentInfo>::default();
-      spatial_tree.visit_nodes(|index, node| {
-        if let SpatialNodeType::ScrollFrame(ref scroll_frame_info) = node.node_type {
-          if let Some(minimap_data) = minimap_data_store.get(&scroll_frame_info.external_id) {
-            if minimap_data.is_root_content {
-              let transform = spatial_tree.get_world_viewport_transform(index).into_transform();
-              root_content_info.insert(scroll_frame_info.external_id, RootContentInfo{
-                transform,
-                clip: scroll_frame_info.viewport_rect
-              });
-            }
-          }
+        minimap_data_store: FastHashMap<ExternalScrollId, MinimapData>,
+    ) {
+        // TODO: Replace minimap_data_store with Option<FastHastMap>?
+        if minimap_data_store.is_empty() {
+            return;
         }
-      });
 
-      // This is the main walk over the spatial tree. For every scroll frame node which
-      // has minimap data, compute the rects we want to render for that minimap in world
-      // coordinates and add them to `scratch.debug_items`.
-      spatial_tree.visit_nodes(|index, node| {
-        if let SpatialNodeType::ScrollFrame(ref scroll_frame_info) = node.node_type {
-          if let Some(minimap_data) = minimap_data_store.get(&scroll_frame_info.external_id) {
-            const HORIZONTAL_PADDING: f32 = 5.0;
-            const VERTICAL_PADDING: f32 = 10.0;
-            const PAGE_BORDER_COLOR: ColorF = debug_colors::BLACK;
-            const BACKGROUND_COLOR: ColorF = ColorF { r: 0.3, g: 0.3, b: 0.3, a: 0.3};
-            const DISPLAYPORT_BACKGROUND_COLOR: ColorF = ColorF { r: 1.0, g: 1.0, b: 1.0, a: 0.4};
-            const LAYOUT_PORT_COLOR: ColorF = debug_colors::RED;
-            const VISUAL_PORT_COLOR: ColorF = debug_colors::BLUE;
-            const DISPLAYPORT_COLOR: ColorF = debug_colors::LIME;
-
-            let viewport = scroll_frame_info.viewport_rect;
-
-            // Scale the minimap to make it 100px wide (if there's space), and the full height
-            // of the scroll frame's viewport, minus some padding. Position it at the left edge
-            // of the scroll frame's viewport.
-            let scale_factor_x = 100f32.min(viewport.width() - (2.0 * HORIZONTAL_PADDING))
-                                   / minimap_data.scrollable_rect.width();
-            let scale_factor_y = (viewport.height() - (2.0 * VERTICAL_PADDING))
-                                / minimap_data.scrollable_rect.height();
-            if scale_factor_x <= 0.0 || scale_factor_y <= 0.0 {
-              return;
-            }
-            let transform = LayoutTransform::scale(scale_factor_x, scale_factor_y, 1.0)
-                .then_translate(LayoutVector3D::new(HORIZONTAL_PADDING, VERTICAL_PADDING, 0.0))
-                .then_translate(LayoutVector3D::new(viewport.min.x, viewport.min.y, 0.0));
-
-            // Transforms for transforming rects in this scroll frame's local coordintes, to world coordinates.
-            // For scroll frames inside a root-content subtree, we apply this transform in two parts
-            // (local to root-content, and root-content to world), so that we can make additional
-            // adjustments in root-content space. For scroll frames outside of a root-content subtree,
-            // the entire world transform will be in `local_to_root_content`.
-            let world_transform = spatial_tree
-                .get_world_viewport_transform(index)
-                .into_transform();
-            let mut local_to_root_content =
-                world_transform.with_destination::<LayoutPixel>();
-            let mut root_content_to_world = LayoutToWorldTransform::default();
-            let mut root_content_clip = None;
-            if minimap_data.root_content_scroll_id != 0 {
-              if let Some(RootContentInfo{transform: root_content_transform, clip}) = root_content_info.get(&ExternalScrollId(minimap_data.root_content_scroll_id, minimap_data.root_content_pipeline_id)) {
-                // Exclude the root-content node's zoom transform from `local_to_root_content`.
-                // This ensures that the minimap remains unaffected by pinch-zooming
-                // (in essence, remaining attached to the *visual* viewport, rather than to
-                // the *layout* viewport which is what happens by default).
-                let zoom_transform = minimap_data.zoom_transform;
-                local_to_root_content = world_transform
-                  .then(&root_content_transform.inverse().unwrap())
-                  .then(&zoom_transform.inverse().unwrap());
-                root_content_to_world = root_content_transform.clone();
-                root_content_clip = Some(clip);
-              }
-            }
-
-            let mut add_rect = |rect, border, fill| -> Option<()> {
-              const STROKE_WIDTH: f32 = 2.0;
-              // Place rect in scroll frame's local coordinate space
-              let transformed_rect = transform.outer_transformed_box2d(&rect)?;
-
-              // Transform to world coordinates, using root-content coords as an intermediate step.
-              let mut root_content_rect = local_to_root_content.outer_transformed_box2d(&transformed_rect)?;
-              // In root-content coords, apply the root content node's viewport clip.
-              // This prevents subframe minimaps from leaking into the chrome area when the root
-              // scroll frame is scrolled.
-              // TODO: The minimaps of nested subframes can still leak outside of the viewports of
-              // their containing subframes. Should have a more proper fix for this.
-              if let Some(clip) = root_content_clip {
-                root_content_rect = root_content_rect.intersection(clip)?;
-              }
-              let world_rect = root_content_to_world.outer_transformed_box2d(&root_content_rect)?;
-
-              scratch.push_debug_rect_with_stroke_width(world_rect, border, STROKE_WIDTH);
-
-              // Add world coordinate rects to scratch.debug_items
-              if let Some(fill_color) = fill {
-                let interior_world_rect = WorldRect::new(
-                    world_rect.min + WorldVector2D::new(STROKE_WIDTH, STROKE_WIDTH),
-                    world_rect.max - WorldVector2D::new(STROKE_WIDTH, STROKE_WIDTH)
-                );
-                scratch.push_debug_rect(interior_world_rect * DevicePixelScale::new(1.0), 1, border, fill_color);
-              }
-
-              Some(())
-            };
-
-            add_rect(minimap_data.scrollable_rect, PAGE_BORDER_COLOR, Some(BACKGROUND_COLOR));
-            add_rect(minimap_data.displayport, DISPLAYPORT_COLOR, Some(DISPLAYPORT_BACKGROUND_COLOR));
-            // Only render a distinct layout viewport for the root content.
-            // For other scroll frames, the visual and layout viewports coincide.
-            if minimap_data.is_root_content {
-              add_rect(minimap_data.layout_viewport, LAYOUT_PORT_COLOR, None);
-            }
-            add_rect(minimap_data.visual_viewport, VISUAL_PORT_COLOR, None);
-          }
+        // In our main walk over the spatial tree (below), for nodes inside a
+        // subtree rooted at a root-content node, we need some information from
+        // that enclosing root-content node. To collect this information, do an
+        // preliminary walk over the spatial tree now and collect the root-content
+        // info in a HashMap.
+        struct RootContentInfo {
+            transform: LayoutToWorldTransform,
+            clip: LayoutRect,
         }
-      });
+        let mut root_content_info = FastHashMap::<ExternalScrollId, RootContentInfo>::default();
+        spatial_tree.visit_nodes(|index, node| {
+            if let SpatialNodeType::ScrollFrame(ref scroll_frame_info) = node.node_type {
+                if let Some(minimap_data) = minimap_data_store.get(&scroll_frame_info.external_id) {
+                    if minimap_data.is_root_content {
+                        let transform = spatial_tree
+                            .get_world_viewport_transform(index)
+                            .into_transform();
+                        root_content_info.insert(
+                            scroll_frame_info.external_id,
+                            RootContentInfo {
+                                transform,
+                                clip: scroll_frame_info.viewport_rect,
+                            },
+                        );
+                    }
+                }
+            }
+        });
+
+        // This is the main walk over the spatial tree. For every scroll frame node which
+        // has minimap data, compute the rects we want to render for that minimap in world
+        // coordinates and add them to `scratch.debug_items`.
+        spatial_tree.visit_nodes(|index, node| {
+            if let SpatialNodeType::ScrollFrame(ref scroll_frame_info) = node.node_type {
+                if let Some(minimap_data) = minimap_data_store.get(&scroll_frame_info.external_id) {
+                    const HORIZONTAL_PADDING: f32 = 5.0;
+                    const VERTICAL_PADDING: f32 = 10.0;
+                    const PAGE_BORDER_COLOR: ColorF = debug_colors::BLACK;
+                    const BACKGROUND_COLOR: ColorF = ColorF {
+                        r: 0.3,
+                        g: 0.3,
+                        b: 0.3,
+                        a: 0.3,
+                    };
+                    const DISPLAYPORT_BACKGROUND_COLOR: ColorF = ColorF {
+                        r: 1.0,
+                        g: 1.0,
+                        b: 1.0,
+                        a: 0.4,
+                    };
+                    const LAYOUT_PORT_COLOR: ColorF = debug_colors::RED;
+                    const VISUAL_PORT_COLOR: ColorF = debug_colors::BLUE;
+                    const DISPLAYPORT_COLOR: ColorF = debug_colors::LIME;
+
+                    let viewport = scroll_frame_info.viewport_rect;
+
+                    // Scale the minimap to make it 100px wide (if there's space), and the full height
+                    // of the scroll frame's viewport, minus some padding. Position it at the left edge
+                    // of the scroll frame's viewport.
+                    let scale_factor_x = 100f32.min(viewport.width() - (2.0 * HORIZONTAL_PADDING))
+                        / minimap_data.scrollable_rect.width();
+                    let scale_factor_y = (viewport.height() - (2.0 * VERTICAL_PADDING))
+                        / minimap_data.scrollable_rect.height();
+                    if scale_factor_x <= 0.0 || scale_factor_y <= 0.0 {
+                        return;
+                    }
+                    let transform = LayoutTransform::scale(scale_factor_x, scale_factor_y, 1.0)
+                        .then_translate(LayoutVector3D::new(
+                            HORIZONTAL_PADDING,
+                            VERTICAL_PADDING,
+                            0.0,
+                        ))
+                        .then_translate(LayoutVector3D::new(viewport.min.x, viewport.min.y, 0.0));
+
+                    // Transforms for transforming rects in this scroll frame's local coordintes, to world coordinates.
+                    // For scroll frames inside a root-content subtree, we apply this transform in two parts
+                    // (local to root-content, and root-content to world), so that we can make additional
+                    // adjustments in root-content space. For scroll frames outside of a root-content subtree,
+                    // the entire world transform will be in `local_to_root_content`.
+                    let world_transform = spatial_tree
+                        .get_world_viewport_transform(index)
+                        .into_transform();
+                    let mut local_to_root_content =
+                        world_transform.with_destination::<LayoutPixel>();
+                    let mut root_content_to_world = LayoutToWorldTransform::default();
+                    let mut root_content_clip = None;
+                    if minimap_data.root_content_scroll_id != 0 {
+                        if let Some(RootContentInfo {
+                            transform: root_content_transform,
+                            clip,
+                        }) = root_content_info.get(&ExternalScrollId(
+                            minimap_data.root_content_scroll_id,
+                            minimap_data.root_content_pipeline_id,
+                        )) {
+                            // Exclude the root-content node's zoom transform from `local_to_root_content`.
+                            // This ensures that the minimap remains unaffected by pinch-zooming
+                            // (in essence, remaining attached to the *visual* viewport, rather than to
+                            // the *layout* viewport which is what happens by default).
+                            let zoom_transform = minimap_data.zoom_transform;
+                            local_to_root_content = world_transform
+                                .then(&root_content_transform.inverse().unwrap())
+                                .then(&zoom_transform.inverse().unwrap());
+                            root_content_to_world = root_content_transform.clone();
+                            root_content_clip = Some(clip);
+                        }
+                    }
+
+                    let mut add_rect = |rect, border, fill| -> Option<()> {
+                        const STROKE_WIDTH: f32 = 2.0;
+                        // Place rect in scroll frame's local coordinate space
+                        let transformed_rect = transform.outer_transformed_box2d(&rect)?;
+
+                        // Transform to world coordinates, using root-content coords as an intermediate step.
+                        let mut root_content_rect =
+                            local_to_root_content.outer_transformed_box2d(&transformed_rect)?;
+                        // In root-content coords, apply the root content node's viewport clip.
+                        // This prevents subframe minimaps from leaking into the chrome area when the root
+                        // scroll frame is scrolled.
+                        // TODO: The minimaps of nested subframes can still leak outside of the viewports of
+                        // their containing subframes. Should have a more proper fix for this.
+                        if let Some(clip) = root_content_clip {
+                            root_content_rect = root_content_rect.intersection(clip)?;
+                        }
+                        let world_rect =
+                            root_content_to_world.outer_transformed_box2d(&root_content_rect)?;
+
+                        scratch.push_debug_rect_with_stroke_width(world_rect, border, STROKE_WIDTH);
+
+                        // Add world coordinate rects to scratch.debug_items
+                        if let Some(fill_color) = fill {
+                            let interior_world_rect = WorldRect::new(
+                                world_rect.min + WorldVector2D::new(STROKE_WIDTH, STROKE_WIDTH),
+                                world_rect.max - WorldVector2D::new(STROKE_WIDTH, STROKE_WIDTH),
+                            );
+                            scratch.push_debug_rect(
+                                interior_world_rect * DevicePixelScale::new(1.0),
+                                1,
+                                border,
+                                fill_color,
+                            );
+                        }
+
+                        Some(())
+                    };
+
+                    add_rect(
+                        minimap_data.scrollable_rect,
+                        PAGE_BORDER_COLOR,
+                        Some(BACKGROUND_COLOR),
+                    );
+                    add_rect(
+                        minimap_data.displayport,
+                        DISPLAYPORT_COLOR,
+                        Some(DISPLAYPORT_BACKGROUND_COLOR),
+                    );
+                    // Only render a distinct layout viewport for the root content.
+                    // For other scroll frames, the visual and layout viewports coincide.
+                    if minimap_data.is_root_content {
+                        add_rect(minimap_data.layout_viewport, LAYOUT_PORT_COLOR, None);
+                    }
+                    add_rect(minimap_data.visual_viewport, VISUAL_PORT_COLOR, None);
+                }
+            }
+        });
     }
 
     fn build_composite_pass(
@@ -1020,7 +1055,10 @@ impl FrameBuilder {
             let pic = &ctx.prim_store.pictures[pic_index.0];
 
             match pic.raster_config {
-                Some(RasterConfig { composite_mode: PictureCompositeMode::TileCache { slice_id }, .. }) => {
+                Some(RasterConfig {
+                    composite_mode: PictureCompositeMode::TileCache { slice_id },
+                    ..
+                }) => {
                     // Tile cache instances are added to the composite config, rather than
                     // directly added to batches. This allows them to be drawn with various
                     // present modes during render, such as partial present etc.
@@ -1034,7 +1072,8 @@ impl FrameBuilder {
                     let world_clip_rect = map_local_to_world
                         .map(&tile_cache.local_clip_rect)
                         .expect("bug: unable to map clip rect");
-                    let device_clip_rect = (world_clip_rect * ctx.global_device_pixel_scale).round();
+                    let device_clip_rect =
+                        (world_clip_rect * ctx.global_device_pixel_scale).round();
 
                     composite_state.push_surface(
                         tile_cache,
@@ -1082,61 +1121,66 @@ pub fn build_render_pass(
 
     for sub_pass in &src_pass.sub_passes {
         match sub_pass.surface {
-            SubPassSurface::Dynamic { target_kind, texture_id, used_rect } => {
-                match target_kind {
-                    RenderTargetKind::Color => {
-                        let mut target = RenderTarget::new(
-                            RenderTargetKind::Color,
-                            false,
-                            texture_id,
-                            screen_size,
-                            gpu_supports_fast_clears,
-                            Some(used_rect),
-                            &ctx.frame_memory,
+            SubPassSurface::Dynamic {
+                target_kind,
+                texture_id,
+                used_rect,
+            } => match target_kind {
+                RenderTargetKind::Color => {
+                    let mut target = RenderTarget::new(
+                        RenderTargetKind::Color,
+                        false,
+                        texture_id,
+                        screen_size,
+                        gpu_supports_fast_clears,
+                        Some(used_rect),
+                        &ctx.frame_memory,
+                    );
+
+                    for task_id in &sub_pass.task_ids {
+                        target.add_task(
+                            *task_id,
+                            ctx,
+                            gpu_cache,
+                            gpu_buffer_builder,
+                            render_tasks,
+                            clip_store,
+                            transforms,
                         );
-
-                        for task_id in &sub_pass.task_ids {
-                            target.add_task(
-                                *task_id,
-                                ctx,
-                                gpu_cache,
-                                gpu_buffer_builder,
-                                render_tasks,
-                                clip_store,
-                                transforms,
-                            );
-                        }
-
-                        pass.color.targets.push(target);
                     }
-                    RenderTargetKind::Alpha => {
-                        let mut target = RenderTarget::new(
-                            RenderTargetKind::Alpha,
-                            false,
-                            texture_id,
-                            screen_size,
-                            gpu_supports_fast_clears,
-                            Some(used_rect),
-                            &ctx.frame_memory,
-                        );
 
-                        for task_id in &sub_pass.task_ids {
-                            target.add_task(
-                                *task_id,
-                                ctx,
-                                gpu_cache,
-                                gpu_buffer_builder,
-                                render_tasks,
-                                clip_store,
-                                transforms,
-                            );
-                        }
-
-                        pass.alpha.targets.push(target);
-                    }
+                    pass.color.targets.push(target);
                 }
-            }
-            SubPassSurface::Persistent { surface: StaticRenderTaskSurface::PictureCache { ref surface, .. }, .. } => {
+                RenderTargetKind::Alpha => {
+                    let mut target = RenderTarget::new(
+                        RenderTargetKind::Alpha,
+                        false,
+                        texture_id,
+                        screen_size,
+                        gpu_supports_fast_clears,
+                        Some(used_rect),
+                        &ctx.frame_memory,
+                    );
+
+                    for task_id in &sub_pass.task_ids {
+                        target.add_task(
+                            *task_id,
+                            ctx,
+                            gpu_cache,
+                            gpu_buffer_builder,
+                            render_tasks,
+                            clip_store,
+                            transforms,
+                        );
+                    }
+
+                    pass.alpha.targets.push(target);
+                }
+            },
+            SubPassSurface::Persistent {
+                surface: StaticRenderTaskSurface::PictureCache { ref surface, .. },
+                ..
+            } => {
                 assert_eq!(sub_pass.task_ids.len(), 1);
                 let task_id = sub_pass.task_ids[0];
                 let task = &render_tasks[task_id];
@@ -1145,16 +1189,24 @@ pub fn build_render_pass(
                 match task.kind {
                     RenderTaskKind::Picture(ref pic_task) => {
                         let cmd_buffer = cmd_buffers.get(pic_task.cmd_buffer_index);
-                        let mut dirty_rect = pic_task.scissor_rect.expect("bug: must be set for cache tasks");
-                        let mut valid_rect = pic_task.valid_rect.expect("bug: must be set for cache tasks");
+                        let mut dirty_rect = pic_task
+                            .scissor_rect
+                            .expect("bug: must be set for cache tasks");
+                        let mut valid_rect = pic_task
+                            .valid_rect
+                            .expect("bug: must be set for cache tasks");
 
                         // If we have a surface size, clip the dirty and vaild rects
                         // to that size. This ensures that native compositors will
                         // pass sanity checks (Bug 1971296).
                         if let ResolvedSurfaceTexture::Native { size, .. } = surface {
                             let surface_size_rect = <DeviceIntRect>::from_size(*size);
-                            dirty_rect = dirty_rect.intersection(&surface_size_rect).unwrap_or_default();
-                            valid_rect = valid_rect.intersection(&surface_size_rect).unwrap_or_default();
+                            dirty_rect = dirty_rect
+                                .intersection(&surface_size_rect)
+                                .unwrap_or_default();
+                            valid_rect = valid_rect
+                                .intersection(&surface_size_rect)
+                                .unwrap_or_default();
                         }
 
                         let batcher = AlphaBatchBuilder::new(
@@ -1189,10 +1241,8 @@ pub fn build_render_pass(
                         let batcher = batch_builder.finalize();
 
                         let mut batch_containers = ctx.frame_memory.new_vec();
-                        let mut alpha_batch_container = AlphaBatchContainer::new(
-                            Some(dirty_rect),
-                            &ctx.frame_memory
-                        );
+                        let mut alpha_batch_container =
+                            AlphaBatchContainer::new(Some(dirty_rect), &ctx.frame_memory);
 
                         batcher.build(
                             &mut batch_containers,
@@ -1222,8 +1272,12 @@ pub fn build_render_pass(
                         // pass sanity checks (Bug 1971296).
                         if let ResolvedSurfaceTexture::Native { size, .. } = surface {
                             let surface_size_rect = <DeviceIntRect>::from_size(*size);
-                            dirty_rect = dirty_rect.intersection(&surface_size_rect).unwrap_or_default();
-                            valid_rect = valid_rect.intersection(&surface_size_rect).unwrap_or_default();
+                            dirty_rect = dirty_rect
+                                .intersection(&surface_size_rect)
+                                .unwrap_or_default();
+                            valid_rect = valid_rect
+                                .intersection(&surface_size_rect)
+                                .unwrap_or_default();
                         }
 
                         let target = PictureCacheTarget {
@@ -1244,20 +1298,25 @@ pub fn build_render_pass(
                     }
                 };
             }
-            SubPassSurface::Persistent { surface: StaticRenderTaskSurface::TextureCache { target_kind, texture, .. } } => {
-                let texture = pass.texture_cache
-                    .entry(texture)
-                    .or_insert_with(||
-                        RenderTarget::new(
-                            target_kind,
-                            true,
-                            texture,
-                            screen_size,
-                            gpu_supports_fast_clears,
-                            None,
-                            &ctx.frame_memory
-                        )
-                    );
+            SubPassSurface::Persistent {
+                surface:
+                    StaticRenderTaskSurface::TextureCache {
+                        target_kind,
+                        texture,
+                        ..
+                    },
+            } => {
+                let texture = pass.texture_cache.entry(texture).or_insert_with(|| {
+                    RenderTarget::new(
+                        target_kind,
+                        true,
+                        texture,
+                        screen_size,
+                        gpu_supports_fast_clears,
+                        None,
+                        &ctx.frame_memory,
+                    )
+                });
                 for task_id in &sub_pass.task_ids {
                     texture.add_task(
                         *task_id,
@@ -1270,7 +1329,9 @@ pub fn build_render_pass(
                     );
                 }
             }
-            SubPassSurface::Persistent { surface: StaticRenderTaskSurface::ReadOnly { .. } } => {
+            SubPassSurface::Persistent {
+                surface: StaticRenderTaskSurface::ReadOnly { .. },
+            } => {
                 panic!("Should not create a render pass for read-only task locations.");
             }
         }

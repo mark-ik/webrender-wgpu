@@ -53,6 +53,8 @@ fn main() {
 
 #[cfg(not(feature = "wgpu_backend"))]
 fn main() {
-    eprintln!("Run with `cargo run -p webrender-examples --bin wgpu_headless --features wgpu_backend`.");
+    eprintln!(
+        "Run with `cargo run -p webrender-examples --bin wgpu_headless --features wgpu_backend`."
+    );
     std::process::exit(1);
 }

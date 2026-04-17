@@ -48,7 +48,8 @@ impl FontContext {
         };
         match fontdue::Font::from_bytes(data.as_slice(), settings) {
             Ok(font) => {
-                self.fonts.insert(*font_key, LoadedFont { font, _data: data });
+                self.fonts
+                    .insert(*font_key, LoadedFont { font, _data: data });
             }
             Err(e) => {
                 log::warn!("fontdue: failed to load font {:?}: {}", font_key, e);
@@ -75,7 +76,11 @@ impl FontContext {
     pub fn get_glyph_index(&mut self, font_key: FontKey, ch: char) -> Option<u32> {
         let loaded = self.fonts.get(&font_key)?;
         let index = loaded.font.lookup_glyph_index(ch);
-        if index == 0 { None } else { Some(index as u32) }
+        if index == 0 {
+            None
+        } else {
+            Some(index as u32)
+        }
     }
 
     pub fn get_glyph_dimensions(
@@ -105,17 +110,11 @@ impl FontContext {
         // No platform-specific preparation needed.
     }
 
-    pub fn begin_rasterize(_font: &FontInstance) {
-    }
+    pub fn begin_rasterize(_font: &FontInstance) {}
 
-    pub fn end_rasterize(_font: &FontInstance) {
-    }
+    pub fn end_rasterize(_font: &FontInstance) {}
 
-    pub fn rasterize_glyph(
-        &mut self,
-        font: &FontInstance,
-        key: &GlyphKey,
-    ) -> GlyphRasterResult {
+    pub fn rasterize_glyph(&mut self, font: &FontInstance, key: &GlyphKey) -> GlyphRasterResult {
         let loaded = match self.fonts.get(&font.base.font_key) {
             Some(f) => f,
             None => return Err(GlyphRasterError::LoadFailed),
@@ -154,7 +153,7 @@ impl FontContext {
                 for x in 0..metrics.width {
                     let a = alpha_bitmap[src_row + x];
                     let dst = (dst_row + x) * 4;
-                    padded[dst] = a;     // B
+                    padded[dst] = a; // B
                     padded[dst + 1] = a; // G
                     padded[dst + 2] = a; // R
                     padded[dst + 3] = a; // A

@@ -17,7 +17,6 @@ use webrender::api::*;
 use webrender::render_api::*;
 use webrender::api::units::*;
 
-
 struct ImageGenerator {
     patterns: [[u8; 3]; 6],
     next_pattern: usize,
@@ -43,8 +42,8 @@ impl ImageGenerator {
     fn generate_image(&mut self, size: i32) {
         let pattern = &self.patterns[self.next_pattern];
         self.current_image.clear();
-        for y in 0 .. size {
-            for x in 0 .. size {
+        for y in 0..size {
+            for x in 0..size {
                 let lum = 255 * (1 - (((x & 8) == 0) ^ ((y & 8) == 0)) as u8);
                 self.current_image.extend_from_slice(&[
                     lum * pattern[0],
@@ -117,7 +116,12 @@ impl Example for App {
             self.image_generator.generate_image(128);
             txn.add_image(
                 key0,
-                ImageDescriptor::new(128, 128, ImageFormat::BGRA8, ImageDescriptorFlags::IS_OPAQUE),
+                ImageDescriptor::new(
+                    128,
+                    128,
+                    ImageFormat::BGRA8,
+                    ImageDescriptorFlags::IS_OPAQUE,
+                ),
                 ImageData::new(self.image_generator.take()),
                 None,
             );
@@ -125,7 +129,12 @@ impl Example for App {
             self.image_generator.generate_image(128);
             txn.add_image(
                 key1,
-                ImageDescriptor::new(128, 128, ImageFormat::BGRA8, ImageDescriptorFlags::IS_OPAQUE),
+                ImageDescriptor::new(
+                    128,
+                    128,
+                    ImageFormat::BGRA8,
+                    ImageDescriptorFlags::IS_OPAQUE,
+                ),
                 ImageData::new(self.image_generator.take()),
                 None,
             );
@@ -199,11 +208,12 @@ impl Example for App {
     ) -> bool {
         match event {
             winit::event::WindowEvent::KeyboardInput {
-                input: winit::event::KeyboardInput {
-                    state: winit::event::ElementState::Pressed,
-                    virtual_keycode: Some(key),
-                    ..
-                },
+                input:
+                    winit::event::KeyboardInput {
+                        state: winit::event::ElementState::Pressed,
+                        virtual_keycode: Some(key),
+                        ..
+                    },
                 ..
             } => {
                 let mut txn = Transaction::new();
@@ -212,8 +222,8 @@ impl Example for App {
                     winit::event::VirtualKeyCode::S => {
                         self.stress_keys.clear();
 
-                        for _ in 0 .. 16 {
-                            for _ in 0 .. 16 {
+                        for _ in 0..16 {
+                            for _ in 0..16 {
                                 let size = 4;
 
                                 let image_key = api.generate_image_key();
@@ -236,20 +246,29 @@ impl Example for App {
                             }
                         }
                     }
-                    winit::event::VirtualKeyCode::D => if let Some(image_key) = self.image_key.take() {
-                        txn.delete_image(image_key);
-                    },
-                    winit::event::VirtualKeyCode::U => if let Some(image_key) = self.image_key {
-                        let size = 128;
-                        self.image_generator.generate_image(size);
+                    winit::event::VirtualKeyCode::D => {
+                        if let Some(image_key) = self.image_key.take() {
+                            txn.delete_image(image_key);
+                        }
+                    }
+                    winit::event::VirtualKeyCode::U => {
+                        if let Some(image_key) = self.image_key {
+                            let size = 128;
+                            self.image_generator.generate_image(size);
 
-                        txn.update_image(
-                            image_key,
-                            ImageDescriptor::new(size, size, ImageFormat::BGRA8, ImageDescriptorFlags::IS_OPAQUE),
-                            ImageData::new(self.image_generator.take()),
-                            &DirtyRect::All,
-                        );
-                    },
+                            txn.update_image(
+                                image_key,
+                                ImageDescriptor::new(
+                                    size,
+                                    size,
+                                    ImageFormat::BGRA8,
+                                    ImageDescriptorFlags::IS_OPAQUE,
+                                ),
+                                ImageData::new(self.image_generator.take()),
+                                &DirtyRect::All,
+                            );
+                        }
+                    }
                     winit::event::VirtualKeyCode::E => {
                         if let Some(image_key) = self.image_key.take() {
                             txn.delete_image(image_key);
@@ -267,7 +286,12 @@ impl Example for App {
 
                         txn.add_image(
                             image_key,
-                            ImageDescriptor::new(size, size, ImageFormat::BGRA8, ImageDescriptorFlags::IS_OPAQUE),
+                            ImageDescriptor::new(
+                                size,
+                                size,
+                                ImageFormat::BGRA8,
+                                ImageDescriptorFlags::IS_OPAQUE,
+                            ),
                             ImageData::External(image_data),
                             None,
                         );
@@ -285,7 +309,12 @@ impl Example for App {
 
                         txn.add_image(
                             image_key,
-                            ImageDescriptor::new(size, size, ImageFormat::BGRA8, ImageDescriptorFlags::IS_OPAQUE),
+                            ImageDescriptor::new(
+                                size,
+                                size,
+                                ImageFormat::BGRA8,
+                                ImageDescriptorFlags::IS_OPAQUE,
+                            ),
                             ImageData::new(self.image_generator.take()),
                             None,
                         );
@@ -304,10 +333,7 @@ impl Example for App {
         false
     }
 
-    fn get_image_handler(
-        &mut self,
-        _gl: &dyn gl::Gl,
-    ) -> Option<Box<dyn ExternalImageHandler>> {
+    fn get_image_handler(&mut self, _gl: &dyn gl::Gl) -> Option<Box<dyn ExternalImageHandler>> {
         Some(Box::new(ImageGenerator::new()))
     }
 }

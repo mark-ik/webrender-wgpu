@@ -26,18 +26,16 @@ use crate::picture;
 use crate::profiler::{self, Profiler, TransactionProfile};
 use crate::render_backend::RenderBackend;
 use crate::resource_cache::ResourceCache;
-use crate::scene_builder_thread::{SceneBuilderThread, SceneBuilderThreadChannels, LowPrioritySceneBuilderThread};
+use crate::scene_builder_thread::{
+    SceneBuilderThread, SceneBuilderThreadChannels, LowPrioritySceneBuilderThread,
+};
 use crate::texture_cache::{TextureCache, TextureCacheConfig};
 use crate::picture_textures::PictureTextures;
-use crate::renderer::{
-    Renderer, DebugOverlayState, BufferDamageTracker, PipelineInfo,
-    RendererError,
-};
+use crate::renderer::{Renderer, DebugOverlayState, BufferDamageTracker, PipelineInfo, RendererError};
 use crate::renderer::{ShaderPrecacheFlags, SharedShaders};
 #[cfg(feature = "gl_backend")]
 use crate::renderer::{
-    debug, gpu_cache, vertex,
-    TextureResolver,
+    debug, gpu_cache, vertex, TextureResolver,
     upload::{RendererUploadState, UploadTexturePool},
     shade::Shaders,
 };
@@ -49,7 +47,10 @@ use std::{
     cell::RefCell,
     collections::VecDeque,
     rc::Rc,
-    sync::{Arc, atomic::{AtomicBool, Ordering}},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     num::NonZeroUsize,
     path::PathBuf,
 };
@@ -73,14 +74,9 @@ pub fn wr_has_been_initialized() -> bool {
 
 fn create_dither_matrix_texture<D: GpuDevice>(device: &mut D) -> D::Texture {
     let dither_matrix: [u8; 64] = [
-        0, 48, 12, 60, 3, 51, 15, 63,
-        32, 16, 44, 28, 35, 19, 47, 31,
-        8, 56, 4, 52, 11, 59, 7, 55,
-        40, 24, 36, 20, 43, 27, 39, 23,
-        2, 50, 14, 62, 1, 49, 13, 61,
-        34, 18, 46, 30, 33, 17, 45, 29,
-        10, 58, 6, 54, 9, 57, 5, 53,
-        42, 26, 38, 22, 41, 25, 37, 21,
+        0, 48, 12, 60, 3, 51, 15, 63, 32, 16, 44, 28, 35, 19, 47, 31, 8, 56, 4, 52, 11, 59, 7, 55,
+        40, 24, 36, 20, 43, 27, 39, 23, 2, 50, 14, 62, 1, 49, 13, 61, 34, 18, 46, 30, 33, 17, 45,
+        29, 10, 58, 6, 54, 9, 57, 5, 53, 42, 26, 38, 22, 41, 25, 37, 21,
     ];
 
     let texture = device.create_texture(
@@ -109,7 +105,12 @@ pub trait SceneBuilderHooks {
     /// This is called after each scene swap occurs. The PipelineInfo contains
     /// the updated epochs and pipelines removed in the new scene compared to
     /// the old scene.
-    fn post_scene_swap(&self, document_id: &Vec<DocumentId>, info: PipelineInfo, schedule_frame: bool);
+    fn post_scene_swap(
+        &self,
+        document_id: &Vec<DocumentId>,
+        info: PipelineInfo,
+        schedule_frame: bool,
+    );
     /// This is called after a resource update operation on the scene builder
     /// thread, in the case where resource updates were applied without a scene
     /// build.
@@ -402,12 +403,7 @@ pub fn create_webrender_instance(
     options: WebRenderOptions,
     shaders: Option<&SharedShaders>,
 ) -> Result<(Renderer, RenderApiSender), RendererError> {
-    create_webrender_instance_with_backend(
-        RendererBackend::Gl { gl },
-        notifier,
-        options,
-        shaders,
-    )
+    create_webrender_instance_with_backend(RendererBackend::Gl { gl }, notifier, options, shaders)
 }
 
 pub fn create_webrender_instance_with_backend(
@@ -417,20 +413,44 @@ pub fn create_webrender_instance_with_backend(
     shaders: Option<&SharedShaders>,
 ) -> Result<(Renderer, RenderApiSender), RendererError> {
     #[cfg(feature = "wgpu_native")]
-    if let RendererBackend::Wgpu { instance, surface, width, height } = backend {
+    if let RendererBackend::Wgpu {
+        instance,
+        surface,
+        width,
+        height,
+    } = backend
+    {
         let present_mode = options.wgpu_present_mode;
-        return create_webrender_instance_wgpu(notifier, options, WgpuInit::CreateDevice { instance, surface, width, height, present_mode });
+        return create_webrender_instance_wgpu(
+            notifier,
+            options,
+            WgpuInit::CreateDevice {
+                instance,
+                surface,
+                width,
+                height,
+                present_mode,
+            },
+        );
     }
 
     #[cfg(feature = "wgpu_backend")]
     if let RendererBackend::WgpuShared { device, queue } = backend {
-        return create_webrender_instance_wgpu(notifier, options, WgpuInit::SharedDevice { device, queue });
+        return create_webrender_instance_wgpu(
+            notifier,
+            options,
+            WgpuInit::SharedDevice { device, queue },
+        );
     }
 
     #[cfg(feature = "wgpu_backend")]
     if let RendererBackend::WgpuHal { device_factory } = backend {
         let (device, queue) = device_factory();
-        return create_webrender_instance_wgpu(notifier, options, WgpuInit::SharedDevice { device, queue });
+        return create_webrender_instance_wgpu(
+            notifier,
+            options,
+            WgpuInit::SharedDevice { device, queue },
+        );
     }
 
     #[cfg(feature = "gl_backend")]
@@ -500,7 +520,8 @@ fn create_webrender_instance_with_device(
         return Err(RendererError::SoftwareRasterizer);
     }
 
-    let image_tiling_threshold = options.image_tiling_threshold
+    let image_tiling_threshold = options
+        .image_tiling_threshold
         .min(max_internal_texture_size);
 
     device.begin_frame();
@@ -509,7 +530,10 @@ fn create_webrender_instance_with_device(
         Some(shaders) => Rc::clone(shaders),
         None => {
             let mut shaders = Shaders::new(&mut device, &options)?;
-            if options.precache_flags.intersects(ShaderPrecacheFlags::ASYNC_COMPILE | ShaderPrecacheFlags::FULL_COMPILE) {
+            if options
+                .precache_flags
+                .intersects(ShaderPrecacheFlags::ASYNC_COMPILE | ShaderPrecacheFlags::FULL_COMPILE)
+            {
                 let mut pending_shaders = shaders.precache_all(options.precache_flags);
                 while shaders.resume_precache(&mut device, &mut pending_shaders)? {}
             }
@@ -528,7 +552,11 @@ fn create_webrender_instance_with_device(
         WebRenderOptions::MAX_INSTANCE_BUFFER_SIZE / mem::size_of::<PrimitiveInstanceData>();
     let vaos = vertex::RendererVaoState::new_gl(
         &mut device,
-        if options.enable_instancing { None } else { NonZeroUsize::new(max_primitive_instance_count) },
+        if options.enable_instancing {
+            None
+        } else {
+            NonZeroUsize::new(max_primitive_instance_count)
+        },
     );
 
     let texture_upload_pbo_pool = UploadPBOPool::new(&mut device, options.upload_pbo_default_size);
@@ -552,10 +580,8 @@ fn create_webrender_instance_with_device(
     // This is what happens in GPU cache updates in PBO path. Instead, we switch everything
     // except software GL to use the GPU scattered updates.
     let supports_scatter = device.get_capabilities().supports_color_buffer_float;
-    let gpu_cache_texture = gpu_cache::RendererGpuCache::new_gl(
-        &mut device,
-        supports_scatter && !is_software,
-    )?;
+    let gpu_cache_texture =
+        gpu_cache::RendererGpuCache::new_gl(&mut device, supports_scatter && !is_software)?;
 
     device.end_frame();
 
@@ -571,20 +597,20 @@ fn create_webrender_instance_with_device(
     };
 
     let compositor_kind = match options.compositor_config {
-        CompositorConfig::Draw { max_partial_present_rects, draw_previous_partial_present_regions, .. } => {
-            CompositorKind::Draw { max_partial_present_rects, draw_previous_partial_present_regions }
-        }
+        CompositorConfig::Draw {
+            max_partial_present_rects,
+            draw_previous_partial_present_regions,
+            ..
+        } => CompositorKind::Draw {
+            max_partial_present_rects,
+            draw_previous_partial_present_regions,
+        },
         CompositorConfig::Native { ref compositor } => {
             let capabilities = compositor.get_capabilities(&mut device);
 
-            CompositorKind::Native {
-                capabilities,
-            }
+            CompositorKind::Native { capabilities }
         }
-        CompositorConfig::Layer { .. } => {
-            CompositorKind::Layer {
-            }
-        }
+        CompositorConfig::Layer { .. } => CompositorKind::Layer {},
     };
 
     let config = FrameBuilderConfig {
@@ -620,29 +646,28 @@ fn create_webrender_instance_with_device(
     let enclosing_size_of_op = options.enclosing_size_of_op;
     let make_size_of_ops =
         move || size_of_op.map(|o| MallocSizeOfOps::new(o, enclosing_size_of_op));
-    let workers = options
-        .workers
-        .take()
-        .unwrap_or_else(|| {
-            let worker = ThreadPoolBuilder::new()
-                .thread_name(|idx|{ format!("WRWorker#{}", idx) })
-                .start_handler(move |idx| {
-                    register_thread_with_profiler(format!("WRWorker#{}", idx));
-                    profiler::register_thread(&format!("WRWorker#{}", idx));
-                })
-                .exit_handler(move |_idx| {
-                    profiler::unregister_thread();
-                })
-                .build();
-            Arc::new(worker.unwrap())
-        });
+    let workers = options.workers.take().unwrap_or_else(|| {
+        let worker = ThreadPoolBuilder::new()
+            .thread_name(|idx| format!("WRWorker#{}", idx))
+            .start_handler(move |idx| {
+                register_thread_with_profiler(format!("WRWorker#{}", idx));
+                profiler::register_thread(&format!("WRWorker#{}", idx));
+            })
+            .exit_handler(move |_idx| {
+                profiler::unregister_thread();
+            })
+            .build();
+        Arc::new(worker.unwrap())
+    });
     let sampler = options.sampler;
     let namespace_alloc_by_client = options.namespace_alloc_by_client;
 
     // Ensure shared font keys exist within their own unique namespace so
     // that they don't accidentally collide across Renderer instances.
     let font_namespace = if namespace_alloc_by_client {
-        options.shared_font_namespace.expect("Shared font namespace must be allocated by client")
+        options
+            .shared_font_namespace
+            .expect("Shared font namespace must be allocated by client")
     } else {
         RenderBackend::next_namespace_id()
     };
@@ -660,8 +685,7 @@ fn create_webrender_instance_with_device(
         device.supports_r8_texture_upload(),
     );
 
-    let (scene_builder_channels, scene_tx) =
-        SceneBuilderThreadChannels::new(api_tx.clone());
+    let (scene_builder_channels, scene_tx) = SceneBuilderThreadChannels::new(api_tx.clone());
 
     let sb_fonts = fonts.clone();
 
@@ -709,7 +733,9 @@ fn create_webrender_instance_with_device(
         .map(|handler| handler.create_similar());
 
     let texture_cache_config = options.texture_cache_config.clone();
-    let mut picture_tile_size = options.picture_tile_size.unwrap_or(picture::TILE_SIZE_DEFAULT);
+    let mut picture_tile_size = options
+        .picture_tile_size
+        .unwrap_or(picture::TILE_SIZE_DEFAULT);
     // Clamp the picture tile size to reasonable values.
     picture_tile_size.width = picture_tile_size.width.max(128).min(4096);
     picture_tile_size.height = picture_tile_size.height.max(128).min(4096);
@@ -722,9 +748,10 @@ fn create_webrender_instance_with_device(
 
     let render_backend_hooks = options.render_backend_hooks.take();
 
-    let chunk_pool = options.chunk_pool.take().unwrap_or_else(|| {
-        Arc::new(ChunkPool::new())
-    });
+    let chunk_pool = options
+        .chunk_pool
+        .take()
+        .unwrap_or_else(|| Arc::new(ChunkPool::new()));
 
     let rb_scene_tx = scene_tx.clone();
     let rb_fonts = fonts.clone();
@@ -744,10 +771,7 @@ fn create_webrender_instance_with_device(
             &texture_cache_config,
         );
 
-        let picture_textures = PictureTextures::new(
-            picture_tile_size,
-            picture_texture_filter,
-        );
+        let picture_textures = PictureTextures::new(picture_tile_size, picture_texture_filter);
 
         let glyph_cache = GlyphCache::new();
 
@@ -952,20 +976,35 @@ pub fn create_webrender_instance_wgpu(
     // Create or adopt the wgpu device.
     let mut wgpu_device = match init {
         #[cfg(feature = "wgpu_native")]
-        WgpuInit::CreateDevice { instance, surface, width, height, present_mode } => {
+        WgpuInit::CreateDevice {
+            instance,
+            surface,
+            width,
+            height,
+            present_mode,
+        } => {
             if let Some(surface) = surface {
-                let inst = instance.as_ref()
+                let inst = instance
+                    .as_ref()
                     .expect("wgpu Instance must be provided when surface is Some");
-                WgpuDevice::new_with_surface(inst, surface, width, height, present_mode, options.pipeline_cache_dir.as_deref())
-                    .ok_or(RendererError::UnsupportedBackend("no wgpu adapter available for surface"))?
+                WgpuDevice::new_with_surface(
+                    inst,
+                    surface,
+                    width,
+                    height,
+                    present_mode,
+                    options.pipeline_cache_dir.as_deref(),
+                )
+                .ok_or(RendererError::UnsupportedBackend(
+                    "no wgpu adapter available for surface",
+                ))?
             } else {
-                WgpuDevice::new_headless(options.pipeline_cache_dir.as_deref())
-                    .ok_or(RendererError::UnsupportedBackend("no wgpu adapter available"))?
+                WgpuDevice::new_headless(options.pipeline_cache_dir.as_deref()).ok_or(
+                    RendererError::UnsupportedBackend("no wgpu adapter available"),
+                )?
             }
         }
-        WgpuInit::SharedDevice { device, queue } => {
-            WgpuDevice::from_shared_device(device, queue)
-        }
+        WgpuInit::SharedDevice { device, queue } => WgpuDevice::from_shared_device(device, queue),
     };
 
     // Query real device limits from the wgpu device.
@@ -973,8 +1012,7 @@ pub fn create_webrender_instance_wgpu(
     // Enable subpixel AA only when the adapter supports dual-source blending
     // and the caller has not disabled AA. DUAL_SOURCE_BLENDING is a standard
     // wgpu feature (available on Vulkan, DX12, Metal) — not nightly.
-    let use_dual_source_blending = options.enable_aa
-        && wgpu_device.supports_dual_source_blending();
+    let use_dual_source_blending = options.enable_aa && wgpu_device.supports_dual_source_blending();
     let ext_blend_equation_advanced = false;
     let ext_blend_equation_advanced_coherent = false;
     let enable_clear_scissor = options.enable_clear_scissor.unwrap_or(false);
@@ -987,7 +1025,8 @@ pub fn create_webrender_instance_wgpu(
         max_internal_texture_size = max_internal_texture_size.min(internal_limit);
     }
 
-    let image_tiling_threshold = options.image_tiling_threshold
+    let image_tiling_threshold = options
+        .image_tiling_threshold
         .min(max_internal_texture_size);
 
     // When gl_backend is also compiled alongside wgpu_backend, the Renderer
@@ -1033,9 +1072,14 @@ pub fn create_webrender_instance_wgpu(
     };
 
     let compositor_kind = match options.compositor_config {
-        CompositorConfig::Draw { max_partial_present_rects, draw_previous_partial_present_regions, .. } => {
-            CompositorKind::Draw { max_partial_present_rects, draw_previous_partial_present_regions }
-        }
+        CompositorConfig::Draw {
+            max_partial_present_rects,
+            draw_previous_partial_present_regions,
+            ..
+        } => CompositorKind::Draw {
+            max_partial_present_rects,
+            draw_previous_partial_present_regions,
+        },
         #[cfg(feature = "gl_backend")]
         CompositorConfig::Native { .. } => {
             // The native OS compositor (DirectComposition / Core Animation) is
@@ -1059,9 +1103,7 @@ pub fn create_webrender_instance_wgpu(
                 draw_previous_partial_present_regions: false,
             }
         }
-        CompositorConfig::Layer { .. } => {
-            CompositorKind::Layer {}
-        }
+        CompositorConfig::Layer { .. } => CompositorKind::Layer {},
     };
 
     let config = FrameBuilderConfig {
@@ -1099,27 +1141,26 @@ pub fn create_webrender_instance_wgpu(
     let enclosing_size_of_op = options.enclosing_size_of_op;
     let make_size_of_ops =
         move || size_of_op.map(|o| MallocSizeOfOps::new(o, enclosing_size_of_op));
-    let workers = options
-        .workers
-        .take()
-        .unwrap_or_else(|| {
-            let worker = ThreadPoolBuilder::new()
-                .thread_name(|idx| format!("WRWorker#{}", idx))
-                .start_handler(move |idx| {
-                    register_thread_with_profiler(format!("WRWorker#{}", idx));
-                    profiler::register_thread(&format!("WRWorker#{}", idx));
-                })
-                .exit_handler(move |_idx| {
-                    profiler::unregister_thread();
-                })
-                .build();
-            Arc::new(worker.unwrap())
-        });
+    let workers = options.workers.take().unwrap_or_else(|| {
+        let worker = ThreadPoolBuilder::new()
+            .thread_name(|idx| format!("WRWorker#{}", idx))
+            .start_handler(move |idx| {
+                register_thread_with_profiler(format!("WRWorker#{}", idx));
+                profiler::register_thread(&format!("WRWorker#{}", idx));
+            })
+            .exit_handler(move |_idx| {
+                profiler::unregister_thread();
+            })
+            .build();
+        Arc::new(worker.unwrap())
+    });
     let sampler = options.sampler;
     let namespace_alloc_by_client = options.namespace_alloc_by_client;
 
     let font_namespace = if namespace_alloc_by_client {
-        options.shared_font_namespace.expect("Shared font namespace must be allocated by client")
+        options
+            .shared_font_namespace
+            .expect("Shared font namespace must be allocated by client")
     } else {
         RenderBackend::next_namespace_id()
     };
@@ -1137,8 +1178,7 @@ pub fn create_webrender_instance_wgpu(
         true, // wgpu supports R8 texture upload
     );
 
-    let (scene_builder_channels, scene_tx) =
-        SceneBuilderThreadChannels::new(api_tx.clone());
+    let (scene_builder_channels, scene_tx) = SceneBuilderThreadChannels::new(api_tx.clone());
 
     let sb_fonts = fonts.clone();
 
@@ -1186,7 +1226,9 @@ pub fn create_webrender_instance_wgpu(
         .map(|handler| handler.create_similar());
 
     let texture_cache_config = options.texture_cache_config.clone();
-    let mut picture_tile_size = options.picture_tile_size.unwrap_or(picture::TILE_SIZE_DEFAULT);
+    let mut picture_tile_size = options
+        .picture_tile_size
+        .unwrap_or(picture::TILE_SIZE_DEFAULT);
     picture_tile_size.width = picture_tile_size.width.max(128).min(4096);
     picture_tile_size.height = picture_tile_size.height.max(128).min(4096);
 
@@ -1198,9 +1240,10 @@ pub fn create_webrender_instance_wgpu(
 
     let render_backend_hooks = options.render_backend_hooks.take();
 
-    let chunk_pool = options.chunk_pool.take().unwrap_or_else(|| {
-        Arc::new(ChunkPool::new())
-    });
+    let chunk_pool = options
+        .chunk_pool
+        .take()
+        .unwrap_or_else(|| Arc::new(ChunkPool::new()));
 
     let rb_scene_tx = scene_tx.clone();
     let rb_fonts = fonts.clone();
@@ -1220,10 +1263,7 @@ pub fn create_webrender_instance_wgpu(
             &texture_cache_config,
         );
 
-        let picture_textures = PictureTextures::new(
-            picture_tile_size,
-            picture_texture_filter,
-        );
+        let picture_textures = PictureTextures::new(picture_tile_size, picture_texture_filter);
 
         let glyph_cache = GlyphCache::new();
 

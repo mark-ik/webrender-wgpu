@@ -140,8 +140,17 @@ mod swgl {
 }
 
 pub enum WindowWrapper {
-    WindowedContext(glutin::WindowedContext<glutin::PossiblyCurrent>, Rc<dyn gl::Gl>, Option<swgl::Context>),
-    Angle(winit::window::Window, angle::Context, Rc<dyn gl::Gl>, Option<swgl::Context>),
+    WindowedContext(
+        glutin::WindowedContext<glutin::PossiblyCurrent>,
+        Rc<dyn gl::Gl>,
+        Option<swgl::Context>,
+    ),
+    Angle(
+        winit::window::Window,
+        angle::Context,
+        Rc<dyn gl::Gl>,
+        Option<swgl::Context>,
+    ),
     Headless(HeadlessContext, Rc<dyn gl::Gl>, Option<swgl::Context>),
     /// wgpu backend: only a winit window (no GL context).
     /// The wgpu Instance and Surface are created separately and passed to the Renderer.
@@ -158,7 +167,9 @@ pub struct HeadlessEventIterater;
 impl WindowWrapper {
     #[cfg(feature = "software")]
     fn upload_software_to_native(&self) {
-        if matches!(*self, WindowWrapper::Headless(..)) { return }
+        if matches!(*self, WindowWrapper::Headless(..)) {
+            return;
+        }
         let swgl = match self.software_gl() {
             Some(swgl) => swgl,
             None => return,
@@ -169,11 +180,28 @@ impl WindowWrapper {
         gl.bind_texture(gl::TEXTURE_2D, tex);
         let (data_ptr, w, h, stride) = swgl.get_color_buffer(0, true);
         assert!(stride == w * 4);
-        let buffer = unsafe { slice::from_raw_parts(data_ptr as *const u8, w as usize * h as usize * 4) };
-        gl.tex_image_2d(gl::TEXTURE_2D, 0, gl::RGBA8 as gl::GLint, w, h, 0, gl::BGRA, gl::UNSIGNED_BYTE, Some(buffer));
+        let buffer =
+            unsafe { slice::from_raw_parts(data_ptr as *const u8, w as usize * h as usize * 4) };
+        gl.tex_image_2d(
+            gl::TEXTURE_2D,
+            0,
+            gl::RGBA8 as gl::GLint,
+            w,
+            h,
+            0,
+            gl::BGRA,
+            gl::UNSIGNED_BYTE,
+            Some(buffer),
+        );
         let fb = gl.gen_framebuffers(1)[0];
         gl.bind_framebuffer(gl::READ_FRAMEBUFFER, fb);
-        gl.framebuffer_texture_2d(gl::READ_FRAMEBUFFER, gl::COLOR_ATTACHMENT0, gl::TEXTURE_2D, tex, 0);
+        gl.framebuffer_texture_2d(
+            gl::READ_FRAMEBUFFER,
+            gl::COLOR_ATTACHMENT0,
+            gl::TEXTURE_2D,
+            tex,
+            0,
+        );
         gl.blit_framebuffer(0, 0, w, h, 0, 0, w, h, gl::COLOR_BUFFER_BIT, gl::NEAREST);
         gl.delete_framebuffers(&[fb]);
         gl.delete_textures(&[tex]);
@@ -181,8 +209,7 @@ impl WindowWrapper {
     }
 
     #[cfg(not(feature = "software"))]
-    fn upload_software_to_native(&self) {
-    }
+    fn upload_software_to_native(&self) {}
 
     fn swap_buffers(&self) {
         match *self {
@@ -208,7 +235,9 @@ impl WindowWrapper {
                 inner_size(windowed_context.window())
             }
             WindowWrapper::Angle(ref window, ..) => inner_size(window),
-            WindowWrapper::Headless(ref context, ..) => DeviceIntSize::new(context.width, context.height),
+            WindowWrapper::Headless(ref context, ..) => {
+                DeviceIntSize::new(context.width, context.height)
+            }
             #[cfg(feature = "wgpu_backend")]
             WindowWrapper::Wgpu(ref window) => inner_size(window),
             #[cfg(feature = "wgpu_backend")]
@@ -232,20 +261,19 @@ impl WindowWrapper {
 
     fn resize(&mut self, size: DeviceIntSize) {
         match *self {
-            WindowWrapper::WindowedContext(ref mut windowed_context, ..) => {
-                windowed_context.window()
-                    .set_inner_size(LogicalSize::new(size.width as f64, size.height as f64))
-            },
+            WindowWrapper::WindowedContext(ref mut windowed_context, ..) => windowed_context
+                .window()
+                .set_inner_size(LogicalSize::new(size.width as f64, size.height as f64)),
             WindowWrapper::Angle(ref mut window, ..) => {
                 window.set_inner_size(LogicalSize::new(size.width as f64, size.height as f64))
-            },
+            }
             WindowWrapper::Headless(..) => unimplemented!(), // requites Glutin update
             #[cfg(feature = "wgpu_backend")]
             WindowWrapper::Wgpu(ref window) => {
                 window.set_inner_size(LogicalSize::new(size.width as f64, size.height as f64))
-            },
+            }
             #[cfg(feature = "wgpu_backend")]
-            WindowWrapper::WgpuHeadless(..) => {}, // headless — nothing to resize
+            WindowWrapper::WgpuHeadless(..) => {} // headless — nothing to resize
         }
     }
 
@@ -265,9 +293,9 @@ impl WindowWrapper {
 
     pub fn software_gl(&self) -> Option<&swgl::Context> {
         match *self {
-            WindowWrapper::WindowedContext(_, _, ref swgl) |
-            WindowWrapper::Angle(_, _, _, ref swgl) |
-            WindowWrapper::Headless(_, _, ref swgl) => swgl.as_ref(),
+            WindowWrapper::WindowedContext(_, _, ref swgl)
+            | WindowWrapper::Angle(_, _, _, ref swgl)
+            | WindowWrapper::Headless(_, _, ref swgl) => swgl.as_ref(),
             #[cfg(feature = "wgpu_backend")]
             WindowWrapper::Wgpu(_) | WindowWrapper::WgpuHeadless(..) => None,
         }
@@ -275,11 +303,13 @@ impl WindowWrapper {
 
     pub fn native_gl(&self) -> &dyn gl::Gl {
         match *self {
-            WindowWrapper::WindowedContext(_, ref gl, _) |
-            WindowWrapper::Angle(_, _, ref gl, _) |
-            WindowWrapper::Headless(_, ref gl, _) => &**gl,
+            WindowWrapper::WindowedContext(_, ref gl, _)
+            | WindowWrapper::Angle(_, _, ref gl, _)
+            | WindowWrapper::Headless(_, ref gl, _) => &**gl,
             #[cfg(feature = "wgpu_backend")]
-            WindowWrapper::Wgpu(_) | WindowWrapper::WgpuHeadless(..) => panic!("native_gl() not available in wgpu mode"),
+            WindowWrapper::Wgpu(_) | WindowWrapper::WgpuHeadless(..) => {
+                panic!("native_gl() not available in wgpu mode")
+            }
         }
     }
 
@@ -303,28 +333,30 @@ impl WindowWrapper {
 
     pub fn clone_gl(&self) -> Rc<dyn gl::Gl> {
         match *self {
-            WindowWrapper::WindowedContext(_, ref gl, ref swgl) |
-            WindowWrapper::Angle(_, _, ref gl, ref swgl) |
-            WindowWrapper::Headless(_, ref gl, ref swgl) => {
-                match swgl {
-                    #[cfg(feature = "software")]
-                    Some(ref swgl) => Rc::new(*swgl),
-                    None => gl.clone(),
-                    #[cfg(not(feature = "software"))]
-                    _ => panic!(),
-                }
-            }
+            WindowWrapper::WindowedContext(_, ref gl, ref swgl)
+            | WindowWrapper::Angle(_, _, ref gl, ref swgl)
+            | WindowWrapper::Headless(_, ref gl, ref swgl) => match swgl {
+                #[cfg(feature = "software")]
+                Some(ref swgl) => Rc::new(*swgl),
+                None => gl.clone(),
+                #[cfg(not(feature = "software"))]
+                _ => panic!(),
+            },
             #[cfg(feature = "wgpu_backend")]
-            WindowWrapper::Wgpu(_) | WindowWrapper::WgpuHeadless(..) => panic!("clone_gl() not available in wgpu mode"),
+            WindowWrapper::Wgpu(_) | WindowWrapper::WgpuHeadless(..) => {
+                panic!("clone_gl() not available in wgpu mode")
+            }
         }
     }
 
     /// Whether this is a wgpu backend window.
     #[cfg(feature = "wgpu_backend")]
     pub fn is_wgpu(&self) -> bool {
-        matches!(*self, WindowWrapper::Wgpu(_) | WindowWrapper::WgpuHeadless(..))
+        matches!(
+            *self,
+            WindowWrapper::Wgpu(_) | WindowWrapper::WgpuHeadless(..)
+        )
     }
-
 
     #[cfg(feature = "software")]
     fn update_software(&self, dim: DeviceIntSize) {
@@ -334,15 +366,13 @@ impl WindowWrapper {
     }
 
     #[cfg(not(feature = "software"))]
-    fn update_software(&self, _dim: DeviceIntSize) {
-    }
+    fn update_software(&self, _dim: DeviceIntSize) {}
 
     fn update(&self, wrench: &mut Wrench) {
         let dim = self.get_inner_size();
         self.update_software(dim);
         wrench.update(dim);
     }
-
 
     #[cfg(target_os = "windows")]
     pub fn get_d3d11_device(&self) -> *const c_void {
@@ -402,8 +432,12 @@ fn make_window(
 
         if angle {
             angle::Context::with_window(
-                window_builder, context_builder, events_loop, using_compositor,
-            ).map(|(_window, _context)| {
+                window_builder,
+                context_builder,
+                events_loop,
+                using_compositor,
+            )
+            .map(|(_window, _context)| {
                 unsafe {
                     _context
                         .make_current()
@@ -415,13 +449,16 @@ fn make_window(
                         gl::GlFns::load_with(|symbol| _context.get_proc_address(symbol) as *const _)
                     },
                     glutin::Api::OpenGlEs => unsafe {
-                        gl::GlesFns::load_with(|symbol| _context.get_proc_address(symbol) as *const _)
+                        gl::GlesFns::load_with(|symbol| {
+                            _context.get_proc_address(symbol) as *const _
+                        })
                     },
                     glutin::Api::WebGl => unimplemented!(),
                 };
 
                 WindowWrapper::Angle(_window, _context, gl, sw_ctx)
-            }).unwrap()
+            })
+            .unwrap()
         } else {
             let windowed_context = context_builder
                 .build_windowed(window_builder, events_loop)
@@ -435,14 +472,14 @@ fn make_window(
 
             let gl = match windowed_context.get_api() {
                 glutin::Api::OpenGl => unsafe {
-                    gl::GlFns::load_with(
-                        |symbol| windowed_context.get_proc_address(symbol) as *const _
-                    )
+                    gl::GlFns::load_with(|symbol| {
+                        windowed_context.get_proc_address(symbol) as *const _
+                    })
                 },
                 glutin::Api::OpenGlEs => unsafe {
-                    gl::GlesFns::load_with(
-                        |symbol| windowed_context.get_proc_address(symbol) as *const _
-                    )
+                    gl::GlesFns::load_with(|symbol| {
+                        windowed_context.get_proc_address(symbol) as *const _
+                    })
                 },
                 glutin::Api::WebGl => unimplemented!(),
             };
@@ -485,10 +522,7 @@ fn make_window(
     let gl_renderer = gl.get_string(gl::RENDERER);
 
     println!("OpenGL version {}, {}", gl_version, gl_renderer);
-    println!(
-        "hidpi factor: {}",
-        wrapper.hidpi_factor()
-    );
+    println!("hidpi factor: {}", wrapper.hidpi_factor());
 
     wrapper
 }
@@ -507,8 +541,12 @@ fn make_wgpu_hal_window(
         .with_inner_size(LogicalSize::new(size.width as f64, size.height as f64))
         .build(events_loop)
         .expect("failed to create winit window for wgpu-hal");
-    println!("wgpu-hal backend: headless window created (size {}x{}, hidpi {})",
-             size.width, size.height, window.scale_factor());
+    println!(
+        "wgpu-hal backend: headless window created (size {}x{}, hidpi {})",
+        size.width,
+        size.height,
+        window.scale_factor()
+    );
     WindowWrapper::Wgpu(window)
 }
 
@@ -546,16 +584,17 @@ fn make_wgpu_window(
         handle.hinstance = std::num::NonZero::new(hinstance as isize);
         wgpu::rwh::RawWindowHandle::Win32(handle)
     };
-    let raw_display_handle = wgpu::rwh::RawDisplayHandle::Windows(
-        wgpu::rwh::WindowsDisplayHandle::new(),
-    );
+    let raw_display_handle =
+        wgpu::rwh::RawDisplayHandle::Windows(wgpu::rwh::WindowsDisplayHandle::new());
 
     // Safety: the window outlives the surface (WindowWrapper keeps it alive).
     let surface = unsafe {
-        instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
-            raw_display_handle: Some(raw_display_handle),
-            raw_window_handle,
-        }).expect("failed to create wgpu surface")
+        instance
+            .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+                raw_display_handle: Some(raw_display_handle),
+                raw_window_handle,
+            })
+            .expect("failed to create wgpu surface")
     };
 
     println!("wgpu backend initialized");
@@ -566,9 +605,7 @@ fn make_wgpu_window(
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum NotifierEvent {
-    WakeUp {
-        composite_needed: bool,
-    },
+    WakeUp { composite_needed: bool },
     ShutDown,
 }
 
@@ -584,13 +621,8 @@ impl RenderNotifier for Notifier {
         })
     }
 
-    fn wake_up(
-        &self,
-        composite_needed: bool,
-    ) {
-        let msg = NotifierEvent::WakeUp {
-            composite_needed,
-        };
+    fn wake_up(&self, composite_needed: bool) {
+        let msg = NotifierEvent::WakeUp { composite_needed };
         self.tx.send(msg).unwrap();
     }
 
@@ -598,10 +630,7 @@ impl RenderNotifier for Notifier {
         self.tx.send(NotifierEvent::ShutDown).unwrap();
     }
 
-    fn new_frame_ready(&self,
-                       _: DocumentId,
-                       _: FramePublishId,
-                       params: &FrameReadyParams) {
+    fn new_frame_ready(&self, _: DocumentId, _: FramePublishId, params: &FrameReadyParams) {
         // TODO(gw): Refactor wrench so that it can take advantage of cases
         //           where no composite is required when appropriate.
         self.wake_up(params.render);
@@ -622,13 +651,18 @@ fn reftest<'a>(
     mut wrench: Wrench,
     window: &mut WindowWrapper,
     subargs: &clap::ArgMatches,
-    rx: Receiver<NotifierEvent>
+    rx: Receiver<NotifierEvent>,
 ) -> usize {
     let dim = window.get_inner_size();
     #[cfg(target_os = "android")]
     let base_manifest = {
         let mut list_path = PathBuf::new();
-        list_path.push(ndk_glue::native_activity().internal_data_path().to_str().unwrap());
+        list_path.push(
+            ndk_glue::native_activity()
+                .internal_data_path()
+                .to_str()
+                .unwrap(),
+        );
         list_path.push("wrench");
         list_path.push("reftests");
         list_path.push("reftest.list");
@@ -643,8 +677,11 @@ fn reftest<'a>(
         reftest_options.allow_max_difference = allow_max_diff.parse().unwrap_or(1);
         reftest_options.allow_num_differences = dim.width as usize * dim.height as usize;
     }
-    let num_failures = ReftestHarness::new(&mut wrench, window, &rx)
-        .run(&base_manifest, specific_reftest, &reftest_options);
+    let num_failures = ReftestHarness::new(&mut wrench, window, &rx).run(
+        &base_manifest,
+        specific_reftest,
+        &reftest_options,
+    );
     wrench.shut_down(rx);
     num_failures
 }
@@ -667,7 +704,12 @@ pub fn main() {
         use std::thread;
 
         let mut out_path = PathBuf::new();
-        out_path.push(ndk_glue::native_activity().internal_data_path().to_str().unwrap());
+        out_path.push(
+            ndk_glue::native_activity()
+                .internal_data_path()
+                .to_str()
+                .unwrap(),
+        );
         out_path.push("wrench");
         out_path.push("stdout");
         let mut out_file = File::create(&out_path).expect("Failed to create stdout file");
@@ -711,8 +753,7 @@ pub fn main() {
     #[allow(deprecated)] // FIXME(bug 1771450): Use clap-serde or another way
     let args_yaml = load_yaml!("args.yaml");
     #[allow(deprecated)] // FIXME(bug 1771450): Use clap-serde or another way
-    let clap = clap::Command::from_yaml(args_yaml)
-        .arg_required_else_help(true);
+    let clap = clap::Command::from_yaml(args_yaml).arg_required_else_help(true);
 
     // On android devices, attempt to read command line arguments from a text
     // file located at <internal_data_dir>/wrench/args.
@@ -725,7 +766,12 @@ pub fn main() {
         let mut args = vec!["wrench".to_string()];
 
         let mut args_path = PathBuf::new();
-        args_path.push(ndk_glue::native_activity().internal_data_path().to_str().unwrap());
+        args_path.push(
+            ndk_glue::native_activity()
+                .internal_data_path()
+                .to_str()
+                .unwrap(),
+        );
         args_path.push("wrench");
         args_path.push("args");
 
@@ -754,20 +800,23 @@ pub fn main() {
 
     // handle some global arguments
     let res_path = args.value_of("shaders").map(PathBuf::from);
-    let size = args.value_of("size")
-        .map(|s| if s == "720p" {
-            DeviceIntSize::new(1280, 720)
-        } else if s == "1080p" {
-            DeviceIntSize::new(1920, 1080)
-        } else if s == "4k" {
-            DeviceIntSize::new(3840, 2160)
-        } else {
-            let x = s.find('x').expect(
-                "Size must be specified exactly as 720p, 1080p, 4k, or width x height",
-            );
-            let w = s[0 .. x].parse::<i32>().expect("Invalid size width");
-            let h = s[x + 1 ..].parse::<i32>().expect("Invalid size height");
-            DeviceIntSize::new(w, h)
+    let size = args
+        .value_of("size")
+        .map(|s| {
+            if s == "720p" {
+                DeviceIntSize::new(1280, 720)
+            } else if s == "1080p" {
+                DeviceIntSize::new(1920, 1080)
+            } else if s == "4k" {
+                DeviceIntSize::new(3840, 2160)
+            } else {
+                let x = s
+                    .find('x')
+                    .expect("Size must be specified exactly as 720p, 1080p, 4k, or width x height");
+                let w = s[0..x].parse::<i32>().expect("Invalid size width");
+                let h = s[x + 1..].parse::<i32>().expect("Invalid size height");
+                DeviceIntSize::new(w, h)
+            }
         })
         .unwrap_or(DeviceIntSize::new(1920, 1080));
 
@@ -782,12 +831,8 @@ pub fn main() {
     let opengles_version = (3, 0);
     let opengl_version = (3, 2);
     let gl_request = match args.value_of("renderer") {
-        Some("es3") => {
-            glutin::GlRequest::Specific(glutin::Api::OpenGlEs, opengles_version)
-        }
-        Some("gl3") => {
-            glutin::GlRequest::Specific(glutin::Api::OpenGl, opengl_version)
-        }
+        Some("es3") => glutin::GlRequest::Specific(glutin::Api::OpenGlEs, opengles_version),
+        Some("gl3") => glutin::GlRequest::Specific(glutin::Api::OpenGl, opengl_version),
         Some("default") | None => {
             if args.is_present("angle") || cfg!(target_os = "android") {
                 // GlThenGles first attempts to bind OpenGL using eglBindAPI(),
@@ -818,13 +863,16 @@ pub fn main() {
     // that's okay for wrench's usage.
     #[cfg(target_os = "android")]
     {
-        events_loop.as_mut().unwrap().run_return(|event, _elwt, control_flow| {
-            if let winit::event::Event::Resumed = event {
-                if ndk_glue::native_window().is_some() {
-                    *control_flow = winit::event_loop::ControlFlow::Exit;
+        events_loop
+            .as_mut()
+            .unwrap()
+            .run_return(|event, _elwt, control_flow| {
+                if let winit::event::Event::Resumed = event {
+                    if ndk_glue::native_window().is_some() {
+                        *control_flow = winit::event_loop::ControlFlow::Exit;
+                    }
                 }
-            }
-        });
+            });
     }
 
     let using_compositor = args.is_present("compositor");
@@ -845,7 +893,9 @@ pub fn main() {
     let mut window = if use_wgpu {
         #[cfg(feature = "wgpu_backend")]
         {
-            let el = events_loop.as_ref().expect("--wgpu requires a windowed event loop (no --headless)");
+            let el = events_loop
+                .as_ref()
+                .expect("--wgpu requires a windowed event loop (no --headless)");
             let (wrapper, instance, surface) = make_wgpu_window(size, el);
             wgpu_state = Some((instance, surface));
             wgpu_hal_adapter = None;
@@ -866,10 +916,15 @@ pub fn main() {
                 backend_options: wgpu::BackendOptions::default(),
                 display: None,
             });
-            let adapter = pollster::block_on(instance.request_adapter(
-                &wgpu::RequestAdapterOptions::default(),
-            )).expect("No wgpu adapter for wgpu-hal-headless backend");
-            println!("wgpu-hal-headless adapter: {:?} ({:?})", adapter.get_info().name, adapter.get_info().backend);
+            let adapter = pollster::block_on(
+                instance.request_adapter(&wgpu::RequestAdapterOptions::default()),
+            )
+            .expect("No wgpu adapter for wgpu-hal-headless backend");
+            println!(
+                "wgpu-hal-headless adapter: {:?} ({:?})",
+                adapter.get_info().name,
+                adapter.get_info().backend
+            );
             wgpu_hal_adapter = Some(std::sync::Arc::new(adapter));
             WindowWrapper::WgpuHeadless(size.width, size.height)
         }
@@ -880,7 +935,9 @@ pub fn main() {
     } else if use_wgpu_hal {
         #[cfg(feature = "wgpu_backend")]
         {
-            let el = events_loop.as_ref().expect("--wgpu-hal requires a windowed event loop (no --headless)");
+            let el = events_loop
+                .as_ref()
+                .expect("--wgpu-hal requires a windowed event loop (no --headless)");
             let wrapper = make_wgpu_hal_window(size, el);
             wgpu_state = None;
             let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -890,10 +947,15 @@ pub fn main() {
                 backend_options: wgpu::BackendOptions::default(),
                 display: None,
             });
-            let adapter = pollster::block_on(instance.request_adapter(
-                &wgpu::RequestAdapterOptions::default(),
-            )).expect("No wgpu adapter for wgpu-hal backend");
-            println!("wgpu-hal adapter: {:?} ({:?})", adapter.get_info().name, adapter.get_info().backend);
+            let adapter = pollster::block_on(
+                instance.request_adapter(&wgpu::RequestAdapterOptions::default()),
+            )
+            .expect("No wgpu adapter for wgpu-hal backend");
+            println!(
+                "wgpu-hal adapter: {:?} ({:?})",
+                adapter.get_info().name,
+                adapter.get_info().backend
+            );
             wgpu_hal_adapter = Some(std::sync::Arc::new(adapter));
             wrapper
         }
@@ -903,7 +965,10 @@ pub fn main() {
         }
     } else {
         #[cfg(feature = "wgpu_backend")]
-        { wgpu_state = None; wgpu_hal_adapter = None; }
+        {
+            wgpu_state = None;
+            wgpu_hal_adapter = None;
+        }
         make_window(
             size,
             args.is_present("vsync"),
@@ -944,17 +1009,16 @@ pub fn main() {
                             | wgpu::Features::DUAL_SOURCE_BLENDING
                             | wgpu::Features::TIMESTAMP_QUERY;
                         let required_features = adapter.features() & wanted;
-                        pollster::block_on(adapter.request_device(
-                            &wgpu::DeviceDescriptor {
-                                label: Some("wrench wgpu-hal device"),
-                                required_features,
-                                required_limits: wgpu::Limits {
-                                    max_inter_stage_shader_variables: 28,
-                                    ..Default::default()
-                                },
+                        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                            label: Some("wrench wgpu-hal device"),
+                            required_features,
+                            required_limits: wgpu::Limits {
+                                max_inter_stage_shader_variables: 28,
                                 ..Default::default()
                             },
-                        )).expect("Failed to create device for wgpu-hal backend")
+                            ..Default::default()
+                        }))
+                        .expect("Failed to create device for wgpu-hal backend")
                     });
                 Some(webrender::RendererBackend::WgpuHal { device_factory })
             } else if let Some((instance, surface)) = wgpu_state {
@@ -969,7 +1033,9 @@ pub fn main() {
             }
         }
         #[cfg(not(feature = "wgpu_backend"))]
-        { None::<webrender::RendererBackend> }
+        {
+            None::<webrender::RendererBackend>
+        }
     };
 
     let mut wrench = Wrench::new(
@@ -1008,7 +1074,9 @@ pub fn main() {
         render(
             &mut wrench,
             &mut window,
-            events_loop.as_mut().expect("`wrench show` is not supported in headless mode"),
+            events_loop
+                .as_mut()
+                .expect("`wrench show` is not supported in headless mode"),
             subargs,
             no_block,
             no_batch,
@@ -1017,11 +1085,18 @@ pub fn main() {
         let surface = match subargs.value_of("surface") {
             Some("screen") | None => png::ReadSurface::Screen,
             Some("gpu-cache") => png::ReadSurface::GpuCache,
-            _ => panic!("Unknown surface argument value")
+            _ => panic!("Unknown surface argument value"),
         };
         let output_path = subargs.value_of("OUTPUT").map(PathBuf::from);
         let reader = YamlFrameReader::new_from_args(subargs);
-        png::png(&mut wrench, surface, &mut window, reader, rx.unwrap(), output_path);
+        png::png(
+            &mut wrench,
+            surface,
+            &mut window,
+            reader,
+            rx.unwrap(),
+            output_path,
+        );
     } else if let Some(subargs) = args.subcommand_matches("reftest") {
         // Exit with an error code in order to ensure the CI job fails.
         process::exit(reftest(wrench, &mut window, subargs, rx.unwrap()) as _);
@@ -1036,35 +1111,38 @@ pub fn main() {
         let as_csv = subargs.is_present("csv");
         let auto_filename = subargs.is_present("auto-filename");
 
-        let warmup_frames = subargs.value_of("warmup_frames").map(|s| s.parse().unwrap());
+        let warmup_frames = subargs
+            .value_of("warmup_frames")
+            .map(|s| s.parse().unwrap());
         let sample_count = subargs.value_of("sample_count").map(|s| s.parse().unwrap());
 
-        let harness = PerfHarness::new(&mut wrench,
-                                       &mut window,
-                                       rx.unwrap(),
-                                       warmup_frames,
-                                       sample_count);
+        let harness = PerfHarness::new(
+            &mut wrench,
+            &mut window,
+            rx.unwrap(),
+            warmup_frames,
+            sample_count,
+        );
 
-        let benchmark = subargs.value_of("benchmark").unwrap_or("benchmarks/benchmarks.list");
+        let benchmark = subargs
+            .value_of("benchmark")
+            .unwrap_or("benchmarks/benchmarks.list");
         println!("Benchmark: {}", benchmark);
         let base_manifest = Path::new(benchmark);
 
         let mut filename = subargs.value_of("filename").unwrap().to_string();
         if auto_filename {
             let timestamp = chrono::Local::now().format("%Y-%m-%d-%H-%M-%S");
-            filename.push_str(
-                &format!("/wrench-perf-{}.{}",
-                            timestamp,
-                            if as_csv { "csv" } else { "json" }));
+            filename.push_str(&format!(
+                "/wrench-perf-{}.{}",
+                timestamp,
+                if as_csv { "csv" } else { "json" }
+            ));
         }
         harness.run(base_manifest, &filename, as_csv);
         return;
     } else if args.subcommand_matches("test_invalidation").is_some() {
-        let harness = test_invalidation::TestHarness::new(
-            &mut wrench,
-            &mut window,
-            rx.unwrap(),
-        );
+        let harness = test_invalidation::TestHarness::new(&mut wrench, &mut window, rx.unwrap());
 
         harness.run();
     } else if let Some(subargs) = args.subcommand_matches("compare_perf") {
@@ -1101,8 +1179,12 @@ fn render<'a>(
 
     // If the input is a directory, we are looking at a capture.
     let mut thing = if input_path.join("scenes").as_path().is_dir() {
-        let scene_id = subargs.value_of("scene-id").map(|z| z.parse::<u32>().unwrap());
-        let frame_id = subargs.value_of("frame-id").map(|z| z.parse::<u32>().unwrap());
+        let scene_id = subargs
+            .value_of("scene-id")
+            .map(|z| z.parse::<u32>().unwrap());
+        let frame_id = subargs
+            .value_of("frame-id")
+            .map(|z| z.parse::<u32>().unwrap());
         Box::new(CapturedSequence::new(
             input_path,
             scene_id.unwrap_or(1),
@@ -1110,7 +1192,13 @@ fn render<'a>(
         ))
     } else if input_path.as_path().is_dir() {
         let mut documents = wrench.api.load_capture(input_path, None);
-        println!("loaded {:?}", documents.iter().map(|cd| cd.document_id).collect::<Vec<_>>());
+        println!(
+            "loaded {:?}",
+            documents
+                .iter()
+                .map(|cd| cd.document_id)
+                .collect::<Vec<_>>()
+        );
         let captured = documents.swap_remove(0);
         wrench.document_id = captured.document_id;
         Box::new(captured) as Box<dyn WrenchThing>
@@ -1136,7 +1224,9 @@ fn render<'a>(
     // Default the profile overlay on for android.
     if cfg!(target_os = "android") {
         debug_flags.toggle(DebugFlags::PROFILER_DBG);
-        wrench.api.send_debug_cmd(DebugCommand::SetFlags(debug_flags));
+        wrench
+            .api
+            .send_debug_cmd(DebugCommand::SetFlags(debug_flags));
     }
 
     let mut show_help = false;
@@ -1166,22 +1256,22 @@ fn render<'a>(
                 }
                 winit::event::WindowEvent::Focused(..) => do_render = true,
                 winit::event::WindowEvent::CursorMoved { position, .. } => {
-                    let pos: LogicalPosition<f32> = position.to_logical(window.hidpi_factor() as f64);
+                    let pos: LogicalPosition<f32> =
+                        position.to_logical(window.hidpi_factor() as f64);
                     cursor_position = WorldPoint::new(pos.x, pos.y);
-                    wrench.renderer.set_cursor_position(
-                        DeviceIntPoint::new(
-                            cursor_position.x.round() as i32,
-                            cursor_position.y.round() as i32,
-                        ),
-                    );
+                    wrench.renderer.set_cursor_position(DeviceIntPoint::new(
+                        cursor_position.x.round() as i32,
+                        cursor_position.y.round() as i32,
+                    ));
                     do_render = true;
                 }
                 winit::event::WindowEvent::KeyboardInput {
-                    input: winit::event::KeyboardInput {
-                        state: winit::event::ElementState::Pressed,
-                        virtual_keycode: Some(vk),
-                        ..
-                    },
+                    input:
+                        winit::event::KeyboardInput {
+                            state: winit::event::ElementState::Pressed,
+                            virtual_keycode: Some(vk),
+                            ..
+                        },
                     ..
                 } => match vk {
                     VirtualKeyCode::Escape => {
@@ -1189,47 +1279,66 @@ fn render<'a>(
                     }
                     VirtualKeyCode::B => {
                         debug_flags.toggle(DebugFlags::INVALIDATION_DBG);
-                        wrench.api.send_debug_cmd(DebugCommand::SetFlags(debug_flags));
+                        wrench
+                            .api
+                            .send_debug_cmd(DebugCommand::SetFlags(debug_flags));
                         do_render = true;
                     }
                     VirtualKeyCode::P => {
                         debug_flags.toggle(DebugFlags::PROFILER_DBG);
-                        wrench.api.send_debug_cmd(DebugCommand::SetFlags(debug_flags));
+                        wrench
+                            .api
+                            .send_debug_cmd(DebugCommand::SetFlags(debug_flags));
                         do_render = true;
                     }
                     VirtualKeyCode::O => {
                         debug_flags.toggle(DebugFlags::RENDER_TARGET_DBG);
-                        wrench.api.send_debug_cmd(DebugCommand::SetFlags(debug_flags));
+                        wrench
+                            .api
+                            .send_debug_cmd(DebugCommand::SetFlags(debug_flags));
                         do_render = true;
                     }
                     VirtualKeyCode::I => {
                         debug_flags.toggle(DebugFlags::TEXTURE_CACHE_DBG);
-                        wrench.api.send_debug_cmd(DebugCommand::SetFlags(debug_flags));
+                        wrench
+                            .api
+                            .send_debug_cmd(DebugCommand::SetFlags(debug_flags));
                         do_render = true;
                     }
                     VirtualKeyCode::D => {
                         debug_flags.toggle(DebugFlags::PICTURE_CACHING_DBG);
-                        wrench.api.send_debug_cmd(DebugCommand::SetFlags(debug_flags));
+                        wrench
+                            .api
+                            .send_debug_cmd(DebugCommand::SetFlags(debug_flags));
                         do_render = true;
                     }
                     VirtualKeyCode::F => {
                         debug_flags.toggle(DebugFlags::PICTURE_BORDERS);
-                        wrench.api.send_debug_cmd(DebugCommand::SetFlags(debug_flags));
+                        wrench
+                            .api
+                            .send_debug_cmd(DebugCommand::SetFlags(debug_flags));
                         do_render = true;
                     }
                     VirtualKeyCode::Q => {
-                        debug_flags.toggle(DebugFlags::GPU_TIME_QUERIES | DebugFlags::GPU_SAMPLE_QUERIES);
-                        wrench.api.send_debug_cmd(DebugCommand::SetFlags(debug_flags));
+                        debug_flags
+                            .toggle(DebugFlags::GPU_TIME_QUERIES | DebugFlags::GPU_SAMPLE_QUERIES);
+                        wrench
+                            .api
+                            .send_debug_cmd(DebugCommand::SetFlags(debug_flags));
                         do_render = true;
                     }
                     VirtualKeyCode::V => {
                         debug_flags.toggle(DebugFlags::SHOW_OVERDRAW);
-                        wrench.api.send_debug_cmd(DebugCommand::SetFlags(debug_flags));
+                        wrench
+                            .api
+                            .send_debug_cmd(DebugCommand::SetFlags(debug_flags));
                         do_render = true;
                     }
                     VirtualKeyCode::G => {
                         debug_flags.toggle(DebugFlags::GPU_CACHE_DBG);
-                        wrench.api.send_debug_cmd(DebugCommand::SetFlags(debug_flags));
+                        wrench
+                            .api
+                            .send_debug_cmd(DebugCommand::SetFlags(debug_flags));
 
                         // force scene rebuild to see the full set of used GPU cache entries
                         let mut txn = Transaction::new();
@@ -1263,10 +1372,7 @@ fn render<'a>(
                         wrench.api.save_capture(path, CaptureBits::all());
                     }
                     VirtualKeyCode::X => {
-                        let results = wrench.api.hit_test(
-                            wrench.document_id,
-                            cursor_position,
-                        );
+                        let results = wrench.api.hit_test(wrench.document_id, cursor_position);
 
                         println!("Hit test results:");
                         for item in &results.items {
@@ -1276,16 +1382,20 @@ fn render<'a>(
                     }
                     VirtualKeyCode::Z => {
                         debug_flags.toggle(DebugFlags::ZOOM_DBG);
-                        wrench.api.send_debug_cmd(DebugCommand::SetFlags(debug_flags));
+                        wrench
+                            .api
+                            .send_debug_cmd(DebugCommand::SetFlags(debug_flags));
                         do_render = true;
                     }
                     VirtualKeyCode::Y => {
                         println!("Clearing all caches...");
-                        wrench.api.send_debug_cmd(DebugCommand::ClearCaches(ClearCache::all()));
+                        wrench
+                            .api
+                            .send_debug_cmd(DebugCommand::ClearCaches(ClearCache::all()));
                         do_frame = true;
                     }
                     _ => {}
-                }
+                },
                 _ => {}
             },
             winit::event::Event::MainEventsCleared => {

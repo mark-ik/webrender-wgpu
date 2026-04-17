@@ -35,7 +35,9 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. */
 
 use glsl::syntax;
-use glsl::syntax::{ArrayedIdentifier, ArraySpecifier, ArraySpecifierDimension, AssignmentOp, BinaryOp, Identifier};
+use glsl::syntax::{
+    ArrayedIdentifier, ArraySpecifier, ArraySpecifierDimension, AssignmentOp, BinaryOp, Identifier,
+};
 use glsl::syntax::{NonEmpty, PrecisionQualifier, StructFieldSpecifier, StructSpecifier};
 use glsl::syntax::{TypeSpecifier, TypeSpecifierNonArray, UnaryOp};
 use std::cell::{Cell, Ref, RefCell};
@@ -112,10 +114,17 @@ pub struct ArraySizes {
 impl LiftFrom<&ArraySpecifier> for ArraySizes {
     fn lift(state: &mut State, a: &ArraySpecifier) -> Self {
         ArraySizes {
-            sizes: a.dimensions.0.iter().map(|a| match a {
-                ArraySpecifierDimension::Unsized => panic!(),
-                ArraySpecifierDimension::ExplicitlySized(expr) => translate_expression(state, expr),
-            }).collect(),
+            sizes: a
+                .dimensions
+                .0
+                .iter()
+                .map(|a| match a {
+                    ArraySpecifierDimension::Unsized => panic!(),
+                    ArraySpecifierDimension::ExplicitlySized(expr) => {
+                        translate_expression(state, expr)
+                    }
+                })
+                .collect(),
         }
     }
 }
@@ -793,7 +802,9 @@ impl Type {
         Type {
             kind,
             precision: None,
-            array_sizes: Some(Box::new(ArraySizes { sizes: vec![make_const(TypeKind::Int, size)] })),
+            array_sizes: Some(Box::new(ArraySizes {
+                sizes: vec![make_const(TypeKind::Int, size)],
+            })),
         }
     }
 }
@@ -1936,7 +1947,10 @@ fn translate_declaration(
                     _ => panic!(),
                 }
             };
-            Declaration::Global(lift_type_qualifier_for_declaration(state, &Some(ty.clone())).unwrap(), ids.clone())
+            Declaration::Global(
+                lift_type_qualifier_for_declaration(state, &Some(ty.clone())).unwrap(),
+                ids.clone(),
+            )
         }
         syntax::Declaration::InitDeclaratorList(dl) => {
             translate_init_declarator_list(state, dl, default_run_class)
@@ -1983,7 +1997,6 @@ fn index_vector(ty: &Type) -> Option<TypeKind> {
         UVec4 => UInt,
         _ => return None,
     })
-
 }
 
 fn index_matrix(ty: &Type) -> Option<TypeKind> {
@@ -2029,16 +2042,16 @@ fn can_implicitly_convert_to(src: &Type, dst: &Type) -> bool {
         true
     } else if dst == &Type::new(TypeKind::Double) && src == &Type::new(TypeKind::Float) {
         true
-    } else if (dst == &Type::new(TypeKind::Float) || dst == &Type::new(TypeKind::Double)) &&
-        src == &Type::new(TypeKind::Int)
+    } else if (dst == &Type::new(TypeKind::Float) || dst == &Type::new(TypeKind::Double))
+        && src == &Type::new(TypeKind::Int)
     {
         true
-    } else if (dst == &Type::new(TypeKind::Vec2) || dst == &Type::new(TypeKind::DVec2)) &&
-        src == &Type::new(TypeKind::IVec2)
+    } else if (dst == &Type::new(TypeKind::Vec2) || dst == &Type::new(TypeKind::DVec2))
+        && src == &Type::new(TypeKind::IVec2)
     {
         true
-    } else if dst == &Type::new(TypeKind::IVec2) &&
-        (src == &Type::new(TypeKind::Vec2) || src == &Type::new(TypeKind::DVec2))
+    } else if dst == &Type::new(TypeKind::IVec2)
+        && (src == &Type::new(TypeKind::Vec2) || src == &Type::new(TypeKind::DVec2))
     {
         true
     } else {
@@ -2053,17 +2066,17 @@ fn promoted_type(lhs: &Type, rhs: &Type) -> Type {
         Type::new(TypeKind::Double)
     } else if lhs == &Type::new(TypeKind::Int) && rhs == &Type::new(TypeKind::Double) {
         Type::new(TypeKind::Double)
-    } else if is_vector(&lhs) &&
-        (rhs == &Type::new(TypeKind::Float) ||
-         rhs == &Type::new(TypeKind::Double) ||
-         rhs == &Type::new(TypeKind::Int))
+    } else if is_vector(&lhs)
+        && (rhs == &Type::new(TypeKind::Float)
+            || rhs == &Type::new(TypeKind::Double)
+            || rhs == &Type::new(TypeKind::Int))
     {
         // scalars promote to vectors
         lhs.clone()
-    } else if is_vector(&rhs) &&
-        (lhs == &Type::new(TypeKind::Float) ||
-         lhs == &Type::new(TypeKind::Double) ||
-         lhs == &Type::new(TypeKind::Int))
+    } else if is_vector(&rhs)
+        && (lhs == &Type::new(TypeKind::Float)
+            || lhs == &Type::new(TypeKind::Double)
+            || lhs == &Type::new(TypeKind::Int))
     {
         // scalars promote to vectors
         rhs.clone()
@@ -2182,10 +2195,7 @@ fn force_params_from_bool(state: &mut State, params: &mut Vec<Expr>) {
                 kind: ExprKind::Binary(
                     BinaryOp::BitAnd,
                     Box::new(Expr {
-                        kind: ExprKind::FunCall(
-                            FunIdentifier::Identifier(sym),
-                            vec![e.clone()],
-                        ),
+                        kind: ExprKind::FunCall(FunIdentifier::Identifier(sym), vec![e.clone()]),
                         ty: Type::new(k),
                     }),
                     Box::new(make_const(TypeKind::Int, 1)),
@@ -2260,24 +2270,27 @@ fn translate_expression(state: &mut State, e: &syntax::Expr) -> Expr {
             let lhs = Box::new(translate_expression(state, lhs));
             let rhs = Box::new(translate_expression(state, rhs));
             let ty = match op {
-                BinaryOp::Equal | BinaryOp::NonEqual | BinaryOp::GT | BinaryOp::GTE | BinaryOp::LT | BinaryOp::LTE => {
+                BinaryOp::Equal
+                | BinaryOp::NonEqual
+                | BinaryOp::GT
+                | BinaryOp::GTE
+                | BinaryOp::LT
+                | BinaryOp::LTE => {
                     // comparison operators have a bool result
                     Type::new(TypeKind::Bool)
                 }
-                BinaryOp::Mult => {
-                    match (lhs.ty.kind, rhs.ty.kind) {
-                        (TypeKind::Mat2, TypeKind::Vec2) |
-                        (TypeKind::Mat3, TypeKind::Vec3) |
-                        (TypeKind::Mat3, TypeKind::Mat3) |
-                        (TypeKind::Mat3, TypeKind::Mat43) |
-                        (TypeKind::Mat4, TypeKind::Vec4) => rhs.ty.clone(),
-                        (TypeKind::Mat43, TypeKind::Vec4) => Type::new(TypeKind::Vec3),
-                        (TypeKind::Mat2, TypeKind::Float) |
-                        (TypeKind::Mat3, TypeKind::Float) |
-                        (TypeKind::Mat4, TypeKind::Float) => lhs.ty.clone(),
-                        _ => promoted_type(&lhs.ty, &rhs.ty),
-                    }
-                }
+                BinaryOp::Mult => match (lhs.ty.kind, rhs.ty.kind) {
+                    (TypeKind::Mat2, TypeKind::Vec2)
+                    | (TypeKind::Mat3, TypeKind::Vec3)
+                    | (TypeKind::Mat3, TypeKind::Mat3)
+                    | (TypeKind::Mat3, TypeKind::Mat43)
+                    | (TypeKind::Mat4, TypeKind::Vec4) => rhs.ty.clone(),
+                    (TypeKind::Mat43, TypeKind::Vec4) => Type::new(TypeKind::Vec3),
+                    (TypeKind::Mat2, TypeKind::Float)
+                    | (TypeKind::Mat3, TypeKind::Float)
+                    | (TypeKind::Mat4, TypeKind::Float) => lhs.ty.clone(),
+                    _ => promoted_type(&lhs.ty, &rhs.ty),
+                },
                 _ => promoted_type(&lhs.ty, &rhs.ty),
             };
 
@@ -2345,7 +2358,12 @@ fn translate_expression(state: &mut State, e: &syntax::Expr) -> Expr {
                                 let mut globals = state.modified_globals.borrow_mut();
                                 for (i, sym) in state.syms.iter().enumerate() {
                                     match &sym.borrow().decl {
-                                        SymDecl::Global(StorageClass::In, _, _, RunClass::Vector) => {
+                                        SymDecl::Global(
+                                            StorageClass::In,
+                                            _,
+                                            _,
+                                            RunClass::Vector,
+                                        ) => {
                                             let symref = SymRef(i as u32);
                                             if !globals.contains(&symref) {
                                                 globals.push(symref);
@@ -2597,10 +2615,15 @@ fn translate_expression(state: &mut State, e: &syntax::Expr) -> Expr {
                     array_sizes: a,
                 }
             };
-            let indx = specifier.dimensions.0.iter().map(|a| match a {
-                ArraySpecifierDimension::Unsized => panic!("need expression"),
-                ArraySpecifierDimension::ExplicitlySized(e) => translate_expression(state, e),
-            }).collect();
+            let indx = specifier
+                .dimensions
+                .0
+                .iter()
+                .map(|a| match a {
+                    ArraySpecifierDimension::Unsized => panic!("need expression"),
+                    ArraySpecifierDimension::ExplicitlySized(e) => translate_expression(state, e),
+                })
+                .collect();
             Expr {
                 kind: ExprKind::Bracket(e, indx),
                 ty,
@@ -3095,7 +3118,12 @@ pub fn ast_to_hir(state: &mut State, tu: &syntax::TranslationUnit) -> Translatio
         "bvec4",
         Some("make_bvec4"),
         Type::new(BVec4),
-        vec![Type::new(Bool), Type::new(Bool), Type::new(Bool), Type::new(Bool)],
+        vec![
+            Type::new(Bool),
+            Type::new(Bool),
+            Type::new(Bool),
+            Type::new(Bool),
+        ],
     );
     declare_function(
         state,
@@ -3256,12 +3284,10 @@ pub fn ast_to_hir(state: &mut State, tu: &syntax::TranslationUnit) -> Translatio
             Type::new(Float),
             Type::new(Float),
             Type::new(Float),
-
             Type::new(Float),
             Type::new(Float),
             Type::new(Float),
             Type::new(Float),
-
             Type::new(Float),
             Type::new(Float),
             Type::new(Float),
@@ -3316,7 +3342,13 @@ pub fn ast_to_hir(state: &mut State, tu: &syntax::TranslationUnit) -> Translatio
     declare_function(state, "abs", None, Type::new(Float), vec![Type::new(Float)]);
     declare_function(state, "sign", None, Type::new(Vec2), vec![Type::new(Vec2)]);
     declare_function(state, "sign", None, Type::new(Vec3), vec![Type::new(Vec3)]);
-    declare_function(state, "sign", None, Type::new(Float), vec![Type::new(Float)]);
+    declare_function(
+        state,
+        "sign",
+        None,
+        Type::new(Float),
+        vec![Type::new(Float)],
+    );
     declare_function(
         state,
         "dot",
@@ -3505,8 +3537,20 @@ pub fn ast_to_hir(state: &mut State, tu: &syntax::TranslationUnit) -> Translatio
     declare_function(state, "cos", None, Type::new(Float), vec![Type::new(Float)]);
     declare_function(state, "sin", None, Type::new(Float), vec![Type::new(Float)]);
     declare_function(state, "tan", None, Type::new(Float), vec![Type::new(Float)]);
-    declare_function(state, "atan", None, Type::new(Float), vec![Type::new(Float)]);
-    declare_function(state, "atan", None, Type::new(Float), vec![Type::new(Float), Type::new(Float)]);
+    declare_function(
+        state,
+        "atan",
+        None,
+        Type::new(Float),
+        vec![Type::new(Float)],
+    );
+    declare_function(
+        state,
+        "atan",
+        None,
+        Type::new(Float),
+        vec![Type::new(Float), Type::new(Float)],
+    );
     for t in &[Vec2, Vec3, Vec4] {
         declare_function(
             state,
@@ -3535,18 +3579,24 @@ pub fn ast_to_hir(state: &mut State, tu: &syntax::TranslationUnit) -> Translatio
     declare_function(state, "pow", None, Type::new(Vec3), vec![Type::new(Vec3)]);
     declare_function(state, "pow", None, Type::new(Float), vec![Type::new(Float)]);
     declare_function(state, "exp", None, Type::new(Float), vec![Type::new(Float)]);
-    declare_function(state, "exp2", None, Type::new(Float), vec![Type::new(Float)]);
+    declare_function(
+        state,
+        "exp2",
+        None,
+        Type::new(Float),
+        vec![Type::new(Float)],
+    );
     declare_function(state, "log", None, Type::new(Float), vec![Type::new(Float)]);
-    declare_function(state, "log2", None, Type::new(Float), vec![Type::new(Float)]);
+    declare_function(
+        state,
+        "log2",
+        None,
+        Type::new(Float),
+        vec![Type::new(Float)],
+    );
     for t in &[Float, Vec2] {
         // recip is non-standard
-        declare_function(
-            state,
-            "recip",
-            None,
-            Type::new(*t),
-            vec![Type::new(*t)],
-        );
+        declare_function(state, "recip", None, Type::new(*t), vec![Type::new(*t)]);
         declare_function(
             state,
             "inversesqrt",
@@ -3554,13 +3604,7 @@ pub fn ast_to_hir(state: &mut State, tu: &syntax::TranslationUnit) -> Translatio
             Type::new(*t),
             vec![Type::new(*t)],
         );
-        declare_function(
-            state,
-            "sqrt",
-            None,
-            Type::new(*t),
-            vec![Type::new(*t)],
-        );
+        declare_function(state, "sqrt", None, Type::new(*t), vec![Type::new(*t)]);
     }
     declare_function(
         state,
@@ -3703,13 +3747,7 @@ pub fn ast_to_hir(state: &mut State, tu: &syntax::TranslationUnit) -> Translatio
         Type::new(Float),
         vec![Type::new(Float)],
     );
-    declare_function(
-        state,
-        "fract",
-        None,
-        Type::new(Vec2),
-        vec![Type::new(Vec2)],
-    );
+    declare_function(state, "fract", None, Type::new(Vec2), vec![Type::new(Vec2)]);
     declare_function(state, "mod", None, Type::new(Vec2), vec![Type::new(Vec2)]);
     declare_function(state, "mod", None, Type::new(Float), vec![Type::new(Float)]);
 
@@ -3815,7 +3853,12 @@ pub fn ast_to_hir(state: &mut State, tu: &syntax::TranslationUnit) -> Translatio
     );
     state.clip_dist_sym = state.declare(
         "gl_ClipDistance",
-        SymDecl::Global(StorageClass::Out, None, Type::new_array(Float, 4), RunClass::Vector),
+        SymDecl::Global(
+            StorageClass::Out,
+            None,
+            Type::new_array(Float, 4),
+            RunClass::Vector,
+        ),
     );
 
     state.declare(
@@ -3827,7 +3870,9 @@ pub fn ast_to_hir(state: &mut State, tu: &syntax::TranslationUnit) -> Translatio
         SymDecl::Global(StorageClass::Const, None, Type::new(Int), RunClass::Scalar),
     );
 
-    for t in &[Float, Vec2, Vec3, Vec4, Int, IVec2, IVec3, IVec4, Mat3, Mat4] {
+    for t in &[
+        Float, Vec2, Vec3, Vec4, Int, IVec2, IVec3, IVec4, Mat3, Mat4,
+    ] {
         declare_function_ext(
             state,
             "swgl_forceScalar",
@@ -3839,9 +3884,11 @@ pub fn ast_to_hir(state: &mut State, tu: &syntax::TranslationUnit) -> Translatio
     }
 
     // GL_ARB_shader_group_vote
-    for (name, cxx_name) in &[("anyInvocations", "test_any"),
-                              ("allInvocations", "test_all"),
-                              ("allInvocationsEqual", "test_equal")] {
+    for (name, cxx_name) in &[
+        ("anyInvocations", "test_any"),
+        ("allInvocations", "test_all"),
+        ("allInvocationsEqual", "test_equal"),
+    ] {
         declare_function_ext(
             state,
             name,
@@ -3852,13 +3899,7 @@ pub fn ast_to_hir(state: &mut State, tu: &syntax::TranslationUnit) -> Translatio
         );
     }
 
-    declare_function(
-        state,
-        "swgl_stepInterp",
-        None,
-        Type::new(Void),
-        vec![],
-    );
+    declare_function(state, "swgl_stepInterp", None, Type::new(Void), vec![]);
 
     for t in &[Float, Vec2, Vec3, Vec4] {
         declare_function_ext(
@@ -3932,7 +3973,12 @@ pub fn ast_to_hir(state: &mut State, tu: &syntax::TranslationUnit) -> Translatio
         "swgl_clipMask",
         None,
         Type::new(Void),
-        vec![Type::new(Sampler2D), Type::new(Vec2), Type::new(Vec2), Type::new(Vec2)],
+        vec![
+            Type::new(Sampler2D),
+            Type::new(Vec2),
+            Type::new(Vec2),
+            Type::new(Vec2),
+        ],
     );
     declare_function(
         state,
@@ -3961,24 +4007,45 @@ pub fn ast_to_hir(state: &mut State, tu: &syntax::TranslationUnit) -> Translatio
         "swgl_commitLinearGradientRGBA8",
         None,
         Type::new(Void),
-        vec![Type::new(Sampler2D), Type::new(Int), Type::new(Float), Type::new(Bool), Type::new(Bool),
-             Type::new(Vec2), Type::new(Vec2), Type::new(Float)],
+        vec![
+            Type::new(Sampler2D),
+            Type::new(Int),
+            Type::new(Float),
+            Type::new(Bool),
+            Type::new(Bool),
+            Type::new(Vec2),
+            Type::new(Vec2),
+            Type::new(Float),
+        ],
     );
     declare_function(
         state,
         "swgl_commitRadialGradientRGBA8",
         None,
         Type::new(Void),
-        vec![Type::new(Sampler2D), Type::new(Int), Type::new(Float), Type::new(Bool), Type::new(Vec2),
-             Type::new(Float)],
+        vec![
+            Type::new(Sampler2D),
+            Type::new(Int),
+            Type::new(Float),
+            Type::new(Bool),
+            Type::new(Vec2),
+            Type::new(Float),
+        ],
     );
     declare_function(
         state,
         "swgl_commitRadialGradientFromStopsRGBA8",
         None,
         Type::new(Void),
-        vec![Type::new(Sampler2D), Type::new(Int), Type::new(Int), Type::new(Float), Type::new(Bool), Type::new(Vec2),
-             Type::new(Float)],
+        vec![
+            Type::new(Sampler2D),
+            Type::new(Int),
+            Type::new(Int),
+            Type::new(Float),
+            Type::new(Bool),
+            Type::new(Vec2),
+            Type::new(Float),
+        ],
     );
     declare_function(
         state,
@@ -3992,7 +4059,12 @@ pub fn ast_to_hir(state: &mut State, tu: &syntax::TranslationUnit) -> Translatio
         "swgl_commitGradientColorRGBA8",
         None,
         Type::new(Void),
-        vec![Type::new(Sampler2D), Type::new(Int), Type::new(Float), Type::new(Float)],
+        vec![
+            Type::new(Sampler2D),
+            Type::new(Int),
+            Type::new(Float),
+            Type::new(Float),
+        ],
     );
     for s in &[Sampler2D, Sampler2DRect] {
         declare_function_ext(
@@ -4045,42 +4117,72 @@ pub fn ast_to_hir(state: &mut State, tu: &syntax::TranslationUnit) -> Translatio
             "swgl_commitPartialTextureLinearR8",
             None,
             Type::new(Void),
-            vec![Type::new(Int), Type::new(*s), Type::new(Vec2), Type::new(Vec4)],
+            vec![
+                Type::new(Int),
+                Type::new(*s),
+                Type::new(Vec2),
+                Type::new(Vec4),
+            ],
         );
         declare_function(
             state,
             "swgl_commitPartialTextureLinearInvertR8",
             None,
             Type::new(Void),
-            vec![Type::new(Int), Type::new(*s), Type::new(Vec2), Type::new(Vec4)],
+            vec![
+                Type::new(Int),
+                Type::new(*s),
+                Type::new(Vec2),
+                Type::new(Vec4),
+            ],
         );
         declare_function(
             state,
             "swgl_commitTextureLinearColorRGBA8",
             None,
             Type::new(Void),
-            vec![Type::new(*s), Type::new(Vec2), Type::new(Vec4), Type::new(Vec4)],
+            vec![
+                Type::new(*s),
+                Type::new(Vec2),
+                Type::new(Vec4),
+                Type::new(Vec4),
+            ],
         );
         declare_function(
             state,
             "swgl_commitTextureLinearColorRGBA8",
             None,
             Type::new(Void),
-            vec![Type::new(*s), Type::new(Vec2), Type::new(Vec4), Type::new(Float)],
+            vec![
+                Type::new(*s),
+                Type::new(Vec2),
+                Type::new(Vec4),
+                Type::new(Float),
+            ],
         );
         declare_function(
             state,
             "swgl_commitTextureLinearColorR8",
             None,
             Type::new(Void),
-            vec![Type::new(*s), Type::new(Vec2), Type::new(Vec4), Type::new(Float)],
+            vec![
+                Type::new(*s),
+                Type::new(Vec2),
+                Type::new(Vec4),
+                Type::new(Float),
+            ],
         );
         declare_function(
             state,
             "swgl_commitTextureLinearColorR8ToRGBA8",
             None,
             Type::new(Void),
-            vec![Type::new(*s), Type::new(Vec2), Type::new(Vec4), Type::new(Vec4)],
+            vec![
+                Type::new(*s),
+                Type::new(Vec2),
+                Type::new(Vec4),
+                Type::new(Vec4),
+            ],
         );
 
         declare_function(
@@ -4088,16 +4190,27 @@ pub fn ast_to_hir(state: &mut State, tu: &syntax::TranslationUnit) -> Translatio
             "swgl_commitTextureLinearRepeatRGBA8",
             None,
             Type::new(Void),
-            vec![Type::new(*s), Type::new(Vec2), Type::new(Vec2),
-                 Type::new(Vec4), Type::new(Vec4)],
+            vec![
+                Type::new(*s),
+                Type::new(Vec2),
+                Type::new(Vec2),
+                Type::new(Vec4),
+                Type::new(Vec4),
+            ],
         );
         declare_function(
             state,
             "swgl_commitTextureLinearRepeatColorRGBA8",
             None,
             Type::new(Void),
-            vec![Type::new(*s), Type::new(Vec2), Type::new(Vec2),
-                 Type::new(Vec4), Type::new(Vec4), Type::new(Vec4)],
+            vec![
+                Type::new(*s),
+                Type::new(Vec2),
+                Type::new(Vec2),
+                Type::new(Vec4),
+                Type::new(Vec4),
+                Type::new(Vec4),
+            ],
         );
 
         declare_function(
@@ -4112,23 +4225,39 @@ pub fn ast_to_hir(state: &mut State, tu: &syntax::TranslationUnit) -> Translatio
             "swgl_commitTextureNearestColorRGBA8",
             None,
             Type::new(Void),
-            vec![Type::new(*s), Type::new(Vec2), Type::new(Vec4), Type::new(Vec4)],
+            vec![
+                Type::new(*s),
+                Type::new(Vec2),
+                Type::new(Vec4),
+                Type::new(Vec4),
+            ],
         );
         declare_function(
             state,
             "swgl_commitTextureNearestRepeatRGBA8",
             None,
             Type::new(Void),
-            vec![Type::new(*s), Type::new(Vec2), Type::new(Vec2),
-                 Type::new(Vec4), Type::new(Vec4)],
+            vec![
+                Type::new(*s),
+                Type::new(Vec2),
+                Type::new(Vec2),
+                Type::new(Vec4),
+                Type::new(Vec4),
+            ],
         );
         declare_function(
             state,
             "swgl_commitTextureNearestRepeatColorRGBA8",
             None,
             Type::new(Void),
-            vec![Type::new(*s), Type::new(Vec2), Type::new(Vec2),
-                 Type::new(Vec4), Type::new(Vec4), Type::new(Vec4)],
+            vec![
+                Type::new(*s),
+                Type::new(Vec2),
+                Type::new(Vec2),
+                Type::new(Vec4),
+                Type::new(Vec4),
+                Type::new(Vec4),
+            ],
         );
 
         declare_function(
@@ -4143,23 +4272,39 @@ pub fn ast_to_hir(state: &mut State, tu: &syntax::TranslationUnit) -> Translatio
             "swgl_commitTextureColorRGBA8",
             None,
             Type::new(Void),
-            vec![Type::new(*s), Type::new(Vec2), Type::new(Vec4), Type::new(Vec4)],
+            vec![
+                Type::new(*s),
+                Type::new(Vec2),
+                Type::new(Vec4),
+                Type::new(Vec4),
+            ],
         );
         declare_function(
             state,
             "swgl_commitTextureRepeatRGBA8",
             None,
             Type::new(Void),
-            vec![Type::new(*s), Type::new(Vec2), Type::new(Vec2),
-                 Type::new(Vec4), Type::new(Vec4)],
+            vec![
+                Type::new(*s),
+                Type::new(Vec2),
+                Type::new(Vec2),
+                Type::new(Vec4),
+                Type::new(Vec4),
+            ],
         );
         declare_function(
             state,
             "swgl_commitTextureRepeatColorRGBA8",
             None,
             Type::new(Void),
-            vec![Type::new(*s), Type::new(Vec2), Type::new(Vec2),
-                 Type::new(Vec4), Type::new(Vec4), Type::new(Vec4)],
+            vec![
+                Type::new(*s),
+                Type::new(Vec2),
+                Type::new(Vec2),
+                Type::new(Vec4),
+                Type::new(Vec4),
+                Type::new(Vec4),
+            ],
         );
 
         declare_function(
@@ -4167,73 +4312,133 @@ pub fn ast_to_hir(state: &mut State, tu: &syntax::TranslationUnit) -> Translatio
             "swgl_commitGaussianBlurRGBA8",
             None,
             Type::new(Void),
-            vec![Type::new(*s), Type::new(Vec2), Type::new(Vec4), Type::new(Bool),
-                 Type::new(Int), Type::new(Vec2)],
+            vec![
+                Type::new(*s),
+                Type::new(Vec2),
+                Type::new(Vec4),
+                Type::new(Bool),
+                Type::new(Int),
+                Type::new(Vec2),
+            ],
         );
         declare_function(
             state,
             "swgl_commitGaussianBlurR8",
             None,
             Type::new(Void),
-            vec![Type::new(*s), Type::new(Vec2), Type::new(Vec4), Type::new(Bool),
-                 Type::new(Int), Type::new(Vec2)],
+            vec![
+                Type::new(*s),
+                Type::new(Vec2),
+                Type::new(Vec4),
+                Type::new(Bool),
+                Type::new(Int),
+                Type::new(Vec2),
+            ],
         );
         declare_function(
             state,
             "swgl_commitTextureLinearYUV",
             None,
             Type::new(Void),
-            vec![Type::new(*s), Type::new(Vec2), Type::new(Vec4),
-                 Type::new(Vec3), Type::new(Mat3), Type::new(Int)],
+            vec![
+                Type::new(*s),
+                Type::new(Vec2),
+                Type::new(Vec4),
+                Type::new(Vec3),
+                Type::new(Mat3),
+                Type::new(Int),
+            ],
         );
         declare_function(
             state,
             "swgl_commitTextureLinearYUV",
             None,
             Type::new(Void),
-            vec![Type::new(*s), Type::new(Vec2), Type::new(Vec4),
-                 Type::new(*s), Type::new(Vec2), Type::new(Vec4),
-                 Type::new(Vec3), Type::new(Mat3), Type::new(Int)],
+            vec![
+                Type::new(*s),
+                Type::new(Vec2),
+                Type::new(Vec4),
+                Type::new(*s),
+                Type::new(Vec2),
+                Type::new(Vec4),
+                Type::new(Vec3),
+                Type::new(Mat3),
+                Type::new(Int),
+            ],
         );
         declare_function(
             state,
             "swgl_commitTextureLinearYUV",
             None,
             Type::new(Void),
-            vec![Type::new(*s), Type::new(Vec2), Type::new(Vec4),
-                 Type::new(*s), Type::new(Vec2), Type::new(Vec4),
-                 Type::new(*s), Type::new(Vec2), Type::new(Vec4),
-                 Type::new(Vec3), Type::new(Mat3), Type::new(Int)],
+            vec![
+                Type::new(*s),
+                Type::new(Vec2),
+                Type::new(Vec4),
+                Type::new(*s),
+                Type::new(Vec2),
+                Type::new(Vec4),
+                Type::new(*s),
+                Type::new(Vec2),
+                Type::new(Vec4),
+                Type::new(Vec3),
+                Type::new(Mat3),
+                Type::new(Int),
+            ],
         );
         declare_function(
             state,
             "swgl_commitTextureLinearColorYUV",
             None,
             Type::new(Void),
-            vec![Type::new(*s), Type::new(Vec2), Type::new(Vec4),
-                 Type::new(Vec3), Type::new(Mat3), Type::new(Int),
-                 Type::new(Float)],
+            vec![
+                Type::new(*s),
+                Type::new(Vec2),
+                Type::new(Vec4),
+                Type::new(Vec3),
+                Type::new(Mat3),
+                Type::new(Int),
+                Type::new(Float),
+            ],
         );
         declare_function(
             state,
             "swgl_commitTextureLinearColorYUV",
             None,
             Type::new(Void),
-            vec![Type::new(*s), Type::new(Vec2), Type::new(Vec4),
-                 Type::new(*s), Type::new(Vec2), Type::new(Vec4),
-                 Type::new(Vec3), Type::new(Mat3), Type::new(Int),
-                 Type::new(Float)],
+            vec![
+                Type::new(*s),
+                Type::new(Vec2),
+                Type::new(Vec4),
+                Type::new(*s),
+                Type::new(Vec2),
+                Type::new(Vec4),
+                Type::new(Vec3),
+                Type::new(Mat3),
+                Type::new(Int),
+                Type::new(Float),
+            ],
         );
         declare_function(
             state,
             "swgl_commitTextureLinearColorYUV",
             None,
             Type::new(Void),
-            vec![Type::new(*s), Type::new(Vec2), Type::new(Vec4),
-                 Type::new(*s), Type::new(Vec2), Type::new(Vec4),
-                 Type::new(*s), Type::new(Vec2), Type::new(Vec4),
-                 Type::new(Vec3), Type::new(Mat3), Type::new(Int),
-                 Type::new(Float)],
+            vec![
+                Type::new(*s),
+                Type::new(Vec2),
+                Type::new(Vec4),
+                Type::new(*s),
+                Type::new(Vec2),
+                Type::new(Vec4),
+                Type::new(*s),
+                Type::new(Vec2),
+                Type::new(Vec4),
+                Type::new(Vec3),
+                Type::new(Mat3),
+                Type::new(Int),
+                Type::new(Float),
+            ],
         );
     }
 
@@ -4266,12 +4471,11 @@ fn infer_expr_inner(state: &mut State, expr: &Expr, assign: &mut SymRef) -> RunC
             assert!(sym != SymRef(!0));
             state.merge_run_class(sym, run_class)
         }
-        ExprKind::Bracket(ref e, ref indx) => {
-            indx.iter().fold(
-                infer_expr_inner(state, e, assign),
-                |run_class, indx| run_class.merge(infer_expr(state, indx)),
-            )
-        }
+        ExprKind::Bracket(ref e, ref indx) => indx
+            .iter()
+            .fold(infer_expr_inner(state, e, assign), |run_class, indx| {
+                run_class.merge(infer_expr(state, indx))
+            }),
         ExprKind::FunCall(ref fun, ref args) => {
             let arg_classes: Vec<(RunClass, SymRef)> = args
                 .iter()
@@ -4312,7 +4516,7 @@ fn infer_expr_inner(state: &mut State, expr: &Expr, assign: &mut SymRef) -> RunC
                                                     arg_class = RunClass::Vector;
                                                 }
                                                 RunClass::Dependent(mask) => {
-                                                    for i in 0 .. 31 {
+                                                    for i in 0..31 {
                                                         if (mask & (1 << i)) != 0 {
                                                             arg_class =
                                                                 arg_class.merge(arg_classes[i].0);
@@ -4336,7 +4540,7 @@ fn infer_expr_inner(state: &mut State, expr: &Expr, assign: &mut SymRef) -> RunC
                                 RunClass::Unknown | RunClass::Vector => RunClass::Vector,
                                 RunClass::Dependent(mask) => {
                                     let mut ret_class = RunClass::Unknown;
-                                    for i in 0 .. 31 {
+                                    for i in 0..31 {
                                         if (mask & (1 << i)) != 0 {
                                             ret_class = ret_class.merge(arg_classes[i].0);
                                         }

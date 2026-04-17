@@ -4,7 +4,11 @@
 
 use api::units::PictureRect;
 use crate::pattern::{PatternKind, PatternShaderInput};
-use crate::{spatial_tree::SpatialNodeIndex, render_task_graph::RenderTaskId, surface::SurfaceTileDescriptor, picture::TileKey, renderer::GpuBufferAddress, FastHashMap, prim_store::PrimitiveInstanceIndex, gpu_cache::GpuCacheAddress};
+use crate::{
+    spatial_tree::SpatialNodeIndex, render_task_graph::RenderTaskId,
+    surface::SurfaceTileDescriptor, picture::TileKey, renderer::GpuBufferAddress, FastHashMap,
+    prim_store::PrimitiveInstanceIndex, gpu_cache::GpuCacheAddress,
+};
 use crate::gpu_types::{QuadSegment, TransformPaletteId};
 use crate::segment::EdgeAaSegmentMask;
 
@@ -132,9 +136,7 @@ pub enum PrimitiveCommand {
 }
 
 impl PrimitiveCommand {
-    pub fn simple(
-        prim_instance_index: PrimitiveInstanceIndex,
-    ) -> Self {
+    pub fn simple(prim_instance_index: PrimitiveInstanceIndex) -> Self {
         PrimitiveCommand::Simple {
             prim_instance_index,
         }
@@ -183,7 +185,6 @@ impl PrimitiveCommand {
     }
 }
 
-
 /// A list of commands describing how to draw a primitive list.
 #[cfg_attr(feature = "capture", derive(Serialize))]
 #[cfg_attr(feature = "replay", derive(Deserialize))]
@@ -204,10 +205,7 @@ impl CommandBuffer {
     }
 
     /// Push a list of segments in to the cmd buffer
-    pub fn set_segments(
-        &mut self,
-        segments: &[QuadSegment],
-    ) {
+    pub fn set_segments(&mut self, segments: &[QuadSegment]) {
         self.commands.push(Command::set_segments(segments.len()));
         for segment in segments {
             self.commands.push(Command::data(segment.task_id.index));
@@ -215,13 +213,10 @@ impl CommandBuffer {
     }
 
     /// Add a primitive to the command buffer.
-    pub fn add_prim(
-        &mut self,
-        prim_cmd: &PrimitiveCommand,
-        spatial_node_index: SpatialNodeIndex,
-    ) {
+    pub fn add_prim(&mut self, prim_cmd: &PrimitiveCommand, spatial_node_index: SpatialNodeIndex) {
         if self.current_spatial_node_index != spatial_node_index {
-            self.commands.push(Command::set_spatial_node(spatial_node_index));
+            self.commands
+                .push(Command::set_spatial_node(spatial_node_index));
             self.current_spatial_node_index = spatial_node_index;
         }
 
@@ -229,40 +224,65 @@ impl CommandBuffer {
     }
 
     /// Add a cmd to the command buffer.
-    pub fn add_cmd(
-        &mut self,
-        prim_cmd: &PrimitiveCommand,
-    ) {
+    pub fn add_cmd(&mut self, prim_cmd: &PrimitiveCommand) {
         match *prim_cmd {
-            PrimitiveCommand::Simple { prim_instance_index } => {
-                self.commands.push(Command::draw_simple_prim(prim_instance_index));
+            PrimitiveCommand::Simple {
+                prim_instance_index,
+            } => {
+                self.commands
+                    .push(Command::draw_simple_prim(prim_instance_index));
             }
-            PrimitiveCommand::Complex { prim_instance_index, gpu_address } => {
-                self.commands.push(Command::draw_complex_prim(prim_instance_index));
-                self.commands.push(Command::data((gpu_address.u as u32) << 16 | gpu_address.v as u32));
+            PrimitiveCommand::Complex {
+                prim_instance_index,
+                gpu_address,
+            } => {
+                self.commands
+                    .push(Command::draw_complex_prim(prim_instance_index));
+                self.commands.push(Command::data(
+                    (gpu_address.u as u32) << 16 | gpu_address.v as u32,
+                ));
             }
-            PrimitiveCommand::Instance { prim_instance_index, gpu_buffer_address } => {
-                self.commands.push(Command::draw_instance(prim_instance_index));
-                self.commands.push(Command::data((gpu_buffer_address.u as u32) << 16 | gpu_buffer_address.v as u32));
+            PrimitiveCommand::Instance {
+                prim_instance_index,
+                gpu_buffer_address,
+            } => {
+                self.commands
+                    .push(Command::draw_instance(prim_instance_index));
+                self.commands.push(Command::data(
+                    (gpu_buffer_address.u as u32) << 16 | gpu_buffer_address.v as u32,
+                ));
             }
-            PrimitiveCommand::Quad { pattern, pattern_input, prim_instance_index, gpu_buffer_address, transform_id, quad_flags, edge_flags, src_color_task_id } => {
+            PrimitiveCommand::Quad {
+                pattern,
+                pattern_input,
+                prim_instance_index,
+                gpu_buffer_address,
+                transform_id,
+                quad_flags,
+                edge_flags,
+                src_color_task_id,
+            } => {
                 self.commands.push(Command::draw_quad(prim_instance_index));
                 self.commands.push(Command::data(pattern as u32));
                 self.commands.push(Command::data(pattern_input.0 as u32));
                 self.commands.push(Command::data(pattern_input.1 as u32));
                 self.commands.push(Command::data(src_color_task_id.index));
-                self.commands.push(Command::data((gpu_buffer_address.u as u32) << 16 | gpu_buffer_address.v as u32));
+                self.commands.push(Command::data(
+                    (gpu_buffer_address.u as u32) << 16 | gpu_buffer_address.v as u32,
+                ));
                 self.commands.push(Command::data(transform_id.0));
-                self.commands.push(Command::data((quad_flags.bits() as u32) << 16 | edge_flags.bits() as u32));
+                self.commands.push(Command::data(
+                    (quad_flags.bits() as u32) << 16 | edge_flags.bits() as u32,
+                ));
             }
         }
     }
 
     /// Iterate the command list, calling a provided closure for each primitive draw command.
-    pub fn iter_prims<F>(
-        &self,
-        f: &mut F,
-    ) where F: FnMut(&PrimitiveCommand, SpatialNodeIndex, &[RenderTaskId]) {
+    pub fn iter_prims<F>(&self, f: &mut F)
+    where
+        F: FnMut(&PrimitiveCommand, SpatialNodeIndex, &[RenderTaskId]),
+    {
         let mut current_spatial_node_index = SpatialNodeIndex::INVALID;
         let mut cmd_iter = self.commands.iter();
         // TODO(gw): Consider pre-allocating this / Smallvec if it shows up in profiles.
@@ -288,10 +308,7 @@ impl CommandBuffer {
                         u: (data.0 >> 16) as u16,
                         v: (data.0 & 0xffff) as u16,
                     };
-                    let cmd = PrimitiveCommand::complex(
-                        prim_instance_index,
-                        gpu_address,
-                    );
+                    let cmd = PrimitiveCommand::complex(prim_instance_index, gpu_address);
                     f(&cmd, current_spatial_node_index, &[]);
                 }
                 Command::CMD_DRAW_QUAD => {
@@ -301,7 +318,9 @@ impl CommandBuffer {
                         cmd_iter.next().unwrap().0 as i32,
                         cmd_iter.next().unwrap().0 as i32,
                     );
-                    let src_color_task_id = RenderTaskId { index: cmd_iter.next().unwrap().0 };
+                    let src_color_task_id = RenderTaskId {
+                        index: cmd_iter.next().unwrap().0,
+                    };
                     let data = cmd_iter.next().unwrap();
                     let transform_id = TransformPaletteId(cmd_iter.next().unwrap().0);
                     let bits = cmd_iter.next().unwrap().0;
@@ -331,16 +350,15 @@ impl CommandBuffer {
                         u: (data.0 >> 16) as u16,
                         v: (data.0 & 0xffff) as u16,
                     };
-                    let cmd = PrimitiveCommand::instance(
-                        prim_instance_index,
-                        gpu_buffer_address,
-                    );
+                    let cmd = PrimitiveCommand::instance(prim_instance_index, gpu_buffer_address);
                     f(&cmd, current_spatial_node_index, &[]);
                 }
                 Command::CMD_SET_SEGMENTS => {
                     let count = param;
-                    for _ in 0 .. count {
-                        segments.push(RenderTaskId { index: cmd_iter.next().unwrap().0 });
+                    for _ in 0..count {
+                        segments.push(RenderTaskId {
+                            index: cmd_iter.next().unwrap().0,
+                        });
                     }
                 }
                 _ => {
@@ -401,13 +419,9 @@ impl CommandBufferBuilder {
     }
 
     /// Construct a tiled command buffer builder.
-    pub fn new_tiled(
-        tiles: FastHashMap<TileKey, SurfaceTileDescriptor>,
-    ) -> Self {
+    pub fn new_tiled(tiles: FastHashMap<TileKey, SurfaceTileDescriptor>) -> Self {
         CommandBufferBuilder {
-            kind: CommandBufferBuilderKind::Tiled {
-                tiles,
-            },
+            kind: CommandBufferBuilderKind::Tiled { tiles },
             establishes_sub_graph: false,
             resolve_source: None,
             extra_dependencies: Vec::new(),
@@ -452,9 +466,7 @@ impl CommandBufferList {
         }
     }
 
-    pub fn create_cmd_buffer(
-        &mut self,
-    ) -> CommandBufferIndex {
+    pub fn create_cmd_buffer(&mut self) -> CommandBufferIndex {
         let index = CommandBufferIndex(self.cmd_buffers.len() as u32);
         self.cmd_buffers.push(CommandBuffer::new());
         index

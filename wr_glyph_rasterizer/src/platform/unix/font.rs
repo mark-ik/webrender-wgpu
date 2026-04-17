@@ -47,10 +47,10 @@ lazy_static! {
 // bindings due to bindgen not handling the way
 // the macros are defined.
 //const FT_LOAD_TARGET_NORMAL: FT_UInt = 0 << 16;
-const FT_LOAD_TARGET_LIGHT: FT_UInt  = 1 << 16;
-const FT_LOAD_TARGET_MONO: FT_UInt   = 2 << 16;
-const FT_LOAD_TARGET_LCD: FT_UInt    = 3 << 16;
-const FT_LOAD_TARGET_LCD_V: FT_UInt  = 4 << 16;
+const FT_LOAD_TARGET_LIGHT: FT_UInt = 1 << 16;
+const FT_LOAD_TARGET_MONO: FT_UInt = 2 << 16;
+const FT_LOAD_TARGET_LCD: FT_UInt = 3 << 16;
+const FT_LOAD_TARGET_LCD_V: FT_UInt = 4 << 16;
 
 #[repr(C)]
 struct FT_Var_Axis {
@@ -142,9 +142,7 @@ pub extern "C" fn mozilla_glyphslot_embolden_less(slot: FT_GlyphSlot) {
     // FT_GlyphSlot_Embolden uses a divisor of 24 here; we'll be only half as
     // bold.
     let size_ = unsafe { *face_.size };
-    let strength =
-        unsafe { FT_MulFix(face_.units_per_EM as FT_Long,
-                           size_.metrics.y_scale) / 48 };
+    let strength = unsafe { FT_MulFix(face_.units_per_EM as FT_Long, size_.metrics.y_scale) / 48 };
     unsafe { FT_Outline_Embolden(&mut slot_.outline, strength) };
 
     // Adjust metrics to suit the fattened glyph.
@@ -171,8 +169,9 @@ struct CachedFont {
 impl Drop for CachedFont {
     fn drop(&mut self) {
         unsafe {
-            if !self.mm_var.is_null() &&
-                unimplemented(FT_Done_MM_Var((*(*self.face).glyph).library, self.mm_var)) {
+            if !self.mm_var.is_null()
+                && unimplemented(FT_Done_MM_Var((*(*self.face).glyph).library, self.mm_var))
+            {
                 free(self.mm_var as _);
             }
 
@@ -223,32 +222,26 @@ impl FontCache {
         unsafe {
             let mut face: FT_Face = ptr::null_mut();
             let result = match template {
-                FontTemplate::Raw(ref bytes, index) => {
-                    FT_New_Memory_Face(
-                        self.lib,
-                        bytes.as_ptr(),
-                        bytes.len() as FT_Long,
-                        index as FT_Long,
-                        &mut face,
-                    )
-                }
+                FontTemplate::Raw(ref bytes, index) => FT_New_Memory_Face(
+                    self.lib,
+                    bytes.as_ptr(),
+                    bytes.len() as FT_Long,
+                    index as FT_Long,
+                    &mut face,
+                ),
                 FontTemplate::Native(NativeFontHandle { ref path, index }) => {
                     let str = path.as_os_str().to_str().unwrap();
                     let cstr = CString::new(str).unwrap();
-                    FT_New_Face(
-                        self.lib,
-                        cstr.as_ptr(),
-                        index as FT_Long,
-                        &mut face,
-                    )
+                    FT_New_Face(self.lib, cstr.as_ptr(), index as FT_Long, &mut face)
                 }
             };
             if !succeeded(result) || face.is_null() {
                 return Err(result);
             }
             let mut mm_var = ptr::null_mut();
-            if ((*face).face_flags & (FT_FACE_FLAG_MULTIPLE_MASTERS as FT_Long)) != 0 &&
-               succeeded(FT_Get_MM_Var(face, &mut mm_var)) {
+            if ((*face).face_flags & (FT_FACE_FLAG_MULTIPLE_MASTERS as FT_Long)) != 0
+                && succeeded(FT_Get_MM_Var(face, &mut mm_var))
+            {
                 // Calling this before FT_Set_Var_Design_Coordinates avoids a bug with font variations
                 // not initialized properly in the font face, even if we ignore the result.
                 // See bug 1647035.
@@ -256,7 +249,7 @@ impl FontCache {
                 let res = FT_Get_Var_Design_Coordinates(
                     face,
                     (*mm_var).num_axis.min(16),
-                    tmp.as_mut_ptr()
+                    tmp.as_mut_ptr(),
                 );
                 debug_assert!(succeeded(res));
             }
@@ -298,7 +291,10 @@ fn get_skew_bounds(bottom: i32, top: i32, skew_factor: f32, _vertical: bool) -> 
     let skew_min = (bottom as f32 + 0.5) * skew_factor;
     let skew_max = (top as f32 - 0.5) * skew_factor;
     // Negative skew factor may switch the sense of skew_min and skew_max.
-    (skew_min.min(skew_max).floor(), skew_min.max(skew_max).ceil())
+    (
+        skew_min.min(skew_max).floor(),
+        skew_min.max(skew_max).ceil(),
+    )
 }
 
 fn skew_bitmap(
@@ -316,7 +312,7 @@ fn skew_bitmap(
     // Allocate enough extra width for the min/max skew offsets.
     let skew_width = width + (skew_max - skew_min) as usize;
     let mut skew_buffer = vec![0u8; skew_width * height * 4];
-    for y in 0 .. height {
+    for y in 0..height {
         // Calculate a skew offset at the vertical center of the current row.
         let offset = (top as f32 - y as f32 - 0.5) * skew_factor - skew_min;
         // Get a blend factor in 0..256 constant across all pixels in the row.
@@ -324,10 +320,10 @@ fn skew_bitmap(
         let src_row = y * stride;
         let dest_row = (y * skew_width + offset.floor() as usize) * 4;
         let mut prev_px = [0u32; 4];
-        for (src, dest) in
-            bitmap[src_row .. src_row + stride].chunks(4).zip(
-                skew_buffer[dest_row .. dest_row + stride].chunks_mut(4)
-            ) {
+        for (src, dest) in bitmap[src_row..src_row + stride]
+            .chunks(4)
+            .zip(skew_buffer[dest_row..dest_row + stride].chunks_mut(4))
+        {
             let px = [src[0] as u32, src[1] as u32, src[2] as u32, src[3] as u32];
             // Blend current pixel with previous pixel based on blend factor.
             let next_px = [px[0] * blend, px[1] * blend, px[2] * blend, px[3] * blend];
@@ -340,7 +336,7 @@ fn skew_bitmap(
         }
         // If the skew misaligns the final pixel, write out the remainder.
         if blend > 0 {
-            let dest = &mut skew_buffer[dest_row + stride .. dest_row + stride + 4];
+            let dest = &mut skew_buffer[dest_row + stride..dest_row + stride + 4];
             dest[0] = ((prev_px[0] + 128) >> 8) as u8;
             dest[1] = ((prev_px[1] + 128) >> 8) as u8;
             dest[2] = ((prev_px[2] + 128) >> 8) as u8;
@@ -355,7 +351,7 @@ fn transpose_bitmap(bitmap: &[u8], width: usize, height: usize) -> Vec<u8> {
     for (y, row) in bitmap.chunks(width * 4).enumerate() {
         let mut offset = y * 4;
         for src in row.chunks(4) {
-            transposed[offset .. offset + 4].copy_from_slice(src);
+            transposed[offset..offset + 4].copy_from_slice(src);
             offset += height * 4;
         }
     }
@@ -364,7 +360,8 @@ fn transpose_bitmap(bitmap: &[u8], width: usize, height: usize) -> Vec<u8> {
 
 fn flip_bitmap_x(bitmap: &mut [u8], width: usize, height: usize) {
     assert!(bitmap.len() == width * height * 4);
-    let pixels = unsafe { slice::from_raw_parts_mut(bitmap.as_mut_ptr() as *mut u32, width * height) };
+    let pixels =
+        unsafe { slice::from_raw_parts_mut(bitmap.as_mut_ptr() as *mut u32, width * height) };
     for row in pixels.chunks_mut(width) {
         row.reverse();
     }
@@ -372,11 +369,12 @@ fn flip_bitmap_x(bitmap: &mut [u8], width: usize, height: usize) {
 
 fn flip_bitmap_y(bitmap: &mut [u8], width: usize, height: usize) {
     assert!(bitmap.len() == width * height * 4);
-    let pixels = unsafe { slice::from_raw_parts_mut(bitmap.as_mut_ptr() as *mut u32, width * height) };
-    for y in 0 .. height / 2 {
+    let pixels =
+        unsafe { slice::from_raw_parts_mut(bitmap.as_mut_ptr() as *mut u32, width * height) };
+    for y in 0..height / 2 {
         let low_row = y * width;
         let high_row = (height - 1 - y) * width;
-        for x in 0 .. width {
+        for x in 0..width {
             pixels.swap(low_row + x, high_row + x);
         }
     }
@@ -396,7 +394,11 @@ impl FontContext {
     pub fn add_raw_font(&mut self, font_key: &FontKey, bytes: Arc<Vec<u8>>, index: u32) {
         if !self.fonts.contains_key(font_key) {
             let len = bytes.len();
-            match FONT_CACHE.lock().unwrap().add_font(FontTemplate::Raw(bytes, index)) {
+            match FONT_CACHE
+                .lock()
+                .unwrap()
+                .add_font(FontTemplate::Raw(bytes, index))
+            {
                 Ok(font) => self.fonts.insert(*font_key, font),
                 Err(result) => panic!("adding raw font failed: {} bytes, err={:?}", len, result),
             };
@@ -406,7 +408,11 @@ impl FontContext {
     pub fn add_native_font(&mut self, font_key: &FontKey, native_font_handle: NativeFontHandle) {
         if !self.fonts.contains_key(font_key) {
             let path = native_font_handle.path.to_string_lossy().into_owned();
-            match FONT_CACHE.lock().unwrap().add_font(FontTemplate::Native(native_font_handle)) {
+            match FONT_CACHE
+                .lock()
+                .unwrap()
+                .add_font(FontTemplate::Native(native_font_handle))
+            {
                 Ok(font) => self.fonts.insert(*font_key, font),
                 Err(result) => panic!("adding native font failed: file={} err={:?}", path, result),
             };
@@ -423,11 +429,13 @@ impl FontContext {
         }
     }
 
-    pub fn delete_font_instance(&mut self, _instance: &FontInstance) {
-    }
+    pub fn delete_font_instance(&mut self, _instance: &FontInstance) {}
 
-    fn load_glyph(&mut self, font: &FontInstance, glyph: &GlyphKey)
-        -> Option<(MutexGuard<CachedFont>, FT_GlyphSlot, f32)> {
+    fn load_glyph(
+        &mut self,
+        font: &FontInstance,
+        glyph: &GlyphKey,
+    ) -> Option<(MutexGuard<CachedFont>, FT_GlyphSlot, f32)> {
         let mut cached = self.fonts.get(&font.font_key)?.lock().ok()?;
         let face = cached.face;
 
@@ -439,7 +447,7 @@ impl FontContext {
             unsafe {
                 let num_axis = (*mm_var).num_axis;
                 let mut coords: Vec<FT_Fixed> = Vec::with_capacity(num_axis as usize);
-                for i in 0 .. num_axis {
+                for i in 0..num_axis {
                     let axis = (*mm_var).axis.offset(i as isize);
                     let mut value = (*axis).def;
                     for var in &font.variations {
@@ -458,11 +466,13 @@ impl FontContext {
         }
 
         let mut load_flags = FT_LOAD_DEFAULT;
-        let FontInstancePlatformOptions { mut hinting, .. } = font.platform_options.unwrap_or_default();
+        let FontInstancePlatformOptions { mut hinting, .. } =
+            font.platform_options.unwrap_or_default();
         // Disable hinting if there is a non-axis-aligned transform.
-        if font.synthetic_italics.is_enabled() ||
-           ((font.transform.scale_x != 0.0 || font.transform.scale_y != 0.0) &&
-            (font.transform.skew_x != 0.0 || font.transform.skew_y != 0.0)) {
+        if font.synthetic_italics.is_enabled()
+            || ((font.transform.scale_x != 0.0 || font.transform.scale_y != 0.0)
+                && (font.transform.skew_x != 0.0 || font.transform.skew_y != 0.0))
+        {
             hinting = FontHinting::None;
         }
         match (hinting, font.render_mode) {
@@ -495,10 +505,10 @@ impl FontContext {
 
         let face_flags = unsafe { (*face).face_flags };
         if (face_flags & (FT_FACE_FLAG_FIXED_SIZES as FT_Long)) != 0 {
-          // We only set FT_LOAD_COLOR if there are bitmap strikes;
-          // COLR (color-layer) fonts are handled internally by Gecko, and
-          // WebRender is just asked to paint individual layers.
-          load_flags |= FT_LOAD_COLOR;
+            // We only set FT_LOAD_COLOR if there are bitmap strikes;
+            // COLR (color-layer) fonts are handled internally by Gecko, and
+            // WebRender is just asked to paint individual layers.
+            load_flags |= FT_LOAD_COLOR;
         }
 
         load_flags |= FT_LOAD_IGNORE_GLOBAL_ADVANCE_WIDTH;
@@ -506,9 +516,10 @@ impl FontContext {
         let (x_scale, y_scale) = font.transform.compute_scale().unwrap_or((1.0, 1.0));
         let req_size = font.size.to_f64_px();
 
-        let mut result = if (face_flags & (FT_FACE_FLAG_FIXED_SIZES as FT_Long)) != 0 &&
-                            (face_flags & (FT_FACE_FLAG_SCALABLE as FT_Long)) == 0 &&
-                            (load_flags & FT_LOAD_NO_BITMAP) == 0 {
+        let mut result = if (face_flags & (FT_FACE_FLAG_FIXED_SIZES as FT_Long)) != 0
+            && (face_flags & (FT_FACE_FLAG_SCALABLE as FT_Long)) == 0
+            && (load_flags & FT_LOAD_NO_BITMAP) == 0
+        {
             unsafe { FT_Set_Transform(face, ptr::null_mut(), ptr::null_mut()) };
             self.choose_bitmap_size(face, req_size * y_scale)
         } else {
@@ -634,7 +645,12 @@ impl FontContext {
         scale: f32,
     ) -> FT_BBox {
         // Get the estimated bounding box from FT (control points).
-        let mut cbox = FT_BBox { xMin: 0, yMin: 0, xMax: 0, yMax: 0 };
+        let mut cbox = FT_BBox {
+            xMin: 0,
+            yMin: 0,
+            xMax: 0,
+            yMax: 0,
+        };
 
         unsafe {
             FT_Outline_Get_CBox(&(*slot).outline, &mut cbox);
@@ -677,14 +693,14 @@ impl FontContext {
     ) -> Option<GlyphDimensions> {
         let format = unsafe { (*slot).format };
         let (mut left, mut top, mut width, mut height) = match format {
-            FT_Glyph_Format::FT_GLYPH_FORMAT_BITMAP => {
-                unsafe { (
+            FT_Glyph_Format::FT_GLYPH_FORMAT_BITMAP => unsafe {
+                (
                     (*slot).bitmap_left as i32,
                     (*slot).bitmap_top as i32,
                     (*slot).bitmap.width as i32,
                     (*slot).bitmap.rows as i32,
-                ) }
-            }
+                )
+            },
             FT_Glyph_Format::FT_GLYPH_FORMAT_OUTLINE => {
                 let cbox = Self::get_bounding_box(slot, font, glyph, scale);
                 (
@@ -768,14 +784,16 @@ impl FontContext {
     }
 
     fn choose_bitmap_size(&self, face: FT_Face, requested_size: f64) -> FT_Error {
-        let mut best_dist = unsafe { *(*face).available_sizes.offset(0) }.y_ppem as f64 / 64.0 - requested_size;
+        let mut best_dist =
+            unsafe { *(*face).available_sizes.offset(0) }.y_ppem as f64 / 64.0 - requested_size;
         let mut best_size = 0;
         let num_fixed_sizes = unsafe { (*face).num_fixed_sizes };
-        for i in 1 .. num_fixed_sizes {
+        for i in 1..num_fixed_sizes {
             // Distance is positive if strike is larger than desired size,
             // or negative if smaller. If previously a found smaller strike,
             // then prefer a larger strike. Otherwise, minimize distance.
-            let dist = unsafe { *(*face).available_sizes.offset(i as isize) }.y_ppem as f64 / 64.0 - requested_size;
+            let dist = unsafe { *(*face).available_sizes.offset(i as isize) }.y_ppem as f64 / 64.0
+                - requested_size;
             if (best_dist < 0.0 && dist >= best_dist) || dist.abs() <= best_dist {
                 best_dist = dist;
                 best_size = i;
@@ -828,7 +846,12 @@ impl FontContext {
         // into account the subpixel positioning.
         unsafe {
             let outline = &(*slot).outline;
-            let mut cbox = FT_BBox { xMin: 0, yMin: 0, xMax: 0, yMax: 0 };
+            let mut cbox = FT_BBox {
+                xMin: 0,
+                yMin: 0,
+                xMax: 0,
+                yMax: 0,
+            };
             FT_Outline_Get_CBox(outline, &mut cbox);
             Self::pad_bounding_box(font, &mut cbox);
             FT_Outline_Translate(
@@ -841,21 +864,18 @@ impl FontContext {
         let render_mode = match font.render_mode {
             FontRenderMode::Mono => FT_Render_Mode::FT_RENDER_MODE_MONO,
             FontRenderMode::Alpha => FT_Render_Mode::FT_RENDER_MODE_NORMAL,
-            FontRenderMode::Subpixel => if font.flags.contains(FontInstanceFlags::LCD_VERTICAL) {
-                FT_Render_Mode::FT_RENDER_MODE_LCD_V
-            } else {
-                FT_Render_Mode::FT_RENDER_MODE_LCD
-            },
+            FontRenderMode::Subpixel => {
+                if font.flags.contains(FontInstanceFlags::LCD_VERTICAL) {
+                    FT_Render_Mode::FT_RENDER_MODE_LCD_V
+                } else {
+                    FT_Render_Mode::FT_RENDER_MODE_LCD
+                }
+            }
         };
         let result = unsafe { FT_Render_Glyph(slot, render_mode) };
         if !succeeded(result) {
             error!("Unable to rasterize");
-            debug!(
-                "{:?} with {:?}, {:?}",
-                key,
-                render_mode,
-                result
-            );
+            debug!("{:?} with {:?}, {:?}", key, render_mode, result);
             false
         } else {
             true
@@ -866,7 +886,8 @@ impl FontContext {
         // The global LCD filter state is only used in subpixel rendering modes.
         if font.render_mode == FontRenderMode::Subpixel {
             let mut cache = FONT_CACHE.lock().unwrap();
-            let FontInstancePlatformOptions { lcd_filter, .. } = font.platform_options.unwrap_or_default();
+            let FontInstancePlatformOptions { lcd_filter, .. } =
+                font.platform_options.unwrap_or_default();
             // Check if the current LCD filter matches the requested one.
             if cache.lcd_filter != lcd_filter {
                 // If the filter doesn't match, we have to wait for all other currently rasterizing threads
@@ -906,15 +927,22 @@ impl FontContext {
     }
 
     pub fn rasterize_glyph(&mut self, font: &FontInstance, key: &GlyphKey) -> GlyphRasterResult {
-        let (_cached, slot, scale) = self.load_glyph(font, key)
-                                         .ok_or(GlyphRasterError::LoadFailed)?;
+        let (_cached, slot, scale) = self
+            .load_glyph(font, key)
+            .ok_or(GlyphRasterError::LoadFailed)?;
 
         // Get dimensions of the glyph, to see if we need to rasterize it.
         // Don't apply scaling to the dimensions, as the glyph cache needs to know the actual
         // footprint of the glyph.
         let dimensions = Self::get_glyph_dimensions_impl(slot, font, key, scale, false)
-                             .ok_or(GlyphRasterError::LoadFailed)?;
-        let GlyphDimensions { mut left, mut top, width, height, .. } = dimensions;
+            .ok_or(GlyphRasterError::LoadFailed)?;
+        let GlyphDimensions {
+            mut left,
+            mut top,
+            width,
+            height,
+            ..
+        } = dimensions;
 
         // For spaces and other non-printable characters, early out.
         if width == 0 || height == 0 {
@@ -938,9 +966,7 @@ impl FontContext {
 
         debug!(
             "Rasterizing {:?} as {:?} with dimensions {:?}",
-            key,
-            font.render_mode,
-            dimensions
+            key, font.render_mode, dimensions
         );
 
         let bitmap = unsafe { &(*slot).bitmap };
@@ -954,11 +980,9 @@ impl FontContext {
                 assert!(bitmap.rows % 3 == 0);
                 (bitmap.width as usize, (bitmap.rows / 3) as usize)
             }
-            FT_Pixel_Mode::FT_PIXEL_MODE_MONO |
-            FT_Pixel_Mode::FT_PIXEL_MODE_GRAY |
-            FT_Pixel_Mode::FT_PIXEL_MODE_BGRA => {
-                (bitmap.width as usize, bitmap.rows as usize)
-            }
+            FT_Pixel_Mode::FT_PIXEL_MODE_MONO
+            | FT_Pixel_Mode::FT_PIXEL_MODE_GRAY
+            | FT_Pixel_Mode::FT_PIXEL_MODE_BGRA => (bitmap.width as usize, bitmap.rows as usize),
             _ => panic!("Unsupported mode"),
         };
 
@@ -1026,9 +1050,13 @@ impl FontContext {
                 }
                 FT_Pixel_Mode::FT_PIXEL_MODE_LCD_V => {
                     while dest < row_end {
-                        let (mut r, g, mut b) =
-                            unsafe { (*src, *src.offset(bitmap.pitch as isize),
-                                      *src.offset((2 * bitmap.pitch) as isize)) };
+                        let (mut r, g, mut b) = unsafe {
+                            (
+                                *src,
+                                *src.offset(bitmap.pitch as isize),
+                                *src.offset((2 * bitmap.pitch) as isize),
+                            )
+                        };
                         if subpixel_bgr {
                             mem::swap(&mut r, &mut b);
                         }
@@ -1043,7 +1071,7 @@ impl FontContext {
                 }
                 FT_Pixel_Mode::FT_PIXEL_MODE_BGRA => {
                     // The source is premultiplied BGRA data.
-                    let dest_slice = &mut final_buffer[dest .. row_end];
+                    let dest_slice = &mut final_buffer[dest..row_end];
                     let src_slice = unsafe { slice::from_raw_parts(src, dest_slice.len()) };
                     dest_slice.copy_from_slice(src_slice);
                 }
@@ -1053,10 +1081,11 @@ impl FontContext {
             dest = row_end + 8 * padding;
         }
 
-        if FONT_GAMMA > 0.0 &&
-           pixel_mode != FT_Pixel_Mode::FT_PIXEL_MODE_MONO &&
-           pixel_mode != FT_Pixel_Mode::FT_PIXEL_MODE_BGRA {
-          GAMMA_LUT.preblend(&mut final_buffer, font.color);
+        if FONT_GAMMA > 0.0
+            && pixel_mode != FT_Pixel_Mode::FT_PIXEL_MODE_MONO
+            && pixel_mode != FT_Pixel_Mode::FT_PIXEL_MODE_BGRA
+        {
+            GAMMA_LUT.preblend(&mut final_buffer, font.color);
         }
 
         if font.use_texture_padding() {
@@ -1098,18 +1127,17 @@ impl FontContext {
                     top = -(top - actual_height as i32);
                 }
             }
-            FT_Glyph_Format::FT_GLYPH_FORMAT_OUTLINE => {
-                unsafe {
-                    left += (*slot).bitmap_left;
-                    top += (*slot).bitmap_top - height as i32;
-                }
-            }
+            FT_Glyph_Format::FT_GLYPH_FORMAT_OUTLINE => unsafe {
+                left += (*slot).bitmap_left;
+                top += (*slot).bitmap_top - height as i32;
+            },
             _ => {}
         }
 
         let glyph_format = match (pixel_mode, format) {
-            (FT_Pixel_Mode::FT_PIXEL_MODE_LCD, _) |
-            (FT_Pixel_Mode::FT_PIXEL_MODE_LCD_V, _) => font.get_subpixel_glyph_format(),
+            (FT_Pixel_Mode::FT_PIXEL_MODE_LCD, _) | (FT_Pixel_Mode::FT_PIXEL_MODE_LCD_V, _) => {
+                font.get_subpixel_glyph_format()
+            }
             (FT_Pixel_Mode::FT_PIXEL_MODE_BGRA, _) => GlyphFormat::ColorBitmap,
             (_, FT_Glyph_Format::FT_GLYPH_FORMAT_BITMAP) => GlyphFormat::Bitmap,
             _ => font.get_alpha_glyph_format(),
@@ -1126,4 +1154,3 @@ impl FontContext {
         })
     }
 }
-

@@ -65,7 +65,9 @@ pub unsafe trait Texel: Copy + Default {
 }
 
 unsafe impl Texel for u8 {
-    fn image_format() -> ImageFormat { ImageFormat::R8 }
+    fn image_format() -> ImageFormat {
+        ImageFormat::R8
+    }
 }
 
 bitflags! {

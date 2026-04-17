@@ -12,8 +12,13 @@ use euclid::approxeq::ApproxEq;
 use euclid::{point2, vec2, size2};
 use api::{ExtendMode, GradientStop, LineOrientation, PremultipliedColorF, ColorF, ColorU};
 use api::units::*;
-use crate::pattern::{Pattern, PatternBuilder, PatternBuilderContext, PatternBuilderState, PatternKind, PatternShaderInput, PatternTextureInput};
-use crate::prim_store::gradient::{gpu_gradient_stops_blocks, write_gpu_gradient_stops_tree, GradientKind};
+use crate::pattern::{
+    Pattern, PatternBuilder, PatternBuilderContext, PatternBuilderState, PatternKind,
+    PatternShaderInput, PatternTextureInput,
+};
+use crate::prim_store::gradient::{
+    gpu_gradient_stops_blocks, write_gpu_gradient_stops_tree, GradientKind,
+};
 use crate::scene_building::IsVisible;
 use crate::frame_builder::FrameBuildingState;
 use crate::intern::{Internable, InternDebug, Handle as InternHandle};
@@ -55,10 +60,7 @@ pub struct LinearGradientKey {
 }
 
 impl LinearGradientKey {
-    pub fn new(
-        info: &LayoutPrimitiveInfo,
-        linear_grad: LinearGradient,
-    ) -> Self {
+    pub fn new(info: &LayoutPrimitiveInfo, linear_grad: LinearGradient) -> Self {
         LinearGradientKey {
             common: info.into(),
             extend_mode: linear_grad.extend_mode,
@@ -121,16 +123,11 @@ impl PatternBuilder for LinearGradientTemplate {
         )
     }
 
-    fn get_base_color(
-        &self,
-        _ctx: &PatternBuilderContext,
-    ) -> ColorF {
+    fn get_base_color(&self, _ctx: &PatternBuilderContext) -> ColorF {
         ColorF::WHITE
     }
 
-    fn use_shared_pattern(
-        &self,
-    ) -> bool {
+    fn use_shared_pattern(&self) -> bool {
         true
     }
 }
@@ -163,7 +160,13 @@ pub fn optimize_linear_gradient(
     stops: &mut [GradientStopKey],
     enable_dithering: bool,
     // Callback called for each fast-path segment (rect, start end, stops).
-    callback: &mut dyn FnMut(&LayoutRect, LayoutPoint, LayoutPoint, &[GradientStopKey], EdgeAaSegmentMask)
+    callback: &mut dyn FnMut(
+        &LayoutRect,
+        LayoutPoint,
+        LayoutPoint,
+        &[GradientStopKey],
+        EdgeAaSegmentMask,
+    ),
 ) -> bool {
     // First sanitize the gradient parameters. See if we can remove repetitions,
     // tighten the primitive bounds, etc.
@@ -188,12 +191,7 @@ pub fn optimize_linear_gradient(
         horizontally_tiled = false;
     }
 
-    let offset = apply_gradient_local_clip(
-        prim_rect,
-        &tile_size,
-        &tile_spacing,
-        &clip_rect
-    );
+    let offset = apply_gradient_local_clip(prim_rect, &tile_size, &tile_spacing, &clip_rect);
 
     // The size of gradient render tasks depends on the tile_size. No need to generate
     // large stretch sizes that will be clipped to the bounds of the primitive.
@@ -224,9 +222,9 @@ pub fn optimize_linear_gradient(
     }
 
     // If the gradient is small, no need to bother with decomposing it.
-    if !enable_dithering &&
-        ((horizontal && tile_size.width < 256.0)
-        || (vertical && tile_size.height < 256.0)) {
+    if !enable_dithering
+        && ((horizontal && tile_size.width < 256.0) || (vertical && tile_size.height < 256.0))
+    {
         return false;
     }
 
@@ -245,11 +243,15 @@ pub fn optimize_linear_gradient(
     };
 
     let adjust_size = &mut |size: &mut LayoutSize| {
-        if vertical { swap(&mut size.width, &mut size.height); }
+        if vertical {
+            swap(&mut size.width, &mut size.height);
+        }
     };
 
     let adjust_point = &mut |p: &mut LayoutPoint| {
-        if vertical { swap(&mut p.x, &mut p.y); }
+        if vertical {
+            swap(&mut p.x, &mut p.y);
+        }
     };
 
     let clip_rect = match clip_rect.intersection(prim_rect) {
@@ -296,13 +298,13 @@ pub fn optimize_linear_gradient(
         (
             EdgeAaSegmentMask::LEFT | EdgeAaSegmentMask::RIGHT,
             EdgeAaSegmentMask::TOP,
-            EdgeAaSegmentMask::BOTTOM
+            EdgeAaSegmentMask::BOTTOM,
         )
     } else {
         (
             EdgeAaSegmentMask::TOP | EdgeAaSegmentMask::BOTTOM,
             EdgeAaSegmentMask::LEFT,
-            EdgeAaSegmentMask::RIGHT
+            EdgeAaSegmentMask::RIGHT,
         )
     };
 
@@ -316,9 +318,16 @@ pub fn optimize_linear_gradient(
             continue;
         }
 
-
-        let prev_offset = if reverse_stops { 1.0 - prev_stop.offset } else { prev_stop.offset };
-        let offset = if reverse_stops { 1.0 - stop.offset } else { stop.offset };
+        let prev_offset = if reverse_stops {
+            1.0 - prev_stop.offset
+        } else {
+            prev_stop.offset
+        };
+        let offset = if reverse_stops {
+            1.0 - stop.offset
+        } else {
+            stop.offset
+        };
 
         // In layout space, relative to the primitive.
         let segment_start = start.x + prev_offset * length;
@@ -367,8 +376,14 @@ pub fn optimize_linear_gradient(
             start,
             end,
             &[
-                GradientStopKey { offset: 0.0, .. prev_stop },
-                GradientStopKey { offset: 1.0, .. *stop },
+                GradientStopKey {
+                    offset: 0.0,
+                    ..prev_stop
+                },
+                GradientStopKey {
+                    offset: 1.0,
+                    ..*stop
+                },
             ],
             edge_flags,
         );
@@ -379,7 +394,6 @@ pub fn optimize_linear_gradient(
 
 impl From<LinearGradientKey> for LinearGradientTemplate {
     fn from(item: LinearGradientKey) -> Self {
-
         let mut common = PrimTemplateCommonData::with_key_common(item.common);
         common.edge_aa_mask = item.edge_aa_mask;
 
@@ -402,10 +416,8 @@ impl From<LinearGradientKey> for LinearGradientTemplate {
         let stretch_size: LayoutSize = item.stretch_size.into();
         let mut task_size: DeviceSize = stretch_size.cast_unit();
 
-        let horizontal = !item.enable_dithering &&
-            start_point.y.approx_eq(&end_point.y);
-        let vertical = !item.enable_dithering &&
-            start_point.x.approx_eq(&end_point.x);
+        let horizontal = !item.enable_dithering && start_point.y.approx_eq(&end_point.y);
+        let vertical = !item.enable_dithering && start_point.x.approx_eq(&end_point.x);
 
         if horizontal {
             // Completely horizontal, we can stretch the gradient vertically.
@@ -424,14 +436,16 @@ impl From<LinearGradientKey> for LinearGradientTemplate {
             if horizontal
                 && stretch_size.width >= common.prim_rect.width()
                 && start_point.x.approx_eq(&0.0)
-                && end_point.x.approx_eq(&stretch_size.width) {
+                && end_point.x.approx_eq(&stretch_size.width)
+            {
                 is_fast_path = true;
                 task_size.width = task_size.width.min(256.0);
             }
             if vertical
                 && stretch_size.height >= common.prim_rect.height()
                 && start_point.y.approx_eq(&0.0)
-                && end_point.y.approx_eq(&stretch_size.height) {
+                && end_point.y.approx_eq(&stretch_size.height)
+            {
                 is_fast_path = true;
                 task_size.height = task_size.height.min(256.0);
             }
@@ -489,25 +503,17 @@ impl LinearGradientTemplate {
     /// times per frame, by each primitive reference that refers to this interned
     /// template. The initial request call to the GPU cache ensures that work is only
     /// done if the cache entry is invalid (due to first use or eviction).
-    pub fn update(
-        &mut self,
-        frame_state: &mut FrameBuildingState,
-    ) {
-        if let Some(mut request) = frame_state.gpu_cache.request(
-            &mut self.common.gpu_cache_handle
-        ) {
-
+    pub fn update(&mut self, frame_state: &mut FrameBuildingState) {
+        if let Some(mut request) = frame_state
+            .gpu_cache
+            .request(&mut self.common.gpu_cache_handle)
+        {
             // Write_prim_gpu_blocks
             if self.cached {
                 // We are using the image brush.
                 request.push(PremultipliedColorF::WHITE);
                 request.push(PremultipliedColorF::WHITE);
-                request.push([
-                    self.stretch_size.width,
-                    self.stretch_size.height,
-                    0.0,
-                    0.0,
-                ]);
+                request.push([self.stretch_size.width, self.stretch_size.height, 0.0, 0.0]);
             } else {
                 // We are using the gradient brush.
                 request.push([
@@ -527,10 +533,7 @@ impl LinearGradientTemplate {
             // write_segment_gpu_blocks
             for segment in &self.brush_segments {
                 // has to match VECS_PER_SEGMENT
-                request.write_segment(
-                    segment.local_rect,
-                    segment.extra_data,
-                );
+                request.write_segment(segment.local_rect, segment.extra_data);
             }
         }
 
@@ -573,14 +576,23 @@ impl LinearGradientTemplate {
                         self.task_size,
                         RenderTaskKind::FastLinearGradient(gradient),
                     ))
-                }
+                },
             )
         } else {
             let cache_key = LinearGradientCacheKey {
                 size: self.task_size,
-                start: PointKey { x: self.start_point.x, y: self.start_point.y },
-                end: PointKey { x: self.end_point.x, y: self.end_point.y },
-                scale: PointKey { x: self.scale.x, y: self.scale.y },
+                start: PointKey {
+                    x: self.start_point.x,
+                    y: self.start_point.y,
+                },
+                end: PointKey {
+                    x: self.end_point.x,
+                    y: self.end_point.y,
+                },
+                scale: PointKey {
+                    x: self.scale.x,
+                    y: self.scale.y,
+                },
                 extend_mode: self.extend_mode,
                 stops: self.stops.iter().map(|stop| (*stop).into()).collect(),
                 reversed_stops: self.reverse_stops,
@@ -614,7 +626,7 @@ impl LinearGradientTemplate {
                             stops: stops.unwrap(),
                         }),
                     ))
-                }
+                },
             )
         };
 
@@ -649,10 +661,7 @@ impl Internable for LinearGradient {
 }
 
 impl InternablePrimitive for LinearGradient {
-    fn into_key(
-        self,
-        info: &LayoutPrimitiveInfo,
-    ) -> LinearGradientKey {
+    fn into_key(self, info: &LayoutPrimitiveInfo) -> LinearGradientKey {
         LinearGradientKey::new(info, self)
     }
 
@@ -695,7 +704,6 @@ pub struct CachedGradientSegment {
     pub render_task: RenderTaskId,
     pub local_rect: LayoutRect,
 }
-
 
 #[derive(Copy, Clone, Debug, Hash, MallocSizeOf, PartialEq, Eq)]
 #[cfg_attr(feature = "capture", derive(Serialize))]
@@ -795,32 +803,20 @@ pub fn linear_gradient_pattern(
     extend_mode: ExtendMode,
     stops: &[GradientStop],
     _is_software: bool,
-    gpu_buffer_builder: &mut GpuBufferBuilder
+    gpu_buffer_builder: &mut GpuBufferBuilder,
 ) -> Pattern {
     let num_blocks = 2 + gpu_gradient_stops_blocks(stops.len(), true);
     let mut writer = gpu_buffer_builder.f32.write_blocks(num_blocks);
-    writer.push_one([
-        start.x,
-        start.y,
-        end.x,
-        end.y,
-    ]);
-    writer.push_one([
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-    ]);
+    writer.push_one([start.x, start.y, end.x, end.y]);
+    writer.push_one([0.0, 0.0, 0.0, 0.0]);
 
-    let is_opaque = write_gpu_gradient_stops_tree(stops, GradientKind::Linear, extend_mode, &mut writer);
+    let is_opaque =
+        write_gpu_gradient_stops_tree(stops, GradientKind::Linear, extend_mode, &mut writer);
     let gradient_address = writer.finish();
 
     Pattern {
         kind: PatternKind::Gradient,
-        shader_input: PatternShaderInput(
-            gradient_address.as_int(),
-            0,
-        ),
+        shader_input: PatternShaderInput(gradient_address.as_int(), 0),
         texture_input: PatternTextureInput::default(),
         base_color: ColorF::WHITE,
         is_opaque,

@@ -29,22 +29,22 @@ fn main() {
         backend_options: webrender::wgpu::BackendOptions::default(),
         display: None,
     });
-    let adapter = pollster::block_on(instance.request_adapter(
-        &webrender::wgpu::RequestAdapterOptions::default(),
-    ))
+    let adapter = pollster::block_on(
+        instance.request_adapter(&webrender::wgpu::RequestAdapterOptions::default()),
+    )
     .expect("No wgpu adapter available");
 
-    let (host_device, host_queue) = pollster::block_on(adapter.request_device(
-        &webrender::wgpu::DeviceDescriptor {
+    let (host_device, host_queue) =
+        pollster::block_on(adapter.request_device(&webrender::wgpu::DeviceDescriptor {
             label: Some("host-app device"),
             required_limits: webrender::wgpu::Limits {
-                max_inter_stage_shader_variables: webrender::WgpuDevice::MIN_INTER_STAGE_VARS.max(28),
+                max_inter_stage_shader_variables:
+                    webrender::WgpuDevice::MIN_INTER_STAGE_VARS.max(28),
                 ..Default::default()
             },
             ..Default::default()
-        },
-    ))
-    .expect("Failed to create wgpu device");
+        }))
+        .expect("Failed to create wgpu device");
 
     println!("Host device created: {:?}", adapter.get_info().name);
 
@@ -100,10 +100,7 @@ fn main() {
             ),
             space_and_clip,
         ),
-        LayoutRect::from_origin_and_size(
-            LayoutPoint::new(0.0, 0.0),
-            LayoutSize::new(128.0, 128.0),
-        ),
+        LayoutRect::from_origin_and_size(LayoutPoint::new(0.0, 0.0), LayoutSize::new(128.0, 128.0)),
         ColorF::new(1.0, 0.0, 0.0, 1.0),
     );
 
@@ -205,16 +202,21 @@ fn main() {
         // Sample the center of each quadrant (RGBA).
         let sample = |x: usize, y: usize| -> (u8, u8, u8, u8) {
             let idx = (y * 256 + x) * 4;
-            (pixels[idx], pixels[idx + 1], pixels[idx + 2], pixels[idx + 3])
+            (
+                pixels[idx],
+                pixels[idx + 1],
+                pixels[idx + 2],
+                pixels[idx + 3],
+            )
         };
 
         // read_pixels_rgba8 returns RGBA with Y-flipped (GL convention: origin
         // at bottom-left). So row 64 in the buffer = bottom area of the image
         // (our blue/yellow quadrants), and row 192 = top area (red/green).
-        let tl = sample(64, 192);  // Top-left in screen = high Y in buffer → red
+        let tl = sample(64, 192); // Top-left in screen = high Y in buffer → red
         let tr = sample(192, 192); // Top-right → green
-        let bl = sample(64, 64);   // Bottom-left → blue
-        let br = sample(192, 64);  // Bottom-right → yellow
+        let bl = sample(64, 64); // Bottom-left → blue
+        let br = sample(192, 64); // Bottom-right → yellow
 
         println!("Pixel readback (RGBA):");
         println!("  Top-left (red):        {:?}", tl);
@@ -224,10 +226,18 @@ fn main() {
 
         // Verify colors (allow small tolerance for anti-aliasing).
         let close = |a: u8, b: u8| -> bool { (a as i16 - b as i16).unsigned_abs() < 5 };
-        let ok = close(tl.0, 255) && close(tl.1, 0) && close(tl.2, 0)
-            && close(tr.0, 0) && close(tr.1, 255) && close(tr.2, 0)
-            && close(bl.0, 0) && close(bl.1, 0) && close(bl.2, 255)
-            && close(br.0, 255) && close(br.1, 255) && close(br.2, 0);
+        let ok = close(tl.0, 255)
+            && close(tl.1, 0)
+            && close(tl.2, 0)
+            && close(tr.0, 0)
+            && close(tr.1, 255)
+            && close(tr.2, 0)
+            && close(bl.0, 0)
+            && close(bl.1, 0)
+            && close(bl.2, 255)
+            && close(br.0, 255)
+            && close(br.1, 255)
+            && close(br.2, 0);
 
         if ok {
             println!("\nSUCCESS: Shared device rendering verified!");

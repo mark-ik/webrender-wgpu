@@ -51,7 +51,12 @@ const GRAPH_PADDING: f32 = 8.0;
 const GRAPH_FRAME_HEIGHT: f32 = 16.0;
 const PROFILE_SPACING: f32 = 15.0;
 const PROFILE_PADDING: f32 = 10.0;
-const BACKGROUND_COLOR: ColorU = ColorU { r: 20, g: 20, b: 20, a: 220 };
+const BACKGROUND_COLOR: ColorU = ColorU {
+    r: 20,
+    g: 20,
+    b: 20,
+    a: 220,
+};
 
 const ONE_SECOND_NS: u64 = 1_000_000_000;
 
@@ -333,13 +338,34 @@ pub struct Profiler {
 
 impl Profiler {
     pub fn new() -> Self {
-
-        fn float(name: &'static str, unit: &'static str, index: usize, expected: Expected<f64>) -> CounterDescriptor {
-            CounterDescriptor { name, unit, show_as: ShowAs::Float, index, expected }
+        fn float(
+            name: &'static str,
+            unit: &'static str,
+            index: usize,
+            expected: Expected<f64>,
+        ) -> CounterDescriptor {
+            CounterDescriptor {
+                name,
+                unit,
+                show_as: ShowAs::Float,
+                index,
+                expected,
+            }
         }
 
-        fn int(name: &'static str, unit: &'static str, index: usize, expected: Expected<i64>) -> CounterDescriptor {
-            CounterDescriptor { name, unit, show_as: ShowAs::Int, index, expected: expected.into_float() }
+        fn int(
+            name: &'static str,
+            unit: &'static str,
+            index: usize,
+            expected: Expected<i64>,
+        ) -> CounterDescriptor {
+            CounterDescriptor {
+                name,
+                unit,
+                show_as: ShowAs::Int,
+                index,
+                expected: expected.into_float(),
+            }
         }
 
         // Not in the list below:
@@ -350,170 +376,653 @@ impl Profiler {
         // use match in const fn which isn't supported by the current rustc version in gecko's build
         // system.
         let profile_counters = &[
-            float("Frame building", "ms", FRAME_BUILDING_TIME, expected(0.0..6.0).avg(0.0..3.0)),
-            float("Visibility", "ms", FRAME_VISIBILITY_TIME, expected(0.0..3.0).avg(0.0..2.0)),
-            float("Prepare", "ms", FRAME_PREPARE_TIME, expected(0.0..3.0).avg(0.0..2.0)),
-            float("Batching", "ms", FRAME_BATCHING_TIME, expected(0.0..3.0).avg(0.0..2.0)),
-
-            float("Renderer", "ms", RENDERER_TIME, expected(0.0..8.0).avg(0.0..5.0)),
-            float("Frame CPU total", "ms", TOTAL_FRAME_CPU_TIME, expected(0.0..15.0).avg(0.0..6.0)),
+            float(
+                "Frame building",
+                "ms",
+                FRAME_BUILDING_TIME,
+                expected(0.0..6.0).avg(0.0..3.0),
+            ),
+            float(
+                "Visibility",
+                "ms",
+                FRAME_VISIBILITY_TIME,
+                expected(0.0..3.0).avg(0.0..2.0),
+            ),
+            float(
+                "Prepare",
+                "ms",
+                FRAME_PREPARE_TIME,
+                expected(0.0..3.0).avg(0.0..2.0),
+            ),
+            float(
+                "Batching",
+                "ms",
+                FRAME_BATCHING_TIME,
+                expected(0.0..3.0).avg(0.0..2.0),
+            ),
+            float(
+                "Renderer",
+                "ms",
+                RENDERER_TIME,
+                expected(0.0..8.0).avg(0.0..5.0),
+            ),
+            float(
+                "Frame CPU total",
+                "ms",
+                TOTAL_FRAME_CPU_TIME,
+                expected(0.0..15.0).avg(0.0..6.0),
+            ),
             float("GPU", "ms", GPU_TIME, expected(0.0..15.0).avg(0.0..8.0)),
-
-            float("Content send", "ms", CONTENT_SEND_TIME, expected(0.0..1.0).avg(0.0..1.0)),
-            float("API send", "ms", API_SEND_TIME, expected(0.0..1.0).avg(0.0..0.4)),
-            float("DisplayList", "ms", DISPLAY_LIST_BUILD_TIME, expected(0.0..5.0).avg(0.0..3.0)),
-            float("DisplayList mem", "MB", DISPLAY_LIST_MEM, expected(0.0..20.0)),
-            float("Scene building", "ms", SCENE_BUILD_TIME, expected(0.0..4.0).avg(0.0..3.0)),
-
+            float(
+                "Content send",
+                "ms",
+                CONTENT_SEND_TIME,
+                expected(0.0..1.0).avg(0.0..1.0),
+            ),
+            float(
+                "API send",
+                "ms",
+                API_SEND_TIME,
+                expected(0.0..1.0).avg(0.0..0.4),
+            ),
+            float(
+                "DisplayList",
+                "ms",
+                DISPLAY_LIST_BUILD_TIME,
+                expected(0.0..5.0).avg(0.0..3.0),
+            ),
+            float(
+                "DisplayList mem",
+                "MB",
+                DISPLAY_LIST_MEM,
+                expected(0.0..20.0),
+            ),
+            float(
+                "Scene building",
+                "ms",
+                SCENE_BUILD_TIME,
+                expected(0.0..4.0).avg(0.0..3.0),
+            ),
             float("Slow frame", "", SLOW_FRAME, expected(0.0..0.0)),
             float("Slow transaction", "", SLOW_TXN, expected(0.0..0.0)),
-
             float("Frame", "ms", FRAME_TIME, Expected::none()),
-
             int("Texture uploads", "", TEXTURE_UPLOADS, expected(0..10)),
-            float("Texture uploads mem", "MB", TEXTURE_UPLOADS_MEM, expected(0.0..10.0)),
-            float("Texture cache update", "ms", TEXTURE_CACHE_UPDATE_TIME, expected(0.0..3.0)),
-            float("Staging CPU allocation", "ms", CPU_TEXTURE_ALLOCATION_TIME, Expected::none()),
-            float("Staging GPU allocation", "ms", STAGING_TEXTURE_ALLOCATION_TIME, Expected::none()),
-            float("Staging CPU copy", "ms", UPLOAD_CPU_COPY_TIME, Expected::none()),
-            float("Staging GPU copy", "ms", UPLOAD_GPU_COPY_TIME, Expected::none()),
+            float(
+                "Texture uploads mem",
+                "MB",
+                TEXTURE_UPLOADS_MEM,
+                expected(0.0..10.0),
+            ),
+            float(
+                "Texture cache update",
+                "ms",
+                TEXTURE_CACHE_UPDATE_TIME,
+                expected(0.0..3.0),
+            ),
+            float(
+                "Staging CPU allocation",
+                "ms",
+                CPU_TEXTURE_ALLOCATION_TIME,
+                Expected::none(),
+            ),
+            float(
+                "Staging GPU allocation",
+                "ms",
+                STAGING_TEXTURE_ALLOCATION_TIME,
+                Expected::none(),
+            ),
+            float(
+                "Staging CPU copy",
+                "ms",
+                UPLOAD_CPU_COPY_TIME,
+                Expected::none(),
+            ),
+            float(
+                "Staging GPU copy",
+                "ms",
+                UPLOAD_GPU_COPY_TIME,
+                Expected::none(),
+            ),
             float("Upload time", "ms", UPLOAD_TIME, Expected::none()),
-            int("Upload copy batches", "", UPLOAD_NUM_COPY_BATCHES, Expected::none()),
-            float("Texture cache upload", "ms", TOTAL_UPLOAD_TIME, expected(0.0..5.0)),
-            float("Cache texture creation", "ms", CREATE_CACHE_TEXTURE_TIME, expected(0.0..2.0)),
-            float("Cache texture deletion", "ms", DELETE_CACHE_TEXTURE_TIME, expected(0.0..1.0)),
-            float("GPU cache upload", "ms", GPU_CACHE_UPLOAD_TIME, expected(0.0..2.0)),
-
+            int(
+                "Upload copy batches",
+                "",
+                UPLOAD_NUM_COPY_BATCHES,
+                Expected::none(),
+            ),
+            float(
+                "Texture cache upload",
+                "ms",
+                TOTAL_UPLOAD_TIME,
+                expected(0.0..5.0),
+            ),
+            float(
+                "Cache texture creation",
+                "ms",
+                CREATE_CACHE_TEXTURE_TIME,
+                expected(0.0..2.0),
+            ),
+            float(
+                "Cache texture deletion",
+                "ms",
+                DELETE_CACHE_TEXTURE_TIME,
+                expected(0.0..1.0),
+            ),
+            float(
+                "GPU cache upload",
+                "ms",
+                GPU_CACHE_UPLOAD_TIME,
+                expected(0.0..2.0),
+            ),
             int("Rasterized blobs", "", RASTERIZED_BLOBS, expected(0..15)),
-            int("Rasterized blob tiles", "", RASTERIZED_BLOB_TILES, expected(0..15)),
-            int("Rasterized blob pixels", "px", RASTERIZED_BLOBS_PX, expected(0..300_000)),
-            float("Blob rasterization", "ms", BLOB_RASTERIZATION_TIME, expected(0.0..8.0)),
-
+            int(
+                "Rasterized blob tiles",
+                "",
+                RASTERIZED_BLOB_TILES,
+                expected(0..15),
+            ),
+            int(
+                "Rasterized blob pixels",
+                "px",
+                RASTERIZED_BLOBS_PX,
+                expected(0..300_000),
+            ),
+            float(
+                "Blob rasterization",
+                "ms",
+                BLOB_RASTERIZATION_TIME,
+                expected(0.0..8.0),
+            ),
             int("Rasterized glyphs", "", RASTERIZED_GLYPHS, expected(0..15)),
-            float("Glyph resolve", "ms", GLYPH_RESOLVE_TIME, expected(0.0..4.0)),
-
+            float(
+                "Glyph resolve",
+                "ms",
+                GLYPH_RESOLVE_TIME,
+                expected(0.0..4.0),
+            ),
             int("Draw calls", "", DRAW_CALLS, expected(1..120).avg(1..90)),
             int("Vertices", "", VERTICES, expected(10..5000)),
             int("Primitives", "", PRIMITIVES, expected(10..5000)),
-            int("Visible primitives", "", VISIBLE_PRIMITIVES, expected(1..5000)),
-
+            int(
+                "Visible primitives",
+                "",
+                VISIBLE_PRIMITIVES,
+                expected(1..5000),
+            ),
             int("Used targets", "", USED_TARGETS, expected(1..4)),
             int("Created targets", "", CREATED_TARGETS, expected(0..3)),
-            int("Picture cache slices", "", PICTURE_CACHE_SLICES, expected(0..5)),
-
+            int(
+                "Picture cache slices",
+                "",
+                PICTURE_CACHE_SLICES,
+                expected(0..5),
+            ),
             int("Color passes", "", COLOR_PASSES, expected(1..4)),
             int("Alpha passes", "", ALPHA_PASSES, expected(0..3)),
             int("Picture tiles", "", PICTURE_TILES, expected(0..15)),
-            int("Rendered picture tiles", "", RENDERED_PICTURE_TILES, expected(0..5)),
-
+            int(
+                "Rendered picture tiles",
+                "",
+                RENDERED_PICTURE_TILES,
+                expected(0..5),
+            ),
             int("Font templates", "", FONT_TEMPLATES, expected(0..40)),
-            float("Font templates mem", "MB", FONT_TEMPLATES_MEM, expected(0.0..20.0)),
+            float(
+                "Font templates mem",
+                "MB",
+                FONT_TEMPLATES_MEM,
+                expected(0.0..20.0),
+            ),
             int("Image templates", "", IMAGE_TEMPLATES, expected(0..100)),
-            float("Image templates mem", "MB", IMAGE_TEMPLATES_MEM, expected(0.0..50.0)),
-
-            int("GPU cache rows total", "", GPU_CACHE_ROWS_TOTAL, expected(1..50)),
-            int("GPU cache rows updated", "", GPU_CACHE_ROWS_UPDATED, expected(0..25)),
-            int("GPU blocks total", "", GPU_CACHE_BLOCKS_TOTAL, expected(1..65_000)),
-            int("GPU blocks updated", "", GPU_CACHE_BLOCKS_UPDATED, expected(0..1000)),
-            int("GPU blocks saved", "", GPU_CACHE_BLOCKS_SAVED, expected(0..50_000)),
-
-            float("Atlas items mem", "MB", ATLAS_ITEMS_MEM, expected(0.0..100.0)),
-            int("Atlas A8 pixels", "px", ATLAS_A8_PIXELS, expected(0..1_000_000)),
+            float(
+                "Image templates mem",
+                "MB",
+                IMAGE_TEMPLATES_MEM,
+                expected(0.0..50.0),
+            ),
+            int(
+                "GPU cache rows total",
+                "",
+                GPU_CACHE_ROWS_TOTAL,
+                expected(1..50),
+            ),
+            int(
+                "GPU cache rows updated",
+                "",
+                GPU_CACHE_ROWS_UPDATED,
+                expected(0..25),
+            ),
+            int(
+                "GPU blocks total",
+                "",
+                GPU_CACHE_BLOCKS_TOTAL,
+                expected(1..65_000),
+            ),
+            int(
+                "GPU blocks updated",
+                "",
+                GPU_CACHE_BLOCKS_UPDATED,
+                expected(0..1000),
+            ),
+            int(
+                "GPU blocks saved",
+                "",
+                GPU_CACHE_BLOCKS_SAVED,
+                expected(0..50_000),
+            ),
+            float(
+                "Atlas items mem",
+                "MB",
+                ATLAS_ITEMS_MEM,
+                expected(0.0..100.0),
+            ),
+            int(
+                "Atlas A8 pixels",
+                "px",
+                ATLAS_A8_PIXELS,
+                expected(0..1_000_000),
+            ),
             int("Atlas A8 textures", "", ATLAS_A8_TEXTURES, expected(0..2)),
-            int("Atlas A16 pixels", "px", ATLAS_A16_PIXELS, expected(0..260_000)),
+            int(
+                "Atlas A16 pixels",
+                "px",
+                ATLAS_A16_PIXELS,
+                expected(0..260_000),
+            ),
             int("Atlas A16 textures", "", ATLAS_A16_TEXTURES, expected(0..2)),
-            int("Atlas RGBA8 linear pixels", "px", ATLAS_RGBA8_LINEAR_PIXELS, expected(0..8_000_000)),
-            int("Atlas RGBA8 linear textures", "", ATLAS_RGBA8_LINEAR_TEXTURES, expected(0..3)),
-            int("Atlas RGBA8 nearest pixels", "px", ATLAS_RGBA8_NEAREST_PIXELS, expected(0..260_000)),
-            int("Atlas RGBA8 nearest textures", "", ATLAS_RGBA8_NEAREST_TEXTURES, expected(0..2)),
-            int("Atlas RGBA8 glyphs pixels", "px", ATLAS_RGBA8_GLYPHS_PIXELS, expected(0..4_000_000)),
-            int("Atlas RGBA8 glyphs textures", "", ATLAS_RGBA8_GLYPHS_TEXTURES, expected(0..2)),
-            int("Atlas A8 glyphs pixels", "px", ATLAS_A8_GLYPHS_PIXELS, expected(0..4_000_000)),
-            int("Atlas A8 glyphs textures", "", ATLAS_A8_GLYPHS_TEXTURES, expected(0..2)),
-            float("Atlas RGBA8 linear pressure", "", ATLAS_COLOR8_LINEAR_PRESSURE, expected(0.0..1.0)),
-            float("Atlas RGBA8 nearest pressure", "", ATLAS_COLOR8_NEAREST_PRESSURE, expected(0.0..1.0)),
-            float("Atlas RGBA8 glyphs pressure", "", ATLAS_COLOR8_GLYPHS_PRESSURE, expected(0.0..1.0)),
-            float("Atlas A8 pressure", "", ATLAS_ALPHA8_PRESSURE, expected(0.0..1.0)),
-            float("Atlas A8 glyphs pressure", "", ATLAS_ALPHA8_GLYPHS_PRESSURE, expected(0.0..1.0)),
-            float("Atlas A16 pressure", "", ATLAS_ALPHA16_PRESSURE, expected(0.0..1.0)),
-            float("Texture cache standalone pressure", "", ATLAS_STANDALONE_PRESSURE, expected(0.0..1.0)),
-
-            int("Texture cache eviction count", "items", TEXTURE_CACHE_EVICTION_COUNT, Expected::none()),
-            int("Texture cache youngest evicted", "frames", TEXTURE_CACHE_YOUNGEST_EVICTION, Expected::none()),
-            float("External image mem", "MB", EXTERNAL_IMAGE_BYTES, Expected::none()),
-            float("Atlas textures mem", "MB", ATLAS_TEXTURES_MEM, Expected::none()),
-            float("Standalone textures mem", "MB", STANDALONE_TEXTURES_MEM, Expected::none()),
-            float("Picture tiles mem", "MB", PICTURE_TILES_MEM, expected(0.0..150.0)),
-            float("Render targets mem", "MB", RENDER_TARGET_MEM, Expected::none()),
-
-            float("Alpha targets samplers", "%", ALPHA_TARGETS_SAMPLERS, Expected::none()),
-            float("Transparent pass samplers", "%", TRANSPARENT_PASS_SAMPLERS, Expected::none()),
-            float("Opaque pass samplers", "%", OPAQUE_PASS_SAMPLERS, Expected::none()),
+            int(
+                "Atlas RGBA8 linear pixels",
+                "px",
+                ATLAS_RGBA8_LINEAR_PIXELS,
+                expected(0..8_000_000),
+            ),
+            int(
+                "Atlas RGBA8 linear textures",
+                "",
+                ATLAS_RGBA8_LINEAR_TEXTURES,
+                expected(0..3),
+            ),
+            int(
+                "Atlas RGBA8 nearest pixels",
+                "px",
+                ATLAS_RGBA8_NEAREST_PIXELS,
+                expected(0..260_000),
+            ),
+            int(
+                "Atlas RGBA8 nearest textures",
+                "",
+                ATLAS_RGBA8_NEAREST_TEXTURES,
+                expected(0..2),
+            ),
+            int(
+                "Atlas RGBA8 glyphs pixels",
+                "px",
+                ATLAS_RGBA8_GLYPHS_PIXELS,
+                expected(0..4_000_000),
+            ),
+            int(
+                "Atlas RGBA8 glyphs textures",
+                "",
+                ATLAS_RGBA8_GLYPHS_TEXTURES,
+                expected(0..2),
+            ),
+            int(
+                "Atlas A8 glyphs pixels",
+                "px",
+                ATLAS_A8_GLYPHS_PIXELS,
+                expected(0..4_000_000),
+            ),
+            int(
+                "Atlas A8 glyphs textures",
+                "",
+                ATLAS_A8_GLYPHS_TEXTURES,
+                expected(0..2),
+            ),
+            float(
+                "Atlas RGBA8 linear pressure",
+                "",
+                ATLAS_COLOR8_LINEAR_PRESSURE,
+                expected(0.0..1.0),
+            ),
+            float(
+                "Atlas RGBA8 nearest pressure",
+                "",
+                ATLAS_COLOR8_NEAREST_PRESSURE,
+                expected(0.0..1.0),
+            ),
+            float(
+                "Atlas RGBA8 glyphs pressure",
+                "",
+                ATLAS_COLOR8_GLYPHS_PRESSURE,
+                expected(0.0..1.0),
+            ),
+            float(
+                "Atlas A8 pressure",
+                "",
+                ATLAS_ALPHA8_PRESSURE,
+                expected(0.0..1.0),
+            ),
+            float(
+                "Atlas A8 glyphs pressure",
+                "",
+                ATLAS_ALPHA8_GLYPHS_PRESSURE,
+                expected(0.0..1.0),
+            ),
+            float(
+                "Atlas A16 pressure",
+                "",
+                ATLAS_ALPHA16_PRESSURE,
+                expected(0.0..1.0),
+            ),
+            float(
+                "Texture cache standalone pressure",
+                "",
+                ATLAS_STANDALONE_PRESSURE,
+                expected(0.0..1.0),
+            ),
+            int(
+                "Texture cache eviction count",
+                "items",
+                TEXTURE_CACHE_EVICTION_COUNT,
+                Expected::none(),
+            ),
+            int(
+                "Texture cache youngest evicted",
+                "frames",
+                TEXTURE_CACHE_YOUNGEST_EVICTION,
+                Expected::none(),
+            ),
+            float(
+                "External image mem",
+                "MB",
+                EXTERNAL_IMAGE_BYTES,
+                Expected::none(),
+            ),
+            float(
+                "Atlas textures mem",
+                "MB",
+                ATLAS_TEXTURES_MEM,
+                Expected::none(),
+            ),
+            float(
+                "Standalone textures mem",
+                "MB",
+                STANDALONE_TEXTURES_MEM,
+                Expected::none(),
+            ),
+            float(
+                "Picture tiles mem",
+                "MB",
+                PICTURE_TILES_MEM,
+                expected(0.0..150.0),
+            ),
+            float(
+                "Render targets mem",
+                "MB",
+                RENDER_TARGET_MEM,
+                Expected::none(),
+            ),
+            float(
+                "Alpha targets samplers",
+                "%",
+                ALPHA_TARGETS_SAMPLERS,
+                Expected::none(),
+            ),
+            float(
+                "Transparent pass samplers",
+                "%",
+                TRANSPARENT_PASS_SAMPLERS,
+                Expected::none(),
+            ),
+            float(
+                "Opaque pass samplers",
+                "%",
+                OPAQUE_PASS_SAMPLERS,
+                Expected::none(),
+            ),
             float("Total samplers", "%", TOTAL_SAMPLERS, Expected::none()),
-
-            int("Interned primitives", "", INTERNED_PRIMITIVES, Expected::none()),
+            int(
+                "Interned primitives",
+                "",
+                INTERNED_PRIMITIVES,
+                Expected::none(),
+            ),
             int("Interned clips", "", INTERNED_CLIPS, Expected::none()),
-            int("Interned text runs", "", INTERNED_TEXT_RUNS, Expected::none()),
-            int("Interned normal borders", "", INTERNED_NORMAL_BORDERS, Expected::none()),
-            int("Interned image borders", "", INTERNED_IMAGE_BORDERS, Expected::none()),
+            int(
+                "Interned text runs",
+                "",
+                INTERNED_TEXT_RUNS,
+                Expected::none(),
+            ),
+            int(
+                "Interned normal borders",
+                "",
+                INTERNED_NORMAL_BORDERS,
+                Expected::none(),
+            ),
+            int(
+                "Interned image borders",
+                "",
+                INTERNED_IMAGE_BORDERS,
+                Expected::none(),
+            ),
             int("Interned images", "", INTERNED_IMAGES, Expected::none()),
-            int("Interned YUV images", "", INTERNED_YUV_IMAGES, Expected::none()),
-            int("Interned line decorations", "", INTERNED_LINE_DECORATIONS, Expected::none()),
-            int("Interned linear gradients", "", INTERNED_LINEAR_GRADIENTS, Expected::none()),
-            int("Interned radial gradients", "", INTERNED_RADIAL_GRADIENTS, Expected::none()),
-            int("Interned conic gradients", "", INTERNED_CONIC_GRADIENTS, Expected::none()),
+            int(
+                "Interned YUV images",
+                "",
+                INTERNED_YUV_IMAGES,
+                Expected::none(),
+            ),
+            int(
+                "Interned line decorations",
+                "",
+                INTERNED_LINE_DECORATIONS,
+                Expected::none(),
+            ),
+            int(
+                "Interned linear gradients",
+                "",
+                INTERNED_LINEAR_GRADIENTS,
+                Expected::none(),
+            ),
+            int(
+                "Interned radial gradients",
+                "",
+                INTERNED_RADIAL_GRADIENTS,
+                Expected::none(),
+            ),
+            int(
+                "Interned conic gradients",
+                "",
+                INTERNED_CONIC_GRADIENTS,
+                Expected::none(),
+            ),
             int("Interned pictures", "", INTERNED_PICTURES, Expected::none()),
-            int("Interned filter data", "", INTERNED_FILTER_DATA, Expected::none()),
-            int("Interned backdrop captures", "", INTERNED_BACKDROP_CAPTURES, Expected::none()),
-            int("Interned backdrop renders", "", INTERNED_BACKDROP_RENDERS, Expected::none()),
+            int(
+                "Interned filter data",
+                "",
+                INTERNED_FILTER_DATA,
+                Expected::none(),
+            ),
+            int(
+                "Interned backdrop captures",
+                "",
+                INTERNED_BACKDROP_CAPTURES,
+                Expected::none(),
+            ),
+            int(
+                "Interned backdrop renders",
+                "",
+                INTERNED_BACKDROP_RENDERS,
+                Expected::none(),
+            ),
             int("Interned polygons", "", INTERNED_POLYGONS, Expected::none()),
-            int("Interned box-shadows", "", INTERNED_BOX_SHADOWS, Expected::none()),
-
-            float("Depth targets mem", "MB", DEPTH_TARGETS_MEM, Expected::none()),
-            float("Shader build time", "ms", SHADER_BUILD_TIME, Expected::none()),
+            int(
+                "Interned box-shadows",
+                "",
+                INTERNED_BOX_SHADOWS,
+                Expected::none(),
+            ),
+            float(
+                "Depth targets mem",
+                "MB",
+                DEPTH_TARGETS_MEM,
+                Expected::none(),
+            ),
+            float(
+                "Shader build time",
+                "ms",
+                SHADER_BUILD_TIME,
+                Expected::none(),
+            ),
             // We use the expected range to highlight render reasons that are happening.
             float("Reason scene", "", RENDER_REASON_SCENE, expected(0.0..0.01)),
-            float("Reason animated property", "", RENDER_REASON_ANIMATED_PROPERTY, expected(0.0..0.01)),
-            float("Reason resource update", "", RENDER_REASON_RESOURCE_UPDATE, expected(0.0..0.01)),
-            float("Reason async image", "", RENDER_REASON_ASYNC_IMAGE, expected(0.0..0.01)),
-            float("Reason clear resources", "", RENDER_REASON_CLEAR_RESOURCES, expected(0.0..0.01)),
+            float(
+                "Reason animated property",
+                "",
+                RENDER_REASON_ANIMATED_PROPERTY,
+                expected(0.0..0.01),
+            ),
+            float(
+                "Reason resource update",
+                "",
+                RENDER_REASON_RESOURCE_UPDATE,
+                expected(0.0..0.01),
+            ),
+            float(
+                "Reason async image",
+                "",
+                RENDER_REASON_ASYNC_IMAGE,
+                expected(0.0..0.01),
+            ),
+            float(
+                "Reason clear resources",
+                "",
+                RENDER_REASON_CLEAR_RESOURCES,
+                expected(0.0..0.01),
+            ),
             float("Reason APZ", "", RENDER_REASON_APZ, expected(0.0..0.01)),
-            float("Reason resize", "", RENDER_REASON_RESIZE, expected(0.0..0.01)),
-            float("Reason widget", "", RENDER_REASON_WIDGET, expected(0.0..0.01)),
-            float("Reason cache flush", "", RENDER_REASON_TEXTURE_CACHE_FLUSH, expected(0.0..0.01)),
-            float("Reason snapshot", "", RENDER_REASON_SNAPSHOT, expected(0.0..0.01)),
-            float("Reason resource hook", "", RENDER_REASON_POST_RESOURCE_UPDATE_HOOKS, expected(0.0..0.01)),
-            float("Reason config change", "", RENDER_REASON_CONFIG_CHANGE, expected(0.0..0.01)),
-            float("Reason content sync", "", RENDER_REASON_CONTENT_SYNC, expected(0.0..0.01)),
+            float(
+                "Reason resize",
+                "",
+                RENDER_REASON_RESIZE,
+                expected(0.0..0.01),
+            ),
+            float(
+                "Reason widget",
+                "",
+                RENDER_REASON_WIDGET,
+                expected(0.0..0.01),
+            ),
+            float(
+                "Reason cache flush",
+                "",
+                RENDER_REASON_TEXTURE_CACHE_FLUSH,
+                expected(0.0..0.01),
+            ),
+            float(
+                "Reason snapshot",
+                "",
+                RENDER_REASON_SNAPSHOT,
+                expected(0.0..0.01),
+            ),
+            float(
+                "Reason resource hook",
+                "",
+                RENDER_REASON_POST_RESOURCE_UPDATE_HOOKS,
+                expected(0.0..0.01),
+            ),
+            float(
+                "Reason config change",
+                "",
+                RENDER_REASON_CONFIG_CHANGE,
+                expected(0.0..0.01),
+            ),
+            float(
+                "Reason content sync",
+                "",
+                RENDER_REASON_CONTENT_SYNC,
+                expected(0.0..0.01),
+            ),
             float("Reason flush", "", RENDER_REASON_FLUSH, expected(0.0..0.01)),
-            float("Reason testing", "", RENDER_REASON_TESTING, expected(0.0..0.01)),
+            float(
+                "Reason testing",
+                "",
+                RENDER_REASON_TESTING,
+                expected(0.0..0.01),
+            ),
             float("Reason other", "", RENDER_REASON_OTHER, expected(0.0..0.01)),
             float("On vsync", "", RENDER_REASON_VSYNC, expected(0.0..0.01)),
-
             int("Textures created", "", TEXTURES_CREATED, expected(0..5)),
             int("Textures deleted", "", TEXTURES_DELETED, Expected::none()),
-
-            int("Total slow frames CPU", "", SLOW_FRAME_CPU_COUNT, Expected::none()),
-            int("Total slow frames GPU", "", SLOW_FRAME_GPU_COUNT, Expected::none()),
-            int("Slow: frame build", "%", SLOW_FRAME_BUILD_COUNT, Expected::none()),
+            int(
+                "Total slow frames CPU",
+                "",
+                SLOW_FRAME_CPU_COUNT,
+                Expected::none(),
+            ),
+            int(
+                "Total slow frames GPU",
+                "",
+                SLOW_FRAME_GPU_COUNT,
+                Expected::none(),
+            ),
+            int(
+                "Slow: frame build",
+                "%",
+                SLOW_FRAME_BUILD_COUNT,
+                Expected::none(),
+            ),
             int("Slow: upload", "%", SLOW_UPLOAD_COUNT, Expected::none()),
             int("Slow: render", "%", SLOW_RENDER_COUNT, Expected::none()),
-            int("Slow: draw calls", "%", SLOW_DRAW_CALLS_COUNT, Expected::none()),
+            int(
+                "Slow: draw calls",
+                "%",
+                SLOW_DRAW_CALLS_COUNT,
+                Expected::none(),
+            ),
             int("Slow: targets", "%", SLOW_TARGETS_COUNT, Expected::none()),
             int("Slow: blobs", "%", SLOW_BLOB_COUNT, Expected::none()),
-            int("Slow: after scene", "%", SLOW_SCROLL_AFTER_SCENE_COUNT, Expected::none()),
-
+            int(
+                "Slow: after scene",
+                "%",
+                SLOW_SCROLL_AFTER_SCENE_COUNT,
+                Expected::none(),
+            ),
             float("GPU cache mem", "MB", GPU_CACHE_MEM, Expected::none()),
             float("GPU buffer mem", "MB", GPU_BUFFER_MEM, Expected::none()),
             float("GPU total mem", "MB", GPU_TOTAL_MEM, Expected::none()),
-
-            float("GPU cache preapre", "ms", GPU_CACHE_PREPARE_TIME, Expected::none()),
+            float(
+                "GPU cache preapre",
+                "ms",
+                GPU_CACHE_PREPARE_TIME,
+                Expected::none(),
+            ),
             float("Frame send", "ms", FRAME_SEND_TIME, Expected::none()),
-            float("Update document", "ms", UPDATE_DOCUMENT_TIME, Expected::none()),
-
-            int("Compositor surface underlays", "", COMPOSITOR_SURFACE_UNDERLAYS, Expected::none()),
-            int("Compositor surface overlays", "", COMPOSITOR_SURFACE_OVERLAYS, Expected::none()),
-            int("Compositor surface blits", "", COMPOSITOR_SURFACE_BLITS, Expected::none()),
+            float(
+                "Update document",
+                "ms",
+                UPDATE_DOCUMENT_TIME,
+                Expected::none(),
+            ),
+            int(
+                "Compositor surface underlays",
+                "",
+                COMPOSITOR_SURFACE_UNDERLAYS,
+                Expected::none(),
+            ),
+            int(
+                "Compositor surface overlays",
+                "",
+                COMPOSITOR_SURFACE_OVERLAYS,
+                Expected::none(),
+            ),
+            int(
+                "Compositor surface blits",
+                "",
+                COMPOSITOR_SURFACE_BLITS,
+                Expected::none(),
+            ),
         ];
 
         let mut counters = Vec::with_capacity(profile_counters.len());
@@ -566,7 +1075,12 @@ impl Profiler {
     /// a specific counter.
     ///
     /// This is useful to monitor slow frame and slow transactions.
-    fn update_slow_event(&mut self, dst_counter: usize, counters: &[usize], threshold: f64) -> bool {
+    fn update_slow_event(
+        &mut self,
+        dst_counter: usize,
+        counters: &[usize],
+        threshold: f64,
+    ) -> bool {
         let mut total = 0.0;
         for &counter in counters {
             if self.counters[counter].value.is_finite() {
@@ -602,9 +1116,13 @@ impl Profiler {
         let uploads = self.counters[TEXTURE_CACHE_UPDATE_TIME].value;
         let renderer = self.counters[RENDERER_TIME].value - uploads;
         let mut reasons = [
-            (frame_build, &mut self.slow_frame_build_count, SLOW_FRAME_BUILD_COUNT,),
-            (renderer, &mut self.slow_render_count, SLOW_RENDER_COUNT,),
-            (uploads, &mut self.slow_upload_count, SLOW_UPLOAD_COUNT,),
+            (
+                frame_build,
+                &mut self.slow_frame_build_count,
+                SLOW_FRAME_BUILD_COUNT,
+            ),
+            (renderer, &mut self.slow_render_count, SLOW_RENDER_COUNT),
+            (uploads, &mut self.slow_upload_count, SLOW_UPLOAD_COUNT),
         ];
 
         reasons.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
@@ -621,7 +1139,8 @@ impl Profiler {
                 self.slow_draw_calls_count += 1;
             }
 
-            let render_passes = self.counters[COLOR_PASSES].value + self.counters[ALPHA_PASSES].value;
+            let render_passes =
+                self.counters[COLOR_PASSES].value + self.counters[ALPHA_PASSES].value;
             if render_passes > 20.0 {
                 self.slow_targets_count += 1;
             }
@@ -665,7 +1184,8 @@ impl Profiler {
             self.start = now;
         }
         let one_second_ago = now - ONE_SECOND_NS;
-        self.frame_timestamps_within_last_second.retain(|t| *t > one_second_ago);
+        self.frame_timestamps_within_last_second
+            .retain(|t| *t > one_second_ago);
         self.frame_timestamps_within_last_second.push(now);
 
         let slow_cpu = self.update_slow_event(
@@ -676,7 +1196,7 @@ impl Profiler {
         self.update_slow_event(
             SLOW_TXN,
             &[DISPLAY_LIST_BUILD_TIME, CONTENT_SEND_TIME, SCENE_BUILD_TIME],
-            80.0
+            80.0,
         );
 
         #[cfg(feature = "gl_backend")]
@@ -695,7 +1215,8 @@ impl Profiler {
         self.counters[SLOW_DRAW_CALLS_COUNT].set(self.slow_draw_calls_count as f64 * div);
         self.counters[SLOW_TARGETS_COUNT].set(self.slow_targets_count as f64 * div);
         self.counters[SLOW_BLOB_COUNT].set(self.slow_blob_count as f64 * div);
-        self.counters[SLOW_SCROLL_AFTER_SCENE_COUNT].set(self.slow_scroll_after_scene_count as f64 * div);
+        self.counters[SLOW_SCROLL_AFTER_SCENE_COUNT]
+            .set(self.slow_scroll_after_scene_count as f64 * div);
 
         self.update_total_gpu_mem();
 
@@ -707,7 +1228,7 @@ impl Profiler {
     #[cfg(feature = "gl_backend")]
     pub fn update_frame_stats(&mut self, stats: FullFrameStats) {
         if stats.gecko_display_list_time != 0.0 {
-          self.frame_stats.push(stats.into());
+            self.frame_stats.push(stats.into());
         }
     }
 
@@ -739,8 +1260,8 @@ impl Profiler {
         }
 
         self.gpu_frames.push(ProfilerFrame {
-          total_time: gpu_time_ns,
-          samples: gpu_queries
+            total_time: gpu_time_ns,
+            samples: gpu_queries,
         });
 
         let gpu_time = ns_to_ms(gpu_time_ns);
@@ -752,7 +1273,9 @@ impl Profiler {
 
     // Find the index of a counter by its name.
     pub fn index_of(&self, name: &str) -> Option<usize> {
-        self.counters.iter().position(|counter| counter.name == name)
+        self.counters
+            .iter()
+            .position(|counter| counter.name == name)
     }
 
     // Define the profiler UI, see comment about the syntax at the top of this file.
@@ -882,7 +1405,8 @@ impl Profiler {
     fn draw_counters(
         counters: &[Counter],
         selected: &[usize],
-        mut x: f32, mut y: f32,
+        mut x: f32,
+        mut y: f32,
         text_buffer: &mut String,
         debug_renderer: &mut DebugRenderer,
     ) -> default::Rect<f32> {
@@ -909,12 +1433,7 @@ impl Profiler {
             // If The index is invalid, add some vertical space.
             let counter = &counters[*idx];
 
-            let rect = debug_renderer.add_text(
-                x, y,
-                counter.name,
-                colors[color_index],
-                None,
-            );
+            let rect = debug_renderer.add_text(x, y, counter.name, colors[color_index], None);
             color_index = (color_index + 1) % 2;
 
             total_rect = total_rect.union(&rect);
@@ -927,7 +1446,11 @@ impl Profiler {
 
         for idx in selected {
             let counter = &counters[*idx];
-            let expected_offset = if counter.has_unexpected_avg_max() { 2 } else { 0 };
+            let expected_offset = if counter.has_unexpected_avg_max() {
+                2
+            } else {
+                0
+            };
 
             counter.write_value(text_buffer);
 
@@ -945,7 +1468,10 @@ impl Profiler {
         }
 
         total_rect = total_rect
-            .union(&Rect { origin, size: Size2D::new(1.0, 1.0) })
+            .union(&Rect {
+                origin,
+                size: Size2D::new(1.0, 1.0),
+            })
             .inflate(PROFILE_PADDING, PROFILE_PADDING);
 
         debug_renderer.add_quad(
@@ -985,7 +1511,11 @@ impl Profiler {
         debug_renderer.add_text(
             text_origin.x,
             text_origin.y,
-            if counter.unit == "" { counter.name } else { text_buffer },
+            if counter.unit == "" {
+                counter.name
+            } else {
+                text_buffer
+            },
             ColorU::new(0, 255, 0, 255),
             None,
         );
@@ -1077,12 +1607,12 @@ impl Profiler {
         rect
     }
 
-
     #[cfg(feature = "gl_backend")]
     fn draw_change_indicator(
         counter: &Counter,
-        x: f32, y: f32,
-        debug_renderer: &mut DebugRenderer
+        x: f32,
+        y: f32,
+        debug_renderer: &mut DebugRenderer,
     ) -> default::Rect<f32> {
         let height = 10.0;
         let width = 20.0;
@@ -1124,17 +1654,13 @@ impl Profiler {
         label: &str,
         label_color: ColorU,
         counters: &[(ColorU, usize)],
-        x: f32, y: f32,
+        x: f32,
+        y: f32,
         debug_renderer: &mut DebugRenderer,
     ) -> default::Rect<f32> {
         let x = x + 8.0;
         let y = y + 24.0;
-        let text_rect = debug_renderer.add_text(
-            x, y,
-            label,
-            label_color,
-            None,
-        );
+        let text_rect = debug_renderer.add_text(x, y, label, label_color, None);
 
         let x_base = text_rect.max_x() + 10.0;
         let width = 300.0;
@@ -1153,7 +1679,6 @@ impl Profiler {
                 color,
             );
             x_current = x_stop;
-
         }
 
         let mut total_rect = text_rect;
@@ -1163,7 +1688,13 @@ impl Profiler {
     }
 
     #[cfg(feature = "gl_backend")]
-    fn draw_gpu_cache_bars(&self, x: f32, mut y: f32, text_buffer: &mut String, debug_renderer: &mut DebugRenderer) -> default::Rect<f32> {
+    fn draw_gpu_cache_bars(
+        &self,
+        x: f32,
+        mut y: f32,
+        text_buffer: &mut String,
+        debug_renderer: &mut DebugRenderer,
+    ) -> default::Rect<f32> {
         let color_updated = ColorU::new(0xFF, 0, 0, 0xFF);
         let color_free = ColorU::new(0, 0, 0xFF, 0xFF);
         let color_saved = ColorU::new(0, 0xFF, 0, 0xFF);
@@ -1181,11 +1712,9 @@ impl Profiler {
         let rect0 = Profiler::draw_bar(
             text_buffer,
             ColorU::new(0xFF, 0xFF, 0xFF, 0xFF),
-            &[
-                (color_updated, updated_rows),
-                (color_free, allocated_rows),
-            ],
-            x, y,
+            &[(color_updated, updated_rows), (color_free, allocated_rows)],
+            x,
+            y,
             debug_renderer,
         );
 
@@ -1200,7 +1729,8 @@ impl Profiler {
                 (color_free, allocated_blocks),
                 (ColorU::new(0, 0, 0, 0xFF), total_blocks),
             ],
-            x, y,
+            x,
+            y,
             debug_renderer,
         );
 
@@ -1221,7 +1751,8 @@ impl Profiler {
     #[cfg(feature = "gl_backend")]
     fn draw_frame_graph(
         frame_collection: &ProfilerFrameCollection,
-        x: f32, y: f32,
+        x: f32,
+        y: f32,
         debug_renderer: &mut DebugRenderer,
     ) -> default::Rect<f32> {
         let mut has_data = false;
@@ -1254,7 +1785,8 @@ impl Profiler {
         let w = graph_rect.size.width;
         let mut y0 = graph_rect.origin.y;
 
-        let mut max_time = frame_collection.frames
+        let mut max_time = frame_collection
+            .frames
             .iter()
             .max_by_key(|f| f.total_time)
             .unwrap()
@@ -1312,7 +1844,6 @@ impl Profiler {
             );
         }
 
-
         // Add a legend to see which color correspond to what primitive.
         const LEGEND_SIZE: f32 = 20.0;
         const PADDED_LEGEND_SIZE: f32 = 25.0;
@@ -1321,7 +1852,9 @@ impl Profiler {
                 bounding_rect.max_x() + GRAPH_PADDING,
                 bounding_rect.origin.y,
                 bounding_rect.max_x() + GRAPH_PADDING + 200.0,
-                bounding_rect.origin.y + tags_present.len() as f32 * PADDED_LEGEND_SIZE + GRAPH_PADDING,
+                bounding_rect.origin.y
+                    + tags_present.len() as f32 * PADDED_LEGEND_SIZE
+                    + GRAPH_PADDING,
                 BACKGROUND_COLOR,
                 BACKGROUND_COLOR,
             );
@@ -1332,7 +1865,10 @@ impl Profiler {
             let y0 = bounding_rect.origin.y + GRAPH_PADDING + i as f32 * PADDED_LEGEND_SIZE;
 
             debug_renderer.add_quad(
-                x0, y0, x0 + LEGEND_SIZE, y0 + LEGEND_SIZE,
+                x0,
+                y0,
+                x0 + LEGEND_SIZE,
+                y0 + LEGEND_SIZE,
                 color.into(),
                 color.into(),
             );
@@ -1372,12 +1908,21 @@ impl Profiler {
 
         for elt in &self.ui {
             let rect = match elt {
-                Item::Counters(indices) => {
-                    Profiler::draw_counters(&self.counters, &indices, x, y, &mut text_buffer, debug_renderer)
-                }
-                Item::Graph(idx) => {
-                    Profiler::draw_graph(&self.counters[*idx], x, y, &mut text_buffer, debug_renderer)
-                }
+                Item::Counters(indices) => Profiler::draw_counters(
+                    &self.counters,
+                    &indices,
+                    x,
+                    y,
+                    &mut text_buffer,
+                    debug_renderer,
+                ),
+                Item::Graph(idx) => Profiler::draw_graph(
+                    &self.counters[*idx],
+                    x,
+                    y,
+                    &mut text_buffer,
+                    debug_renderer,
+                ),
                 Item::ChangeIndicator(idx) => {
                     Profiler::draw_change_indicator(&self.counters[*idx], x, y, debug_renderer)
                 }
@@ -1438,9 +1983,10 @@ impl Profiler {
 
                     rect
                 }
-                Item::Space => {
-                    Rect { origin: Point2D::new(x, y), size: Size2D::new(0.0, PROFILE_SPACING) }
-                }
+                Item::Space => Rect {
+                    origin: Point2D::new(x, y),
+                    size: Size2D::new(0.0, PROFILE_SPACING),
+                },
                 Item::Column => {
                     max_y = max_y.max(y);
                     x += column_width + PROFILE_SPACING;
@@ -1487,7 +2033,7 @@ impl Profiler {
 }
 
 /// Defines the interface for hooking up an external profiler to WR.
-pub trait ProfilerHooks : Send + Sync {
+pub trait ProfilerHooks: Send + Sync {
     /// Register a thread with the profiler.
     fn register_thread(&self, thread_name: &str);
 
@@ -1537,7 +2083,6 @@ pub struct ProfileScope {
     name: &'static str,
 }
 
-
 /// Register a thread with the Gecko Profiler.
 pub fn register_thread(thread_name: &str) {
     unsafe {
@@ -1546,7 +2091,6 @@ pub fn register_thread(thread_name: &str) {
         }
     }
 }
-
 
 /// Unregister a thread with the Gecko Profiler.
 pub fn unregister_thread() {
@@ -1577,9 +2121,7 @@ pub fn add_event_marker(label: &str) {
 
 /// Returns true if the current thread is being profiled.
 pub fn thread_is_being_profiled() -> bool {
-    unsafe {
-        PROFILER_HOOKS.map_or(false, |h| h.thread_is_being_profiled())
-    }
+    unsafe { PROFILER_HOOKS.map_or(false, |h| h.thread_is_being_profiled()) }
 }
 
 impl ProfileScope {
@@ -1591,9 +2133,7 @@ impl ProfileScope {
             }
         }
 
-        ProfileScope {
-            name,
-        }
+        ProfileScope { name }
     }
 }
 
@@ -1628,7 +2168,7 @@ pub struct Expected<T> {
 }
 
 impl<T> Expected<T> {
-     const fn none() -> Self {
+    const fn none() -> Self {
         Expected {
             range: None,
             avg: None,
@@ -1659,11 +2199,11 @@ impl Expected<i64> {
     fn into_float(self) -> Expected<f64> {
         Expected {
             range: match self.range {
-                Some(r) => Some(r.start as f64 .. r.end as f64),
+                Some(r) => Some(r.start as f64..r.end as f64),
                 None => None,
             },
             avg: match self.avg {
-                Some(r) => Some(r.start as f64 .. r.end as f64),
+                Some(r) => Some(r.start as f64..r.end as f64),
                 None => None,
             },
         }
@@ -1724,7 +2264,10 @@ impl Counter {
         self.value = val;
     }
 
-    pub fn set<T>(&mut self, val: T) where T: Into<f64> {
+    pub fn set<T>(&mut self, val: T)
+    where
+        T: Into<f64>,
+    {
         self.set_f64(val.into());
     }
 
@@ -1739,10 +2282,22 @@ impl Counter {
     pub fn write_value(&self, output: &mut String) {
         match self.show_as {
             ShowAs::Float => {
-                set_text!(output, "{:.2} {} (max: {:.2})", self.avg, self.unit, self.max);
+                set_text!(
+                    output,
+                    "{:.2} {} (max: {:.2})",
+                    self.avg,
+                    self.unit,
+                    self.max
+                );
             }
             ShowAs::Int => {
-                set_text!(output, "{:.0} {} (max: {:.0})", self.avg.round(), self.unit, self.max.round());
+                set_text!(
+                    output,
+                    "{:.0} {} (max: {:.0})",
+                    self.avg.round(),
+                    self.unit,
+                    self.max.round()
+                );
             }
         }
     }
@@ -1830,12 +2385,36 @@ pub trait EventValue {
     fn into_f64(self) -> f64;
 }
 
-impl EventValue for f64 { fn into_f64(self) -> f64 { self } }
-impl EventValue for f32 { fn into_f64(self) -> f64 { self as f64 } }
-impl EventValue for u32 { fn into_f64(self) -> f64 { self as f64 } }
-impl EventValue for i32 { fn into_f64(self) -> f64 { self as f64 } }
-impl EventValue for u64 { fn into_f64(self) -> f64 { self as f64 } }
-impl EventValue for usize { fn into_f64(self) -> f64 { self as f64 } }
+impl EventValue for f64 {
+    fn into_f64(self) -> f64 {
+        self
+    }
+}
+impl EventValue for f32 {
+    fn into_f64(self) -> f64 {
+        self as f64
+    }
+}
+impl EventValue for u32 {
+    fn into_f64(self) -> f64 {
+        self as f64
+    }
+}
+impl EventValue for i32 {
+    fn into_f64(self) -> f64 {
+        self as f64
+    }
+}
+impl EventValue for u64 {
+    fn into_f64(self) -> f64 {
+        self as f64
+    }
+}
+impl EventValue for usize {
+    fn into_f64(self) -> f64 {
+        self as f64
+    }
+}
 
 /// A container for profiling information that moves along the rendering pipeline
 /// and is handed off to the profiler at the end.
@@ -1874,10 +2453,12 @@ impl TransactionProfile {
         }
     }
 
-    pub fn set<T>(&mut self, id: usize, value: T) where T: EventValue {
+    pub fn set<T>(&mut self, id: usize, value: T)
+    where
+        T: EventValue,
+    {
         self.set_f64(id, value.into_f64());
     }
-
 
     pub fn set_f64(&mut self, id: usize, value: f64) {
         self.events[id] = Event::Value(value);
@@ -1895,7 +2476,10 @@ impl TransactionProfile {
         self.get(id).unwrap_or(or)
     }
 
-    pub fn add<T>(&mut self, id: usize, n: T) where T: EventValue {
+    pub fn add<T>(&mut self, id: usize, n: T)
+    where
+        T: EventValue,
+    {
         let n = n.into_f64();
 
         let evt = &mut self.events[id];
@@ -1903,7 +2487,9 @@ impl TransactionProfile {
         let val = match *evt {
             Event::Value(v) => v + n,
             Event::None => n,
-            Event::Start(..) => { panic!(); }
+            Event::Start(..) => {
+                panic!();
+            }
         };
 
         *evt = Event::Value(val);
@@ -1943,7 +2529,7 @@ impl TransactionProfile {
                 (Event::Start(s1), Event::Start(s2)) => {
                     self.events[i] = Event::Start(s1.max(s2));
                 }
-                _=> {}
+                _ => {}
             }
             other.events[i] = Event::None;
         }
@@ -2066,32 +2652,63 @@ impl ProfilerFrameCollection {
 
 #[cfg(feature = "gl_backend")]
 impl From<FullFrameStats> for ProfilerFrame {
-  fn from(stats: FullFrameStats) -> ProfilerFrame {
-    let new_sample = |time, label, color| -> GpuTimer {
-      let tag = GpuProfileTag {
-        label,
-        color
-      };
+    fn from(stats: FullFrameStats) -> ProfilerFrame {
+        let new_sample = |time, label, color| -> GpuTimer {
+            let tag = GpuProfileTag { label, color };
 
-      let time_ns = ms_to_ns(time);
+            let time_ns = ms_to_ns(time);
 
-      GpuTimer {
-        tag, time_ns
-      }
-    };
+            GpuTimer { tag, time_ns }
+        };
 
-    let samples = vec![
-      new_sample(stats.gecko_display_list_time, "Gecko DL", ColorF { r: 0.0, g: 1.0, b: 0.0, a: 1.0 }),
-      new_sample(stats.wr_display_list_time, "WR DL", ColorF { r: 0.0, g: 1.0, b: 1.0, a: 1.0 }),
-      new_sample(stats.scene_build_time, "Scene Build", ColorF { r: 1.0, g: 0.0, b: 1.0, a: 1.0 }),
-      new_sample(stats.frame_build_time, "Frame Build", ColorF { r: 1.0, g: 0.0, b: 0.0, a: 1.0 }),
-    ];
+        let samples = vec![
+            new_sample(
+                stats.gecko_display_list_time,
+                "Gecko DL",
+                ColorF {
+                    r: 0.0,
+                    g: 1.0,
+                    b: 0.0,
+                    a: 1.0,
+                },
+            ),
+            new_sample(
+                stats.wr_display_list_time,
+                "WR DL",
+                ColorF {
+                    r: 0.0,
+                    g: 1.0,
+                    b: 1.0,
+                    a: 1.0,
+                },
+            ),
+            new_sample(
+                stats.scene_build_time,
+                "Scene Build",
+                ColorF {
+                    r: 1.0,
+                    g: 0.0,
+                    b: 1.0,
+                    a: 1.0,
+                },
+            ),
+            new_sample(
+                stats.frame_build_time,
+                "Frame Build",
+                ColorF {
+                    r: 1.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0,
+                },
+            ),
+        ];
 
-    ProfilerFrame {
-      total_time: ms_to_ns(stats.total()),
-      samples
+        ProfilerFrame {
+            total_time: ms_to_ns(stats.total()),
+            samples,
+        }
     }
-  }
 }
 
 pub struct CpuFrameTimings {
@@ -2125,8 +2742,10 @@ impl CpuFrameTimings {
         let frame_build = visibility + prepare + glyph_resolve + batching;
         let update_document = counters[UPDATE_DOCUMENT_TIME].get().unwrap_or(0.0) - frame_build;
         let draw_calls = renderer - uploads - gpu_cache;
-        let unknown = (total - (api_send + update_document + frame_build + frame_send + renderer)).max(0.0);
-        let frame_building_other = (counters[FRAME_BUILDING_TIME].get().unwrap_or(0.0) - frame_build).max(0.0);
+        let unknown =
+            (total - (api_send + update_document + frame_build + frame_send + renderer)).max(0.0);
+        let frame_building_other =
+            (counters[FRAME_BUILDING_TIME].get().unwrap_or(0.0) - frame_build).max(0.0);
 
         CpuFrameTimings {
             total,
@@ -2160,22 +2779,130 @@ impl CpuFrameTimings {
             // Number the label so that they are displayed in order.
             samples: vec![
                 // Compositor -> frame building
-                sample(self.api_send, "01. send", ColorF { r: 0.5, g: 0.5, b: 0.5, a: 1.0 }),
+                sample(
+                    self.api_send,
+                    "01. send",
+                    ColorF {
+                        r: 0.5,
+                        g: 0.5,
+                        b: 0.5,
+                        a: 1.0,
+                    },
+                ),
                 // Frame building
-                sample(self.update_document, "02. update document", ColorF { r: 0.2, g: 0.2, b: 0.7, a: 1.0 }),
-                sample(self.visibility, "03. visibility", ColorF { r: 0.0, g: 0.5, b: 0.9, a: 1.0 }),
-                sample(self.prepare, "04. prepare", ColorF { r: 0.0, g: 0.4, b: 0.3, a: 1.0 }),
-                sample(self.glyph_resolve, "05. glyph resolve", ColorF { r: 0.0, g: 0.7, b: 0.4, a: 1.0 }),
-                sample(self.batching, "06. batching", ColorF { r: 0.2, g: 0.3, b: 0.7, a: 1.0 }),
-                sample(self.frame_building_other, "07. frame build (other)", ColorF { r: 0.1, g: 0.7, b: 0.7, a: 1.0 }),
+                sample(
+                    self.update_document,
+                    "02. update document",
+                    ColorF {
+                        r: 0.2,
+                        g: 0.2,
+                        b: 0.7,
+                        a: 1.0,
+                    },
+                ),
+                sample(
+                    self.visibility,
+                    "03. visibility",
+                    ColorF {
+                        r: 0.0,
+                        g: 0.5,
+                        b: 0.9,
+                        a: 1.0,
+                    },
+                ),
+                sample(
+                    self.prepare,
+                    "04. prepare",
+                    ColorF {
+                        r: 0.0,
+                        g: 0.4,
+                        b: 0.3,
+                        a: 1.0,
+                    },
+                ),
+                sample(
+                    self.glyph_resolve,
+                    "05. glyph resolve",
+                    ColorF {
+                        r: 0.0,
+                        g: 0.7,
+                        b: 0.4,
+                        a: 1.0,
+                    },
+                ),
+                sample(
+                    self.batching,
+                    "06. batching",
+                    ColorF {
+                        r: 0.2,
+                        g: 0.3,
+                        b: 0.7,
+                        a: 1.0,
+                    },
+                ),
+                sample(
+                    self.frame_building_other,
+                    "07. frame build (other)",
+                    ColorF {
+                        r: 0.1,
+                        g: 0.7,
+                        b: 0.7,
+                        a: 1.0,
+                    },
+                ),
                 // Frame building -> renderer
-                sample(self.frame_send, "08. frame send", ColorF { r: 1.0, g: 0.8, b: 0.8, a: 1.0 }),
+                sample(
+                    self.frame_send,
+                    "08. frame send",
+                    ColorF {
+                        r: 1.0,
+                        g: 0.8,
+                        b: 0.8,
+                        a: 1.0,
+                    },
+                ),
                 // Renderer
-                sample(self.uploads, "09. texture uploads", ColorF { r: 0.8, g: 0.0, b: 0.3, a: 1.0 }),
-                sample(self.gpu_cache, "10. gpu cache update", ColorF { r: 0.5, g: 0.0, b: 0.4, a: 1.0 }),
-                sample(self.draw_calls, "11. draw calls", ColorF { r: 1.0, g: 0.5, b: 0.0, a: 1.0 }),
+                sample(
+                    self.uploads,
+                    "09. texture uploads",
+                    ColorF {
+                        r: 0.8,
+                        g: 0.0,
+                        b: 0.3,
+                        a: 1.0,
+                    },
+                ),
+                sample(
+                    self.gpu_cache,
+                    "10. gpu cache update",
+                    ColorF {
+                        r: 0.5,
+                        g: 0.0,
+                        b: 0.4,
+                        a: 1.0,
+                    },
+                ),
+                sample(
+                    self.draw_calls,
+                    "11. draw calls",
+                    ColorF {
+                        r: 1.0,
+                        g: 0.5,
+                        b: 0.0,
+                        a: 1.0,
+                    },
+                ),
                 // Unaccounted time
-                sample(self.unknown, "12. unknown", ColorF { r: 0.3, g: 0.3, b: 0.3, a: 1.0 }),
+                sample(
+                    self.unknown,
+                    "12. unknown",
+                    ColorF {
+                        r: 0.3,
+                        g: 0.3,
+                        b: 0.3,
+                        a: 1.0,
+                    },
+                ),
             ],
         }
     }
@@ -2186,7 +2913,7 @@ pub fn ns_to_ms(ns: u64) -> f64 {
 }
 
 pub fn ms_to_ns(ms: f64) -> u64 {
-  (ms * 1_000_000.0) as u64
+    (ms * 1_000_000.0) as u64
 }
 
 pub fn bytes_to_mb(bytes: usize) -> f64 {

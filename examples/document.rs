@@ -32,11 +32,7 @@ struct App {
 }
 
 impl App {
-    fn init(
-        &mut self,
-        api: &mut RenderApi,
-        device_pixel_ratio: f32,
-    ) {
+    fn init(&mut self, api: &mut RenderApi, device_pixel_ratio: f32) {
         let init_data = vec![
             (
                 PipelineId(1, 0),
@@ -99,9 +95,7 @@ impl Example for App {
 
         for doc in &self.documents {
             let space_and_clip = SpaceAndClipInfo::root_scroll(doc.pipeline_id);
-            let mut builder = DisplayListBuilder::new(
-                doc.pipeline_id,
-            );
+            let mut builder = DisplayListBuilder::new(doc.pipeline_id);
             builder.begin();
             let local_rect = LayoutRect::from_size(doc.content_rect.size());
 
@@ -118,10 +112,7 @@ impl Example for App {
             builder.pop_stacking_context();
 
             let mut txn = Transaction::new();
-            txn.set_display_list(
-                Epoch(0),
-                builder.end(),
-            );
+            txn.set_display_list(Epoch(0), builder.end());
             txn.generate_frame(0, true, false, RenderReasons::empty());
             api.send_transaction(doc.id, txn);
         }

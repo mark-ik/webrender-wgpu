@@ -49,7 +49,6 @@ doesn't only contain trivial geometry, it can also store another
     mismatched_lifetime_syntaxes
 )]
 
-
 // Cribbed from the |matches| crate, for simplicity.
 macro_rules! matches {
     ($expression:expr, $($pattern:tt)+) => {
@@ -85,9 +84,7 @@ mod profiler;
 // lists → primitives → batches → render tasks).  They are backend-agnostic and
 // required by both GL and wgpu render paths.  Gated on "any backend enabled".
 #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
-mod thread_util;
-#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
-mod telemetry;
+mod api_resources;
 #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod batch;
 #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
@@ -98,10 +95,6 @@ mod box_shadow;
 mod capture;
 #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod clip;
-#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
-mod space;
-#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
-mod spatial_tree;
 #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod composite;
 mod debug_colors;
@@ -122,6 +115,9 @@ mod gpu_cache;
 mod gpu_types;
 #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod hit_test;
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
+mod image_source;
+mod image_tiling;
 mod internal_types;
 mod lru_cache;
 #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
@@ -131,20 +127,23 @@ mod picture;
 #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod picture_graph;
 #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
+mod picture_textures;
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod prepare;
 #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod prim_store;
 mod print_tree;
 #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod quad;
+mod rectangle_occlusion;
 #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod render_backend;
 #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
-mod render_task_graph;
+mod render_task;
 #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod render_task_cache;
 #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
-mod render_task;
+mod render_task_graph;
 #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod renderer;
 #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
@@ -157,26 +156,26 @@ mod scene_builder_thread;
 mod scene_building;
 mod segment;
 #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
+mod space;
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod spatial_node;
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
+mod spatial_tree;
 #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod surface;
 #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
-mod texture_pack;
+mod telemetry;
 #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod texture_cache;
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
+mod texture_pack;
+#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
+mod thread_util;
 #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod tile_cache;
 mod util;
 #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 mod visibility;
-#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
-mod api_resources;
-mod image_tiling;
-#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
-mod image_source;
-mod rectangle_occlusion;
-#[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
-mod picture_textures;
 
 // ── Additional scene pipeline modules ──────────────────────────────────────────
 // render_target and command_buffer define the abstract render task data
@@ -190,12 +189,12 @@ mod render_target;
 // ── GL-specific modules ────────────────────────────────────────────────────────
 // These implement the GL compositor and screen capture.
 // Only compiled when the GL backend is enabled.
+mod bump_allocator;
 #[cfg(feature = "gl_backend")]
 mod compositor;
+mod frame_allocator;
 #[cfg(feature = "gl_backend")]
 mod screen_capture;
-mod frame_allocator;
-mod bump_allocator;
 
 #[cfg(feature = "wgpu_backend")]
 pub use crate::device::{TextureFilter, WgpuDevice, WgpuTexture};
@@ -249,7 +248,9 @@ pub use crate::composite::{NativeSurfaceId, NativeTileId, NativeSurfaceInfo, Par
 #[cfg(feature = "gl_backend")]
 pub use crate::composite::MappableCompositor;
 #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
-pub use crate::composite::{MappedTileInfo, SWGLCompositeSurfaceInfo, WindowVisibility, WindowProperties};
+pub use crate::composite::{
+    MappedTileInfo, SWGLCompositeSurfaceInfo, WindowVisibility, WindowProperties,
+};
 #[cfg(feature = "gl_backend")]
 pub use crate::device::{UploadMethod, VertexUsageHint, get_gl_target, get_unoptimized_shader_source};
 #[cfg(feature = "gl_backend")]
@@ -259,9 +260,8 @@ pub use crate::device::Device;
 pub use crate::profiler::{ProfilerHooks, set_profiler_hooks};
 #[cfg(feature = "gl_backend")]
 pub use crate::renderer::{
-    CpuProfile, DebugFlags, GpuProfile, GraphicsApi,
-    GraphicsApiInfo, PipelineInfo, Renderer, RendererError, RenderResults,
-    RendererStats, MAX_VERTEX_TEXTURE_WIDTH,
+    CpuProfile, DebugFlags, GpuProfile, GraphicsApi, GraphicsApiInfo, PipelineInfo, Renderer,
+    RendererError, RenderResults, RendererStats, MAX_VERTEX_TEXTURE_WIDTH,
 };
 // RendererBackend and create_webrender_instance_with_backend cover all
 // backends and are always exported (when any backend is enabled).
@@ -270,13 +270,11 @@ pub use crate::device::RendererBackend;
 pub use crate::renderer::{WgpuExternalImageHandler, WgpuExternalImage};
 #[cfg(any(feature = "gl_backend", feature = "wgpu_backend"))]
 pub use crate::renderer::init::{
-    WebRenderOptions, create_webrender_instance_with_backend,
-    AsyncPropertySampler, SceneBuilderHooks, RenderBackendHooks,
+    WebRenderOptions, create_webrender_instance_with_backend, AsyncPropertySampler,
+    SceneBuilderHooks, RenderBackendHooks,
 };
 #[cfg(feature = "gl_backend")]
-pub use crate::renderer::{
-    PendingShadersToPrecache, Shaders, SharedShaders, ShaderPrecacheFlags,
-};
+pub use crate::renderer::{PendingShadersToPrecache, Shaders, SharedShaders, ShaderPrecacheFlags};
 #[cfg(feature = "gl_backend")]
 pub use crate::renderer::init::{create_webrender_instance, ONE_TIME_USAGE_HINT};
 #[cfg(feature = "gl_backend")]

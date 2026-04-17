@@ -53,15 +53,11 @@ pub struct FrameVisibilityState<'a> {
     pub surface_stack: Vec<(PictureIndex, SurfaceIndex)>,
     pub profile: &'a mut TransactionProfile,
     pub scratch: &'a mut ScratchBuffer,
-    pub visited_pictures: &'a mut[bool],
+    pub visited_pictures: &'a mut [bool],
 }
 
 impl<'a> FrameVisibilityState<'a> {
-    pub fn push_surface(
-        &mut self,
-        pic_index: PictureIndex,
-        surface_index: SurfaceIndex,
-    ) {
+    pub fn push_surface(&mut self, pic_index: PictureIndex, surface_index: SurfaceIndex) {
         self.surface_stack.push((pic_index, surface_index));
     }
 
@@ -152,7 +148,7 @@ pub fn update_prim_visibility(
     frame_context: &FrameVisibilityContext,
     frame_state: &mut FrameVisibilityState,
     tile_cache: &mut Option<&mut TileCacheInstance>,
- ) {
+) {
     if frame_state.visited_pictures[pic_index.0] {
         return;
     }
@@ -160,22 +156,18 @@ pub fn update_prim_visibility(
     let pic = &store.pictures[pic_index.0];
 
     let (surface_index, pop_surface) = match pic.raster_config {
-        Some(RasterConfig { surface_index, composite_mode: PictureCompositeMode::TileCache { .. }, .. }) => {
-            (surface_index, false)
-        }
+        Some(RasterConfig {
+            surface_index,
+            composite_mode: PictureCompositeMode::TileCache { .. },
+            ..
+        }) => (surface_index, false),
         Some(ref raster_config) => {
-            frame_state.push_surface(
-                pic_index,
-                raster_config.surface_index,
-            );
+            frame_state.push_surface(pic_index, raster_config.surface_index);
 
             if let Some(parent_surface_index) = parent_surface_index {
-                let parent_culling_rect = frame_state
-                    .surfaces[parent_surface_index.0]
-                    .culling_rect;
+                let parent_culling_rect = frame_state.surfaces[parent_surface_index.0].culling_rect;
 
-                let surface = &mut frame_state
-                    .surfaces[raster_config.surface_index.0 as usize];
+                let surface = &mut frame_state.surfaces[raster_config.surface_index.0 as usize];
 
                 surface.update_culling_rect(
                     parent_culling_rect,
@@ -200,9 +192,10 @@ pub fn update_prim_visibility(
 
             (raster_config.surface_index, true)
         }
-        None => {
-            (parent_surface_index.expect("bug: pass-through with no parent"), false)
-        }
+        None => (
+            parent_surface_index.expect("bug: pass-through with no parent"),
+            false,
+        ),
     };
 
     let surface = &frame_state.surfaces[surface_index.0 as usize];
@@ -244,13 +237,13 @@ pub fn update_prim_visibility(
             continue;
         }
 
-        map_local_to_picture.set_target_spatial_node(
-            cluster.spatial_node_index,
-            frame_context.spatial_tree,
-        );
+        map_local_to_picture
+            .set_target_spatial_node(cluster.spatial_node_index, frame_context.spatial_tree);
 
         for prim_instance_index in cluster.prim_range() {
-            if let PrimitiveInstanceKind::Picture { pic_index, .. } = frame_state.prim_instances[prim_instance_index].kind {
+            if let PrimitiveInstanceKind::Picture { pic_index, .. } =
+                frame_state.prim_instances[prim_instance_index].kind
+            {
                 if !store.pictures[pic_index.0].is_visible(frame_context.spatial_tree) {
                     continue;
                 }
@@ -261,16 +254,12 @@ pub fn update_prim_visibility(
                 };
 
                 if !is_passthrough {
-                    let clip_root = store
-                        .pictures[pic_index.0]
-                        .clip_root
-                        .unwrap_or_else(|| {
-                            // If we couldn't find a common ancestor then just use the
-                            // clip node of the picture primitive itself
-                            let leaf_id = frame_state.prim_instances[prim_instance_index].clip_leaf_id;
-                            frame_state.clip_tree.get_leaf(leaf_id).node_id
-                        }
-                    );
+                    let clip_root = store.pictures[pic_index.0].clip_root.unwrap_or_else(|| {
+                        // If we couldn't find a common ancestor then just use the
+                        // clip node of the picture primitive itself
+                        let leaf_id = frame_state.prim_instances[prim_instance_index].clip_leaf_id;
+                        frame_state.clip_tree.get_leaf(leaf_id).node_id
+                    });
 
                     frame_state.clip_tree.push_clip_root_node(clip_root);
                 }
@@ -288,7 +277,8 @@ pub fn update_prim_visibility(
 
                 if is_passthrough {
                     // Pass through pictures are always considered visible in all dirty tiles.
-                    frame_state.prim_instances[prim_instance_index].vis.state = VisibilityState::PassThrough;
+                    frame_state.prim_instances[prim_instance_index].vis.state =
+                        VisibilityState::PassThrough;
 
                     continue;
                 } else {
@@ -314,21 +304,19 @@ pub fn update_prim_visibility(
                 frame_state.clip_tree,
             );
 
-            let clip_chain = frame_state
-                .clip_store
-                .build_clip_chain_instance(
-                    local_coverage_rect,
-                    &map_local_to_picture,
-                    &map_surface_to_vis,
-                    &frame_context.spatial_tree,
-                    frame_state.gpu_cache,
-                    frame_state.resource_cache,
-                    device_pixel_scale,
-                    &surface_culling_rect,
-                    &mut frame_state.data_stores.clip,
-                    frame_state.rg_builder,
-                    true,
-                );
+            let clip_chain = frame_state.clip_store.build_clip_chain_instance(
+                local_coverage_rect,
+                &map_local_to_picture,
+                &map_surface_to_vis,
+                &frame_context.spatial_tree,
+                frame_state.gpu_cache,
+                frame_state.resource_cache,
+                device_pixel_scale,
+                &surface_culling_rect,
+                &mut frame_state.data_stores.clip,
+                frame_state.rg_builder,
+                true,
+            );
 
             prim_instance.vis.clip_chain = match clip_chain {
                 Some(clip_chain) => clip_chain,
@@ -343,7 +331,9 @@ pub fn update_prim_visibility(
 
                 // Accumulate the exact (clipped) local rect into the parent surface.
                 let surface = &mut frame_state.surfaces[prim_surface_index.0];
-                surface.clipped_local_rect = surface.clipped_local_rect.union(&prim_clip_chain.pic_coverage_rect);
+                surface.clipped_local_rect = surface
+                    .clipped_local_rect
+                    .union(&prim_clip_chain.pic_coverage_rect);
             }
 
             prim_instance.vis.state = match tile_cache {
@@ -370,12 +360,10 @@ pub fn update_prim_visibility(
                         frame_state.profile,
                     )
                 }
-                None => {
-                    VisibilityState::Visible {
-                        vis_flags: PrimitiveVisibilityFlags::empty(),
-                        sub_slice_index: SubSliceIndex::DEFAULT,
-                    }
-                }
+                None => VisibilityState::Visible {
+                    vis_flags: PrimitiveVisibilityFlags::empty(),
+                    sub_slice_index: SubSliceIndex::DEFAULT,
+                },
             };
         }
     }

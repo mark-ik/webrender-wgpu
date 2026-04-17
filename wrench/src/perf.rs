@@ -34,8 +34,8 @@ pub struct BenchmarkManifest {
 impl BenchmarkManifest {
     pub fn new(manifest: &Path) -> BenchmarkManifest {
         let dir = manifest.parent().unwrap();
-        let f =
-            File::open(manifest).unwrap_or_else(|_| panic!("couldn't open manifest: {}", manifest.display()));
+        let f = File::open(manifest)
+            .unwrap_or_else(|_| panic!("couldn't open manifest: {}", manifest.display()));
         let file = BufReader::new(&f);
 
         let mut benchmarks = Vec::new();
@@ -44,7 +44,7 @@ impl BenchmarkManifest {
             let l = line.unwrap();
 
             // strip the comments
-            let s = &l[0 .. l.find('#').unwrap_or(l.len())];
+            let s = &l[0..l.find('#').unwrap_or(l.len())];
             let s = s.trim();
             if s.is_empty() {
                 continue;
@@ -66,9 +66,7 @@ impl BenchmarkManifest {
             };
         }
 
-        BenchmarkManifest {
-            benchmarks,
-        }
+        BenchmarkManifest { benchmarks }
     }
 }
 
@@ -94,20 +92,29 @@ impl TestProfile {
         backend_time_ns min, avg, max,\
         composite_time_ns min, avg, max,\
         paint_time_ns min, avg, max,\
-        draw_calls\n".to_string()
+        draw_calls\n"
+            .to_string()
     }
 
     fn convert_to_csv(&self) -> String {
-        format!("{},\
+        format!(
+            "{},\
                  {},{},{},\
                  {},{},{},\
                  {},{},{},\
                  {}\n",
-                self.name,
-                self.backend_time_ns.min,   self.backend_time_ns.avg,   self.backend_time_ns.max,
-                self.composite_time_ns.min, self.composite_time_ns.avg, self.composite_time_ns.max,
-                self.paint_time_ns.min,     self.paint_time_ns.avg,     self.paint_time_ns.max,
-                self.draw_calls)
+            self.name,
+            self.backend_time_ns.min,
+            self.backend_time_ns.avg,
+            self.backend_time_ns.max,
+            self.composite_time_ns.min,
+            self.composite_time_ns.avg,
+            self.composite_time_ns.max,
+            self.paint_time_ns.min,
+            self.paint_time_ns.avg,
+            self.paint_time_ns.max,
+            self.draw_calls
+        )
     }
 }
 
@@ -128,7 +135,8 @@ impl Profile {
     fn save(&self, filename: &str, as_csv: bool) {
         let mut file = File::create(&filename).unwrap();
         if as_csv {
-            file.write_all(&TestProfile::csv_header().into_bytes()).unwrap();
+            file.write_all(&TestProfile::csv_header().into_bytes())
+                .unwrap();
             for test in &self.tests {
                 file.write_all(&test.convert_to_csv().into_bytes()).unwrap();
             }
@@ -168,11 +176,13 @@ pub struct PerfHarness<'a> {
 }
 
 impl<'a> PerfHarness<'a> {
-    pub fn new(wrench: &'a mut Wrench,
-               window: &'a mut WindowWrapper,
-               rx: Receiver<NotifierEvent>,
-               warmup_frames: Option<usize>,
-               sample_count: Option<usize>) -> Self {
+    pub fn new(
+        wrench: &'a mut Wrench,
+        window: &'a mut WindowWrapper,
+        rx: Receiver<NotifierEvent>,
+        warmup_frames: Option<usize>,
+        sample_count: Option<usize>,
+    ) -> Self {
         PerfHarness {
             wrench,
             window,
@@ -204,13 +214,18 @@ impl<'a> PerfHarness<'a> {
         let mut gpu_frame_profiles = Vec::new();
 
         let mut debug_flags = DebugFlags::empty();
-        debug_flags.set(DebugFlags::GPU_TIME_QUERIES | DebugFlags::GPU_SAMPLE_QUERIES, true);
-        self.wrench.api.send_debug_cmd(DebugCommand::SetFlags(debug_flags));
+        debug_flags.set(
+            DebugFlags::GPU_TIME_QUERIES | DebugFlags::GPU_SAMPLE_QUERIES,
+            true,
+        );
+        self.wrench
+            .api
+            .send_debug_cmd(DebugCommand::SetFlags(debug_flags));
 
         let mut frame_count = 0;
 
-        while cpu_frame_profiles.len() < self.sample_count ||
-            gpu_frame_profiles.len() < self.sample_count
+        while cpu_frame_profiles.len() < self.sample_count
+            || gpu_frame_profiles.len() < self.sample_count
         {
             reader.do_frame(self.wrench);
             self.rx.recv().unwrap();
@@ -226,10 +241,9 @@ impl<'a> PerfHarness<'a> {
 
         // Ensure the draw calls match in every sample.
         let draw_calls = cpu_frame_profiles[0].draw_calls;
-        let draw_calls_same =
-            cpu_frame_profiles
-                .iter()
-                .all(|s| s.draw_calls == draw_calls);
+        let draw_calls_same = cpu_frame_profiles
+            .iter()
+            .all(|s| s.draw_calls == draw_calls);
 
         // this can be normal in cases where some elements are cached (eg. linear
         // gradients), but print a warning in case it's not (which could make the
@@ -260,12 +274,12 @@ where
 {
     let mut samples: Vec<u64> = profiles.iter().map(f).collect();
     samples.sort_unstable();
-    let useful_samples = &samples[SAMPLE_EXCLUDE_COUNT .. samples.len() - SAMPLE_EXCLUDE_COUNT];
+    let useful_samples = &samples[SAMPLE_EXCLUDE_COUNT..samples.len() - SAMPLE_EXCLUDE_COUNT];
     let total_time: u64 = useful_samples.iter().sum();
     TestProfileRange {
         min: useful_samples[0],
         avg: total_time / useful_samples.len() as u64,
-        max: useful_samples[useful_samples.len()-1]
+        max: useful_samples[useful_samples.len() - 1],
     }
 }
 
@@ -297,12 +311,7 @@ pub fn compare(first_filename: &str, second_filename: &str) {
     for test_name in set0.symmetric_difference(&set1) {
         println!(
             "| {}{:47}{}|{:14}|{:18}|{:18}|",
-            COLOR_MAGENTA,
-            test_name,
-            COLOR_DEFAULT,
-            " -",
-            " -",
-            " -"
+            COLOR_MAGENTA, test_name, COLOR_DEFAULT, " -", " -", " -"
         );
     }
 

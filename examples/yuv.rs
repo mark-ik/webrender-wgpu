@@ -16,7 +16,6 @@ use webrender::api::*;
 use webrender::render_api::*;
 use webrender::api::units::*;
 
-
 fn init_gl_texture(
     id: gl::GLuint,
     internal: gl::GLenum,
@@ -25,10 +24,26 @@ fn init_gl_texture(
     gl: &dyn gl::Gl,
 ) {
     gl.bind_texture(gl::TEXTURE_2D, id);
-    gl.tex_parameter_i(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as gl::GLint);
-    gl.tex_parameter_i(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as gl::GLint);
-    gl.tex_parameter_i(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as gl::GLint);
-    gl.tex_parameter_i(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as gl::GLint);
+    gl.tex_parameter_i(
+        gl::TEXTURE_2D,
+        gl::TEXTURE_MAG_FILTER,
+        gl::LINEAR as gl::GLint,
+    );
+    gl.tex_parameter_i(
+        gl::TEXTURE_2D,
+        gl::TEXTURE_MIN_FILTER,
+        gl::LINEAR as gl::GLint,
+    );
+    gl.tex_parameter_i(
+        gl::TEXTURE_2D,
+        gl::TEXTURE_WRAP_S,
+        gl::CLAMP_TO_EDGE as gl::GLint,
+    );
+    gl.tex_parameter_i(
+        gl::TEXTURE_2D,
+        gl::TEXTURE_WRAP_T,
+        gl::CLAMP_TO_EDGE as gl::GLint,
+    );
     gl.tex_image_2d(
         gl::TEXTURE_2D,
         0,
@@ -56,9 +71,7 @@ impl YuvImageProvider {
         init_gl_texture(texture_ids[2], gl::RED, gl::RED, &[127; 100 * 100], gl);
         init_gl_texture(texture_ids[3], gl::RED, gl::RED, &[127; 100 * 100], gl);
 
-        YuvImageProvider {
-            texture_ids
-        }
+        YuvImageProvider { texture_ids }
     }
 }
 
@@ -75,8 +88,7 @@ impl ExternalImageHandler for YuvImageProvider {
             source: ExternalImageSource::NativeTexture(id),
         }
     }
-    fn unlock(&mut self, _key: ExternalImageId, _channel_index: u8) {
-    }
+    fn unlock(&mut self, _key: ExternalImageId, _channel_index: u8) {}
 }
 
 struct App {
@@ -113,9 +125,7 @@ impl Example for App {
             ImageData::External(ExternalImageData {
                 id: ExternalImageId(0),
                 channel_index: 0,
-                image_type: ExternalImageType::TextureHandle(
-                    ImageBufferKind::Texture2D,
-                ),
+                image_type: ExternalImageType::TextureHandle(ImageBufferKind::Texture2D),
                 normalized_uvs: false,
             }),
             None,
@@ -126,9 +136,7 @@ impl Example for App {
             ImageData::External(ExternalImageData {
                 id: ExternalImageId(1),
                 channel_index: 0,
-                image_type: ExternalImageType::TextureHandle(
-                    ImageBufferKind::Texture2D,
-                ),
+                image_type: ExternalImageType::TextureHandle(ImageBufferKind::Texture2D),
                 normalized_uvs: false,
             }),
             None,
@@ -139,9 +147,7 @@ impl Example for App {
             ImageData::External(ExternalImageData {
                 id: ExternalImageId(2),
                 channel_index: 0,
-                image_type: ExternalImageType::TextureHandle(
-                    ImageBufferKind::Texture2D,
-                ),
+                image_type: ExternalImageType::TextureHandle(ImageBufferKind::Texture2D),
                 normalized_uvs: false,
             }),
             None,
@@ -152,16 +158,17 @@ impl Example for App {
             ImageData::External(ExternalImageData {
                 id: ExternalImageId(3),
                 channel_index: 0,
-                image_type: ExternalImageType::TextureHandle(
-                    ImageBufferKind::Texture2D,
-                ),
+                image_type: ExternalImageType::TextureHandle(ImageBufferKind::Texture2D),
                 normalized_uvs: false,
             }),
             None,
         );
 
         let info = CommonItemProperties::new(
-            LayoutRect::from_origin_and_size(LayoutPoint::new(100.0, 0.0), LayoutSize::new(100.0, 100.0)),
+            LayoutRect::from_origin_and_size(
+                LayoutPoint::new(100.0, 0.0),
+                LayoutSize::new(100.0, 100.0),
+            ),
             space_and_clip,
         );
         builder.push_yuv_image(
@@ -175,7 +182,10 @@ impl Example for App {
         );
 
         let info = CommonItemProperties::new(
-            LayoutRect::from_origin_and_size(LayoutPoint::new(300.0, 0.0), LayoutSize::new(100.0, 100.0)),
+            LayoutRect::from_origin_and_size(
+                LayoutPoint::new(300.0, 0.0),
+                LayoutSize::new(100.0, 100.0),
+            ),
             space_and_clip,
         );
         builder.push_yuv_image(
@@ -201,17 +211,20 @@ impl Example for App {
         false
     }
 
-    fn get_image_handler(
-        &mut self,
-        gl: &dyn gl::Gl,
-    ) -> Option<Box<dyn ExternalImageHandler>> {
+    fn get_image_handler(&mut self, gl: &dyn gl::Gl) -> Option<Box<dyn ExternalImageHandler>> {
         let provider = YuvImageProvider::new(gl);
         self.texture_id = provider.texture_ids[0];
         Some(Box::new(provider))
     }
 
     fn draw_custom(&mut self, gl: &dyn gl::Gl) {
-        init_gl_texture(self.texture_id, gl::RED, gl::RED, &[self.current_value; 100 * 100], gl);
+        init_gl_texture(
+            self.texture_id,
+            gl::RED,
+            gl::RED,
+            &[self.current_value; 100 * 100],
+            gl,
+        );
         self.current_value = self.current_value.wrapping_add(1);
     }
 }

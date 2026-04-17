@@ -25,7 +25,6 @@ use webrender::api::*;
 use webrender::render_api::*;
 use webrender::api::units::*;
 
-
 struct App {
     property_key0: PropertyBindingKey<LayoutTransform>,
     property_key1: PropertyBindingKey<LayoutTransform>,
@@ -50,9 +49,10 @@ impl App {
     ) {
         let filters = match opacity_key {
             Some(opacity_key) => {
-                vec![
-                    FilterOp::Opacity(PropertyBinding::Binding(opacity_key, self.opacity), self.opacity),
-                ]
+                vec![FilterOp::Opacity(
+                    PropertyBinding::Binding(opacity_key, self.opacity),
+                    self.opacity,
+                )]
             }
             None => {
                 vec![]
@@ -78,7 +78,7 @@ impl App {
             PrimitiveFlags::IS_BACKFACE_VISIBLE,
             &filters,
             &[],
-            &[]
+            &[],
         );
 
         let space_and_clip = SpaceAndClipInfo {
@@ -91,10 +91,7 @@ impl App {
             radii: BorderRadius::uniform(30.0),
             mode: ClipMode::Clip,
         };
-        let clip_id = builder.define_clip_rounded_rect(
-            space_and_clip.spatial_id,
-            complex_clip,
-        );
+        let clip_id = builder.define_clip_rounded_rect(space_and_clip.spatial_id, complex_clip);
         let clip_chain_id = builder.define_clip_chain(None, [clip_id]);
 
         // Fill it with a white rect
@@ -104,7 +101,7 @@ impl App {
                 SpaceAndClipInfo {
                     spatial_id,
                     clip_chain_id,
-                }
+                },
             ),
             LayoutRect::from_size(bounds.size()),
             color,
@@ -139,7 +136,7 @@ impl Example for App {
             pipeline_id,
             key0,
             Some(opacity_key),
-            SpatialTreeItemKey::new(0, 0)
+            SpatialTreeItemKey::new(0, 0),
         );
 
         let bounds = (400, 400).to(600, 600);
@@ -151,7 +148,7 @@ impl Example for App {
             pipeline_id,
             key1,
             None,
-            SpatialTreeItemKey::new(0, 1)
+            SpatialTreeItemKey::new(0, 1),
         );
 
         let bounds = (200, 500).to(350, 580);
@@ -163,7 +160,7 @@ impl Example for App {
             pipeline_id,
             key2,
             None,
-            SpatialTreeItemKey::new(0, 2)
+            SpatialTreeItemKey::new(0, 2),
         );
     }
 
@@ -172,17 +169,18 @@ impl Example for App {
         win_event: winit::event::WindowEvent,
         _window: &winit::window::Window,
         api: &mut RenderApi,
-        document_id: DocumentId
+        document_id: DocumentId,
     ) -> bool {
         let mut rebuild_display_list = false;
 
         match win_event {
             winit::event::WindowEvent::KeyboardInput {
-                input: winit::event::KeyboardInput {
-                    state: winit::event::ElementState::Pressed,
-                    virtual_keycode: Some(key),
-                    ..
-                },
+                input:
+                    winit::event::KeyboardInput {
+                        state: winit::event::ElementState::Pressed,
+                        virtual_keycode: Some(key),
+                        ..
+                    },
                 ..
             } => {
                 let (delta_angle, delta_opacity) = match key {
@@ -208,31 +206,27 @@ impl Example for App {
                 let xf2 = LayoutTransform::rotation(0.0, 0.0, 1.0, Angle::radians(self.angle2));
                 let mut txn = Transaction::new();
                 txn.reset_dynamic_properties();
-                txn.append_dynamic_properties(
-                    DynamicProperties {
-                        transforms: vec![
-                            PropertyValue {
-                                key: self.property_key0,
-                                value: xf0,
-                            },
-                            PropertyValue {
-                                key: self.property_key1,
-                                value: xf1,
-                            },
-                            PropertyValue {
-                                key: self.property_key2,
-                                value: xf2,
-                            },
-                        ],
-                        floats: vec![
-                            PropertyValue {
-                                key: self.opacity_key,
-                                value: self.opacity,
-                            }
-                        ],
-                        colors: vec![],
-                    },
-                );
+                txn.append_dynamic_properties(DynamicProperties {
+                    transforms: vec![
+                        PropertyValue {
+                            key: self.property_key0,
+                            value: xf0,
+                        },
+                        PropertyValue {
+                            key: self.property_key1,
+                            value: xf1,
+                        },
+                        PropertyValue {
+                            key: self.property_key2,
+                            value: xf2,
+                        },
+                    ],
+                    floats: vec![PropertyValue {
+                        key: self.opacity_key,
+                        value: self.opacity,
+                    }],
+                    colors: vec![],
+                });
                 txn.generate_frame(0, true, false, RenderReasons::empty());
                 api.send_transaction(document_id, txn);
             }

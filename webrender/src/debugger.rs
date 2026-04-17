@@ -1,7 +1,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
- 
+
 use crate::{DebugCommand, RenderApi};
 use crate::profiler::Profiler;
 use crate::composite::CompositeState;
@@ -25,7 +25,7 @@ use sha1::{Sha1, Digest};
 /// endpoint for real time updates. This will be upgraded to a websocket connection
 /// allowing the WR instance to stream information to client(s) as appropriate. To
 /// ensure that we take on minimal dependencies in to Gecko, we use the tiny_http
-/// library, and manually perform the websocket connection upgrade below. 
+/// library, and manually perform the websocket connection upgrade below.
 
 /// Details about the type of debug query being requested
 #[derive(Clone)]
@@ -55,10 +55,7 @@ pub struct DebuggerClient {
 
 impl DebuggerClient {
     /// Send a debugger message to this client
-    fn send_msg(
-        &mut self,
-        msg: DebuggerMessage,
-    ) -> bool {
+    fn send_msg(&mut self, msg: DebuggerMessage) -> bool {
         let data = serde_json::to_string(&msg).expect("bug");
         let data = construct_server_ws_frame(&data);
 
@@ -93,9 +90,7 @@ impl Debugger {
         profiler: &Profiler,
     ) {
         // Send initial state to client
-        let msg = SetDebugFlagsMessage {
-            flags: debug_flags,
-        };
+        let msg = SetDebugFlagsMessage { flags: debug_flags };
         if client.send_msg(DebuggerMessage::SetDebugFlags(msg)) {
             let mut counters = Vec::new();
             for (id, counter) in profiler.counters().iter().enumerate() {
@@ -104,9 +99,7 @@ impl Debugger {
                     name: counter.name.into(),
                 });
             }
-            let msg = InitProfileCountersMessage {
-                counters
-            };
+            let msg = InitProfileCountersMessage { counters };
             if client.send_msg(DebuggerMessage::InitProfileCounters(msg)) {
                 // Successful initial connection, add to list for per-frame updates
                 self.clients.push(client);
@@ -116,28 +109,20 @@ impl Debugger {
 
     /// Per-frame update. Stream any important updates to connected debug clients.
     /// On error, the client is dropped from the active connections.
-    pub fn update(
-        &mut self,
-        debug_flags: DebugFlags,
-        profiler: &Profiler,
-    ) {
+    pub fn update(&mut self, debug_flags: DebugFlags, profiler: &Profiler) {
         let mut clients_to_keep = Vec::new();
 
         for mut client in self.clients.drain(..) {
-            let msg = SetDebugFlagsMessage {
-                flags: debug_flags,
-            };
+            let msg = SetDebugFlagsMessage { flags: debug_flags };
             if client.send_msg(DebuggerMessage::SetDebugFlags(msg)) {
                 let updates = profiler.collect_updates_for_debugger();
 
-                let counters = UpdateProfileCountersMessage {
-                    updates,
-                };
+                let counters = UpdateProfileCountersMessage { updates };
                 if client.send_msg(DebuggerMessage::UpdateProfileCounters(counters)) {
                     clients_to_keep.push(client);
                 }
             }
-        }   
+        }
 
         self.clients = clients_to_keep;
     }
@@ -154,7 +139,9 @@ pub fn start(api: RenderApi) {
         let server = match Server::http(address) {
             Ok(server) => server,
             Err(..) => {
-                println!("\tUnable to bind WR debug server (another process may already be listening)");
+                println!(
+                    "\tUnable to bind WR debug server (another process may already be listening)"
+                );
                 return;
             }
         };
@@ -169,7 +156,7 @@ pub fn start(api: RenderApi) {
                     request.respond(Response::from_string("pong")).ok();
                 }
                 "/debug-flags" => {
-                    // Get or set the current debug flags 
+                    // Get or set the current debug flags
                     match request.method() {
                         Method::Get => {
                             let debug_flags = api.get_debug_flags();
@@ -181,10 +168,10 @@ pub fn start(api: RenderApi) {
                             request.as_reader().read_to_string(&mut content).unwrap();
 
                             let flags = serde_json::from_str(&content).expect("bug");
-                            api.send_debug_cmd(
-                                DebugCommand::SetFlags(flags)
-                            );
-                            request.respond(Response::from_string(format!("flags = {:?}", flags))).ok();
+                            api.send_debug_cmd(DebugCommand::SetFlags(flags));
+                            request
+                                .respond(Response::from_string(format!("flags = {:?}", flags)))
+                                .ok();
                         }
                         _ => {
                             request.respond(Response::empty(403)).ok();
@@ -193,9 +180,7 @@ pub fn start(api: RenderApi) {
                 }
                 "/generate-frame" => {
                     // Force generate a frame-build and composite
-                    api.send_debug_cmd(
-                        DebugCommand::GenerateFrame
-                    );
+                    api.send_debug_cmd(DebugCommand::GenerateFrame);
                     request.respond(Response::empty(200)).ok();
                 }
                 "/query" => {
@@ -212,13 +197,8 @@ pub fn start(api: RenderApi) {
                         }
                     };
 
-                    let query = DebugQuery {
-                        result: tx,
-                        kind,
-                    };
-                    api.send_debug_cmd(
-                        DebugCommand::Query(query)
-                    );
+                    let query = DebugQuery { result: tx, kind };
+                    api.send_debug_cmd(DebugCommand::Query(query));
                     let result = match rx.recv() {
                         Ok(result) => result,
                         Err(..) => "No response received from WR".into(),
@@ -229,10 +209,7 @@ pub fn start(api: RenderApi) {
                     // Connect to a realtime stream of events from WR. This is handled
                     // by upgrading the HTTP request to a websocket.
 
-                    match request
-                        .headers()
-                        .iter()
-                        .find(|h| h.field.equiv(&"Upgrade")) {
+                    match request.headers().iter().find(|h| h.field.equiv(&"Upgrade")) {
                         Some(h) if h.value == "websocket" => {}
                         _ => {
                             request.respond(Response::empty(404)).ok();
@@ -265,11 +242,7 @@ pub fn start(api: RenderApi) {
                     let stream = request.upgrade("websocket", response);
 
                     // Send the upgraded connection to WR so it can start streaming
-                    api.send_debug_cmd(
-                        DebugCommand::AddDebugClient(DebuggerClient {
-                            stream,
-                        })
-                    );
+                    api.send_debug_cmd(DebugCommand::AddDebugClient(DebuggerClient { stream }));
                 }
                 _ => {
                     request.respond(Response::empty(404)).ok();
@@ -318,18 +291,14 @@ pub fn construct_server_ws_frame(payload: &str) -> Vec<u8> {
 
 impl From<&CompositeState> for CompositorDebugInfo {
     fn from(state: &CompositeState) -> Self {
-        let tiles = state.tiles
+        let tiles = state
+            .tiles
             .iter()
-            .map(|tile| {
-                CompositorDebugTile {
-                    local_rect: tile.local_rect,
-                    clip_rect: tile.device_clip_rect,
-                    device_rect: state.get_device_rect(
-                        &tile.local_rect,
-                        tile.transform_index,
-                    ),
-                    z_id: tile.z_id.0,
-                }
+            .map(|tile| CompositorDebugTile {
+                local_rect: tile.local_rect,
+                clip_rect: tile.device_clip_rect,
+                device_rect: state.get_device_rect(&tile.local_rect, tile.transform_index),
+                z_id: tile.z_id.0,
             })
             .collect();
 

@@ -21,7 +21,9 @@ pub const DEFAULT_TILE_SIZE: TileSize = 512;
 /// This is used as a handle to reference images, and is used as the
 /// hash map key for the actual image storage in the `ResourceCache`.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, MallocSizeOf, PartialEq, Serialize, PeekPoke)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Hash, MallocSizeOf, PartialEq, Serialize, PeekPoke,
+)]
 pub struct ImageKey(pub IdNamespace, pub u32);
 
 impl Default for ImageKey {
@@ -114,7 +116,12 @@ pub trait ExternalImageHandler {
     /// Lock the external image. Then, WR could start to read the image content.
     /// The WR client should not change the image content until the unlock()
     /// call.
-    fn lock(&mut self, key: ExternalImageId, channel_index: u8, is_composited: bool) -> ExternalImage;
+    fn lock(
+        &mut self,
+        key: ExternalImageId,
+        channel_index: u8,
+        is_composited: bool,
+    ) -> ExternalImage;
     /// Unlock the external image. WR should not read the image content
     /// after this call.
     fn unlock(&mut self, key: ExternalImageId, channel_index: u8);
@@ -214,7 +221,9 @@ impl ImageFormat {
 
 /// Specifies the color depth of an image. Currently only used for YUV images.
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, MallocSizeOf, PartialEq, Serialize, PeekPoke)]
+#[derive(
+    Clone, Copy, Debug, Default, Deserialize, Eq, Hash, MallocSizeOf, PartialEq, Serialize, PeekPoke,
+)]
 pub enum ColorDepth {
     /// 8 bits image (most common)
     #[default]
@@ -289,12 +298,7 @@ pub struct ImageDescriptor {
 
 impl ImageDescriptor {
     /// Mints a new ImageDescriptor.
-    pub fn new(
-        width: i32,
-        height: i32,
-        format: ImageFormat,
-        flags: ImageDescriptorFlags,
-    ) -> Self {
+    pub fn new(width: i32, height: i32, format: ImageFormat, flags: ImageDescriptorFlags) -> Self {
         ImageDescriptor {
             size: size2(width, height),
             format,
@@ -307,7 +311,8 @@ impl ImageDescriptor {
     /// Returns the stride, either via an explicit stride stashed on the object
     /// or by the default computation.
     pub fn compute_stride(&self) -> i32 {
-        self.stride.unwrap_or(self.size.width * self.format.bytes_per_pixel())
+        self.stride
+            .unwrap_or(self.size.width * self.format.bytes_per_pixel())
     }
 
     /// Computes the total size of the image, in bytes.
@@ -317,10 +322,7 @@ impl ImageDescriptor {
 
     /// Computes the bounding rectangle for the image, rooted at (0, 0).
     pub fn full_rect(&self) -> DeviceIntRect {
-        DeviceIntRect::from_origin_and_size(
-            DeviceIntPoint::zero(),
-            self.size,
-        )
+        DeviceIntRect::from_origin_and_size(DeviceIntPoint::zero(), self.size)
     }
 
     /// Returns true if this descriptor is opaque
@@ -352,11 +354,16 @@ mod serde_image_data_raw {
     use std::sync::Arc;
     use serde::{Deserializer, Serializer};
 
-    pub fn serialize<S: Serializer>(bytes: &Arc<Vec<u8>>, serializer: S) -> Result<S::Ok, S::Error> {
+    pub fn serialize<S: Serializer>(
+        bytes: &Arc<Vec<u8>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
         serde_bytes::serialize(bytes.as_slice(), serializer)
     }
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Arc<Vec<u8>>, D::Error> {
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Arc<Vec<u8>>, D::Error> {
         serde_bytes::deserialize(deserializer).map(Arc::new)
     }
 }
@@ -404,12 +411,22 @@ pub trait BlobImageHandler: Send {
     );
 
     /// Register a blob image.
-    fn add(&mut self, key: BlobImageKey, data: Arc<BlobImageData>, visible_rect: &DeviceIntRect,
-           tile_size: TileSize);
+    fn add(
+        &mut self,
+        key: BlobImageKey,
+        data: Arc<BlobImageData>,
+        visible_rect: &DeviceIntRect,
+        tile_size: TileSize,
+    );
 
     /// Update an already registered blob image.
-    fn update(&mut self, key: BlobImageKey, data: Arc<BlobImageData>, visible_rect: &DeviceIntRect,
-              dirty_rect: &BlobDirtyRect);
+    fn update(
+        &mut self,
+        key: BlobImageKey,
+        data: Arc<BlobImageData>,
+        visible_rect: &DeviceIntRect,
+        dirty_rect: &BlobDirtyRect,
+    );
 
     /// Delete an already registered blob image.
     fn delete(&mut self, key: BlobImageKey);
@@ -431,7 +448,7 @@ pub trait BlobImageHandler: Send {
 }
 
 /// A group of rasterization requests to execute synchronously on the scene builder thread.
-pub trait AsyncBlobImageRasterizer : Send {
+pub trait AsyncBlobImageRasterizer: Send {
     /// Rasterize the requests.
     ///
     /// Gecko uses te priority hint to schedule work in a way that minimizes the risk
@@ -443,7 +460,6 @@ pub trait AsyncBlobImageRasterizer : Send {
         tile_pool: &mut crate::BlobTilePool,
     ) -> Vec<(BlobImageRequest, BlobImageResult)>;
 }
-
 
 /// Input parameters for the BlobImageRasterizer.
 #[derive(Copy, Clone, Debug)]
@@ -467,16 +483,12 @@ pub enum DirtyRect<T: Copy, U> {
     /// Everything is Dirty, equivalent to Partial(image_bounds)
     All,
     /// Some specific amount is dirty
-    Partial(Box2D<T, U>)
+    Partial(Box2D<T, U>),
 }
 
 impl<T, U> DirtyRect<T, U>
 where
-    T: Copy + Clone
-        + PartialOrd + PartialEq
-        + Add<T, Output = T>
-        + Sub<T, Output = T>
-        + Zero
+    T: Copy + Clone + PartialOrd + PartialEq + Add<T, Output = T> + Sub<T, Output = T> + Zero,
 {
     /// Creates an empty DirtyRect (indicating nothing is invalid)
     pub fn empty() -> Self {
@@ -498,12 +510,13 @@ where
 
     /// Maps over the contents of Partial.
     pub fn map<F>(self, func: F) -> Self
-        where F: FnOnce(Box2D<T, U>) -> Box2D<T, U>,
+    where
+        F: FnOnce(Box2D<T, U>) -> Box2D<T, U>,
     {
         use crate::DirtyRect::*;
 
         match self {
-            All        => All,
+            All => All,
             Partial(rect) => Partial(func(rect)),
         }
     }
@@ -513,7 +526,7 @@ where
         use crate::DirtyRect::*;
 
         match (*self, *other) {
-            (All, _) | (_, All)        => All,
+            (All, _) | (_, All) => All,
             (Partial(rect1), Partial(rect2)) => Partial(rect1.union(&rect2)),
         }
     }
@@ -523,7 +536,7 @@ where
         use crate::DirtyRect::*;
 
         match (*self, *other) {
-            (All, rect) | (rect, All)  => rect,
+            (All, rect) | (rect, All) => rect,
             (Partial(rect1), Partial(rect2)) => {
                 Partial(rect1.intersection(&rect2).unwrap_or_else(Box2D::zero))
             }
@@ -536,16 +549,16 @@ where
 
         match *self {
             All => *rect,
-            Partial(dirty_rect) => {
-                dirty_rect.intersection(rect).unwrap_or_else(Box2D::zero)
-            }
+            Partial(dirty_rect) => dirty_rect.intersection(rect).unwrap_or_else(Box2D::zero),
         }
     }
 }
 
 impl<T: Copy, U> Copy for DirtyRect<T, U> {}
 impl<T: Copy, U> Clone for DirtyRect<T, U> {
-    fn clone(&self) -> Self { *self }
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
 impl<T: Copy, U> From<Box2D<T, U>> for DirtyRect<T, U> {
@@ -589,8 +602,6 @@ pub enum BlobImageError {
     /// Other failure, embedding-specified.
     Other(String),
 }
-
-
 
 /// A key identifying blob image rasterization work requested from the blob
 /// image rasterizer.

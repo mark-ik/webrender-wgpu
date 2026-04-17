@@ -36,10 +36,7 @@ impl RenderNotifier for Notifier {
         let _ = self.events_proxy.send_event(());
     }
 
-    fn new_frame_ready(&self,
-                       _: DocumentId,
-                       _: FramePublishId,
-                       params: &FrameReadyParams) {
+    fn new_frame_ready(&self, _: DocumentId, _: FramePublishId, params: &FrameReadyParams) {
         self.wake_up(params.render);
     }
 }
@@ -91,20 +88,13 @@ pub trait Example {
     ) -> bool {
         false
     }
-    fn get_image_handler(
-        &mut self,
-        _gl: &dyn gl::Gl,
-    ) -> Option<Box<dyn ExternalImageHandler>> {
+    fn get_image_handler(&mut self, _gl: &dyn gl::Gl) -> Option<Box<dyn ExternalImageHandler>> {
         None
     }
-    fn draw_custom(&mut self, _gl: &dyn gl::Gl) {
-    }
+    fn draw_custom(&mut self, _gl: &dyn gl::Gl) {}
 }
 
-pub fn main_wrapper<E: Example>(
-    example: &mut E,
-    options: Option<webrender::WebRenderOptions>,
-) {
+pub fn main_wrapper<E: Example>(example: &mut E, options: Option<webrender::WebRenderOptions>) {
     env_logger::init();
 
     #[cfg(target_os = "macos")]
@@ -128,7 +118,10 @@ pub fn main_wrapper<E: Example>(
     let mut events_loop = winit::event_loop::EventLoop::new();
     let window_builder = winit::window::WindowBuilder::new()
         .with_title(E::TITLE)
-        .with_inner_size(winit::dpi::LogicalSize::new(E::WIDTH as f64, E::HEIGHT as f64));
+        .with_inner_size(winit::dpi::LogicalSize::new(
+            E::WIDTH as f64,
+            E::HEIGHT as f64,
+        ));
     let windowed_context = glutin::ContextBuilder::new()
         .with_gl(glutin::GlRequest::GlThenGles {
             opengl_version: (3, 2),
@@ -141,14 +134,10 @@ pub fn main_wrapper<E: Example>(
 
     let gl = match windowed_context.get_api() {
         glutin::Api::OpenGl => unsafe {
-            gl::GlFns::load_with(
-                |symbol| windowed_context.get_proc_address(symbol) as *const _
-            )
+            gl::GlFns::load_with(|symbol| windowed_context.get_proc_address(symbol) as *const _)
         },
         glutin::Api::OpenGlEs => unsafe {
-            gl::GlesFns::load_with(
-                |symbol| windowed_context.get_proc_address(symbol) as *const _
-            )
+            gl::GlesFns::load_with(|symbol| windowed_context.get_proc_address(symbol) as *const _)
         },
         glutin::Api::WebGl => unimplemented!(),
     };
@@ -170,18 +159,12 @@ pub fn main_wrapper<E: Example>(
     };
 
     let device_size = {
-        let size = windowed_context
-            .window()
-            .inner_size();
+        let size = windowed_context.window().inner_size();
         DeviceIntSize::new(size.width as i32, size.height as i32)
     };
     let notifier = Box::new(Notifier::new(events_loop.create_proxy()));
-    let (mut renderer, sender) = webrender::create_webrender_instance(
-        gl.clone(),
-        notifier,
-        opts,
-        None,
-    ).unwrap();
+    let (mut renderer, sender) =
+        webrender::create_webrender_instance(gl.clone(), notifier, opts, None).unwrap();
     let mut api = sender.create_api();
     let document_id = api.add_document(device_size);
 
@@ -205,10 +188,7 @@ pub fn main_wrapper<E: Example>(
         pipeline_id,
         document_id,
     );
-    txn.set_display_list(
-        epoch,
-        builder.end(),
-    );
+    txn.set_display_list(epoch, builder.end());
     txn.set_root_pipeline(pipeline_id);
     txn.generate_frame(0, true, false, RenderReasons::empty());
     api.send_transaction(document_id, txn);
@@ -228,25 +208,22 @@ pub fn main_wrapper<E: Example>(
                 *control_flow = winit::event_loop::ControlFlow::Exit;
                 return;
             }
-            winit::event::WindowEvent::AxisMotion { .. } |
-            winit::event::WindowEvent::CursorMoved { .. } => {
-                custom_event = example.on_event(
-                    win_event,
-                    windowed_context.window(),
-                    &mut api,
-                    document_id,
-                );
+            winit::event::WindowEvent::AxisMotion { .. }
+            | winit::event::WindowEvent::CursorMoved { .. } => {
+                custom_event =
+                    example.on_event(win_event, windowed_context.window(), &mut api, document_id);
                 // skip high-frequency events from triggering a frame draw.
                 if !custom_event {
                     return;
                 }
-            },
+            }
             winit::event::WindowEvent::KeyboardInput {
-                input: winit::event::KeyboardInput {
-                    state: winit::event::ElementState::Pressed,
-                    virtual_keycode: Some(key),
-                    ..
-                },
+                input:
+                    winit::event::KeyboardInput {
+                        state: winit::event::ElementState::Pressed,
+                        virtual_keycode: Some(key),
+                        ..
+                    },
                 ..
             } => match key {
                 winit::event::VirtualKeyCode::Escape => {
@@ -254,12 +231,17 @@ pub fn main_wrapper<E: Example>(
                     return;
                 }
                 winit::event::VirtualKeyCode::P => debug_flags.toggle(DebugFlags::PROFILER_DBG),
-                winit::event::VirtualKeyCode::O => debug_flags.toggle(DebugFlags::RENDER_TARGET_DBG),
-                winit::event::VirtualKeyCode::I => debug_flags.toggle(DebugFlags::TEXTURE_CACHE_DBG),
-                winit::event::VirtualKeyCode::T => debug_flags.toggle(DebugFlags::PICTURE_CACHING_DBG),
-                winit::event::VirtualKeyCode::Q => debug_flags.toggle(
-                    DebugFlags::GPU_TIME_QUERIES | DebugFlags::GPU_SAMPLE_QUERIES
-                ),
+                winit::event::VirtualKeyCode::O => {
+                    debug_flags.toggle(DebugFlags::RENDER_TARGET_DBG)
+                }
+                winit::event::VirtualKeyCode::I => {
+                    debug_flags.toggle(DebugFlags::TEXTURE_CACHE_DBG)
+                }
+                winit::event::VirtualKeyCode::T => {
+                    debug_flags.toggle(DebugFlags::PICTURE_CACHING_DBG)
+                }
+                winit::event::VirtualKeyCode::Q => debug_flags
+                    .toggle(DebugFlags::GPU_TIME_QUERIES | DebugFlags::GPU_SAMPLE_QUERIES),
                 winit::event::VirtualKeyCode::G => debug_flags.toggle(DebugFlags::GPU_CACHE_DBG),
                 winit::event::VirtualKeyCode::M => api.notify_memory_pressure(),
                 winit::event::VirtualKeyCode::C => {
@@ -268,7 +250,7 @@ pub fn main_wrapper<E: Example>(
                     // based on "shift" modifier, when `glutin` is updated.
                     let bits = CaptureBits::all();
                     api.save_capture(path, bits);
-                },
+                }
                 _ => {
                     custom_event = example.on_event(
                         win_event,
@@ -276,14 +258,12 @@ pub fn main_wrapper<E: Example>(
                         &mut api,
                         document_id,
                     )
-                },
+                }
             },
-            other => custom_event = example.on_event(
-                other,
-                windowed_context.window(),
-                &mut api,
-                document_id,
-            ),
+            other => {
+                custom_event =
+                    example.on_event(other, windowed_context.window(), &mut api, document_id)
+            }
         };
 
         if debug_flags != old_flags {
@@ -302,10 +282,7 @@ pub fn main_wrapper<E: Example>(
                 pipeline_id,
                 document_id,
             );
-            txn.set_display_list(
-                epoch,
-                builder.end(),
-            );
+            txn.set_display_list(epoch, builder.end());
             txn.generate_frame(0, true, false, RenderReasons::empty());
         }
         api.send_transaction(document_id, txn);

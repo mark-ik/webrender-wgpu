@@ -96,9 +96,9 @@ fn render_blob(
                     texels.push(color.a * checker + tc);
                 }
                 _ => {
-                    return Err(api::BlobImageError::Other(
-                        format!("Unsupported image format"),
-                    ));
+                    return Err(api::BlobImageError::Other(format!(
+                        "Unsupported image format"
+                    )));
                 }
             }
         }
@@ -139,14 +139,24 @@ impl api::BlobImageHandler for CheckerboardRenderer {
         Box::new(CheckerboardRenderer::new(Arc::clone(&self.workers)))
     }
 
-    fn add(&mut self, key: api::BlobImageKey, cmds: Arc<api::BlobImageData>,
-           _visible_rect: &DeviceIntRect, _: api::TileSize) {
+    fn add(
+        &mut self,
+        key: api::BlobImageKey,
+        cmds: Arc<api::BlobImageData>,
+        _visible_rect: &DeviceIntRect,
+        _: api::TileSize,
+    ) {
         self.image_cmds
             .insert(key, Arc::new(deserialize_blob(&cmds[..]).unwrap()));
     }
 
-    fn update(&mut self, key: api::BlobImageKey, cmds: Arc<api::BlobImageData>,
-              _visible_rect: &DeviceIntRect, _dirty_rect: &BlobDirtyRect) {
+    fn update(
+        &mut self,
+        key: api::BlobImageKey,
+        cmds: Arc<api::BlobImageData>,
+        _visible_rect: &DeviceIntRect,
+        _dirty_rect: &BlobDirtyRect,
+    ) {
         // Here, updating is just replacing the current version of the commands with
         // the new one (no incremental updates).
         self.image_cmds
@@ -161,7 +171,8 @@ impl api::BlobImageHandler for CheckerboardRenderer {
         &mut self,
         _services: &dyn api::BlobImageResources,
         _requests: &[api::BlobImageParams],
-    ) {}
+    ) {
+    }
 
     fn enable_multithreading(&mut self, _: bool) {}
     fn delete_font(&mut self, _font: api::FontKey) {}
@@ -187,14 +198,21 @@ impl api::AsyncBlobImageRasterizer for Rasterizer {
         _low_priority: bool,
         _tile_pool: &mut BlobTilePool,
     ) -> Vec<(api::BlobImageRequest, api::BlobImageResult)> {
-        let requests: Vec<(&api::BlobImageParams, Arc<ImageRenderingCommands>)> = requests.into_iter().map(|params| {
-            (params, Arc::clone(&self.image_cmds[&params.request.key]))
-        }).collect();
+        let requests: Vec<(&api::BlobImageParams, Arc<ImageRenderingCommands>)> = requests
+            .into_iter()
+            .map(|params| (params, Arc::clone(&self.image_cmds[&params.request.key])))
+            .collect();
 
         self.workers.install(|| {
-            requests.into_par_iter().map(|(params, commands)| {
-                (params.request, render_blob(commands, &params.descriptor, params.request.tile))
-            }).collect()
+            requests
+                .into_par_iter()
+                .map(|(params, commands)| {
+                    (
+                        params.request,
+                        render_blob(commands, &params.descriptor, params.request.tile),
+                    )
+                })
+                .collect()
         })
     }
 }
@@ -272,9 +290,9 @@ impl Example for App {
 }
 
 fn main() {
-    let workers =
-        ThreadPoolBuilder::new().thread_name(|idx| format!("WebRender:Worker#{}", idx))
-                                .build();
+    let workers = ThreadPoolBuilder::new()
+        .thread_name(|idx| format!("WebRender:Worker#{}", idx))
+        .build();
 
     let workers = Arc::new(workers.unwrap());
 

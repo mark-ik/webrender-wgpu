@@ -7,9 +7,9 @@ use api::units::{LayoutRect, LayoutSize, LayoutVector2D};
 use crate::renderer::{GpuBufferAddress, GpuBufferBuilderF, GpuBufferWriterF};
 use std::hash;
 
+mod conic;
 mod linear;
 mod radial;
-mod conic;
 
 pub use linear::MAX_CACHED_SIZE as LINEAR_MAX_CACHED_SIZE;
 
@@ -57,15 +57,18 @@ impl Into<GradientStopKey> for GradientStop {
 // minimum stop alpha along the way.
 fn stops_and_min_alpha(stop_keys: &[GradientStopKey]) -> (Vec<GradientStop>, f32) {
     let mut min_alpha: f32 = 1.0;
-    let stops = stop_keys.iter().map(|stop_key| {
-        let color: ColorF = stop_key.color.into();
-        min_alpha = min_alpha.min(color.a);
+    let stops = stop_keys
+        .iter()
+        .map(|stop_key| {
+            let color: ColorF = stop_key.color.into();
+            min_alpha = min_alpha.min(color.a);
 
-        GradientStop {
-            offset: stop_key.offset,
-            color,
-        }
-    }).collect();
+            GradientStop {
+                offset: stop_key.offset,
+                color,
+            }
+        })
+        .collect();
 
     (stops, min_alpha)
 }
@@ -80,8 +83,12 @@ fn write_gpu_gradient_stops_header_and_colors(
     writer.push_one([
         (kind as u8) as f32,
         stops.len() as f32,
-        if extend_mode == ExtendMode::Repeat { 1.0 } else { 0.0 },
-        0.0
+        if extend_mode == ExtendMode::Repeat {
+            1.0
+        } else {
+            0.0
+        },
+        0.0,
     ]);
 
     // Write the stop colors.
@@ -114,12 +121,7 @@ fn write_gpu_gradient_stops_linear(
     extend_mode: ExtendMode,
     writer: &mut GpuBufferWriterF,
 ) -> bool {
-    let is_opaque = write_gpu_gradient_stops_header_and_colors(
-        stops,
-        kind,
-        extend_mode,
-        writer
-    );
+    let is_opaque = write_gpu_gradient_stops_header_and_colors(stops, kind, extend_mode, writer);
 
     for chunk in stops.chunks(4) {
         let mut block = [0.0; 4];
@@ -177,12 +179,7 @@ fn write_gpu_gradient_stops_tree(
     extend_mode: ExtendMode,
     writer: &mut GpuBufferWriterF,
 ) -> bool {
-    let is_opaque = write_gpu_gradient_stops_header_and_colors(
-        stops,
-        kind,
-        extend_mode,
-        writer
-    );
+    let is_opaque = write_gpu_gradient_stops_header_and_colors(stops, kind, extend_mode, writer);
 
     let num_stops = stops.len();
     let mut num_levels = 1;
@@ -226,9 +223,8 @@ fn write_gpu_gradient_stops_tree(
         for block_idx in 0..num_blocks {
             let mut block = [1.0; 4];
             for i in 0..4 {
-                let linear_idx = block_idx * index_stride
-                    + i * next_index_stride
-                    + next_index_stride - 1;
+                let linear_idx =
+                    block_idx * index_stride + i * next_index_stride + next_index_stride - 1;
 
                 if linear_idx < num_stops {
                     block[i] = stops[linear_idx].offset;
@@ -347,13 +343,17 @@ impl GradientGpuBlockBuilder {
             // Modify the step alpha value as if by nextafter(). The difference
             // here should be so small as to be unnoticeable, but yet allow it
             // to compare differently.
-            step.a = f32::from_bits(if step.a == 0.0 { 1 } else { step.a.to_bits() + 1 });
+            step.a = f32::from_bits(if step.a == 0.0 {
+                1
+            } else {
+                step.a.to_bits() + 1
+            });
         }
 
         let mut cur_color = *start_color;
 
         // Walk the ramp writing start and end colors for each entry.
-        for index in start_idx .. end_idx {
+        for index in start_idx..end_idx {
             let entry = &mut entries[index];
             entry.start_color = cur_color;
             cur_color.r += step.r;
@@ -370,8 +370,8 @@ impl GradientGpuBlockBuilder {
     /// function maps offsets from [0, 1] to indices in [GRADIENT_DATA_TABLE_BEGIN, GRADIENT_DATA_TABLE_END].
     #[inline]
     fn get_index(offset: f32) -> usize {
-        (offset.max(0.0).min(1.0) * GRADIENT_DATA_TABLE_SIZE as f32 +
-            GRADIENT_DATA_TABLE_BEGIN as f32)
+        (offset.max(0.0).min(1.0) * GRADIENT_DATA_TABLE_SIZE as f32
+            + GRADIENT_DATA_TABLE_BEGIN as f32)
             .round() as usize
     }
 
@@ -461,7 +461,10 @@ impl GradientGpuBlockBuilder {
                 cur_color = next_color;
             }
             if cur_idx != GRADIENT_DATA_TABLE_BEGIN {
-                error!("Gradient stops abruptly at {}, auto-completing to white", cur_idx);
+                error!(
+                    "Gradient stops abruptly at {}, auto-completing to white",
+                    cur_idx
+                );
             }
 
             // Fill in the last entry (for reversed stops) with the last color stop
@@ -507,7 +510,10 @@ impl GradientGpuBlockBuilder {
                 cur_color = next_color;
             }
             if cur_idx != GRADIENT_DATA_TABLE_END {
-                error!("Gradient stops abruptly at {}, auto-completing to white", cur_idx);
+                error!(
+                    "Gradient stops abruptly at {}, auto-completing to white",
+                    cur_idx
+                );
             }
 
             // Fill in the last entry with the last color stop
@@ -589,15 +595,51 @@ fn test_struct_sizes() {
     //     test expectations and move on.
     // (b) You made a structure larger. This is not necessarily a problem, but should only
     //     be done with care, and after checking if talos performance regresses badly.
-    assert_eq!(mem::size_of::<LinearGradient>(), 72, "LinearGradient size changed");
-    assert_eq!(mem::size_of::<LinearGradientTemplate>(), 144, "LinearGradientTemplate size changed");
-    assert_eq!(mem::size_of::<LinearGradientKey>(), 96, "LinearGradientKey size changed");
+    assert_eq!(
+        mem::size_of::<LinearGradient>(),
+        72,
+        "LinearGradient size changed"
+    );
+    assert_eq!(
+        mem::size_of::<LinearGradientTemplate>(),
+        144,
+        "LinearGradientTemplate size changed"
+    );
+    assert_eq!(
+        mem::size_of::<LinearGradientKey>(),
+        96,
+        "LinearGradientKey size changed"
+    );
 
-    assert_eq!(mem::size_of::<RadialGradient>(), 72, "RadialGradient size changed");
-    assert_eq!(mem::size_of::<RadialGradientTemplate>(), 144, "RadialGradientTemplate size changed");
-    assert_eq!(mem::size_of::<RadialGradientKey>(), 96, "RadialGradientKey size changed");
+    assert_eq!(
+        mem::size_of::<RadialGradient>(),
+        72,
+        "RadialGradient size changed"
+    );
+    assert_eq!(
+        mem::size_of::<RadialGradientTemplate>(),
+        144,
+        "RadialGradientTemplate size changed"
+    );
+    assert_eq!(
+        mem::size_of::<RadialGradientKey>(),
+        96,
+        "RadialGradientKey size changed"
+    );
 
-    assert_eq!(mem::size_of::<ConicGradient>(), 72, "ConicGradient size changed");
-    assert_eq!(mem::size_of::<ConicGradientTemplate>(), 144, "ConicGradientTemplate size changed");
-    assert_eq!(mem::size_of::<ConicGradientKey>(), 96, "ConicGradientKey size changed");
+    assert_eq!(
+        mem::size_of::<ConicGradient>(),
+        72,
+        "ConicGradient size changed"
+    );
+    assert_eq!(
+        mem::size_of::<ConicGradientTemplate>(),
+        144,
+        "ConicGradientTemplate size changed"
+    );
+    assert_eq!(
+        mem::size_of::<ConicGradientKey>(),
+        96,
+        "ConicGradientKey size changed"
+    );
 }

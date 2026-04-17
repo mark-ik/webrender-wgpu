@@ -13,24 +13,40 @@ fn main() {
 
     fs::create_dir_all(&format!("{}/include", out_dir)).unwrap();
     Command::new("wayland-scanner")
-        .args(&["client-header", "/usr/share/wayland-protocols/stable/viewporter/viewporter.xml"])
+        .args(&[
+            "client-header",
+            "/usr/share/wayland-protocols/stable/viewporter/viewporter.xml",
+        ])
         .arg(&format!("{}/include/viewporter-client-protocol.h", out_dir))
-        .status().unwrap();
+        .status()
+        .unwrap();
 
     Command::new("wayland-scanner")
-        .args(&["public-code", "/usr/share/wayland-protocols/stable/viewporter/viewporter.xml"])
+        .args(&[
+            "public-code",
+            "/usr/share/wayland-protocols/stable/viewporter/viewporter.xml",
+        ])
         .arg(&format!("{}/viewporter-protocol.c", out_dir))
-        .status().unwrap();
+        .status()
+        .unwrap();
 
     Command::new("wayland-scanner")
-        .args(&["client-header", "/usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml"])
+        .args(&[
+            "client-header",
+            "/usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml",
+        ])
         .arg(&format!("{}/include/xdg-shell-client-protocol.h", out_dir))
-        .status().unwrap();
+        .status()
+        .unwrap();
 
     Command::new("wayland-scanner")
-        .args(&["public-code", "/usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml"])
+        .args(&[
+            "public-code",
+            "/usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml",
+        ])
         .arg(&format!("{}/xdg-shell-protocol.c", out_dir))
-        .status().unwrap();
+        .status()
+        .unwrap();
 
     cc::Build::new()
         .include(&format!("{}/include", out_dir))

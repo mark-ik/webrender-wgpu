@@ -30,9 +30,7 @@ struct FeatureList<'a> {
 
 impl<'a> FeatureList<'a> {
     fn new() -> Self {
-        FeatureList {
-            list: Vec::new(),
-        }
+        FeatureList { list: Vec::new() }
     }
 
     fn add(&mut self, feature: &'a str) {
@@ -49,9 +47,7 @@ impl<'a> FeatureList<'a> {
     fn concat(&self, other: &Self) -> Self {
         let mut list = self.list.clone();
         list.extend_from_slice(&other.list);
-        FeatureList {
-            list
-        }
+        FeatureList { list }
     }
 
     fn finish(&mut self) -> String {
@@ -65,11 +61,17 @@ pub fn get_shader_features(flags: ShaderFeatureFlags) -> ShaderFeatures {
     let mut shaders = ShaderFeatures::new();
 
     // Clip shaders
-    shaders.insert("cs_clip_rectangle", vec![String::new(), "FAST_PATH".to_string()]);
+    shaders.insert(
+        "cs_clip_rectangle",
+        vec![String::new(), "FAST_PATH".to_string()],
+    );
     shaders.insert("cs_clip_box_shadow", vec!["TEXTURE_2D".to_string()]);
 
     // Cache shaders
-    shaders.insert("cs_blur", vec!["ALPHA_TARGET".to_string(), "COLOR_TARGET".to_string()]);
+    shaders.insert(
+        "cs_blur",
+        vec!["ALPHA_TARGET".to_string(), "COLOR_TARGET".to_string()],
+    );
 
     shaders.insert("ps_quad_mask", vec![String::new(), "FAST_PATH".to_string()]);
 
@@ -247,11 +249,20 @@ pub fn get_shader_features(flags: ShaderFeatureFlags) -> ShaderFeatures {
         maybe_dithering.add("DITHERING");
     }
 
-    shaders.insert("ps_quad_gradient", vec![base_prim_features.concat(&maybe_dithering).finish()]);
+    shaders.insert(
+        "ps_quad_gradient",
+        vec![base_prim_features.concat(&maybe_dithering).finish()],
+    );
 
-    shaders.insert("ps_quad_radial_gradient", vec![base_prim_features.concat(&maybe_dithering).finish()]);
+    shaders.insert(
+        "ps_quad_radial_gradient",
+        vec![base_prim_features.concat(&maybe_dithering).finish()],
+    );
 
-    shaders.insert("ps_quad_conic_gradient", vec![base_prim_features.concat(&maybe_dithering).finish()]);
+    shaders.insert(
+        "ps_quad_conic_gradient",
+        vec![base_prim_features.concat(&maybe_dithering).finish()],
+    );
 
     shaders.insert("ps_clear", vec![base_prim_features.finish()]);
 

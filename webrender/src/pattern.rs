@@ -4,7 +4,14 @@
 
 use api::{units::DeviceRect, ColorF};
 
-use crate::{clip::ClipStore, frame_builder::FrameBuilderConfig, render_task_graph::{RenderTaskGraphBuilder, RenderTaskId}, renderer::GpuBufferBuilder, scene::SceneProperties, spatial_tree::SpatialTree};
+use crate::{
+    clip::ClipStore,
+    frame_builder::FrameBuilderConfig,
+    render_task_graph::{RenderTaskGraphBuilder, RenderTaskId},
+    renderer::GpuBufferBuilder,
+    scene::SceneProperties,
+    spatial_tree::SpatialTree,
+};
 
 #[repr(u32)]
 #[cfg_attr(feature = "capture", derive(Serialize))]
@@ -60,9 +67,7 @@ impl Default for PatternTextureInput {
 
 impl PatternTextureInput {
     pub fn new(task_id: RenderTaskId) -> Self {
-        PatternTextureInput {
-            task_id,
-        }
+        PatternTextureInput { task_id }
     }
 }
 
@@ -86,14 +91,9 @@ pub trait PatternBuilder {
         _state: &mut PatternBuilderState,
     ) -> Pattern;
 
-    fn get_base_color(
-        &self,
-        _ctx: &PatternBuilderContext,
-    ) -> ColorF;
+    fn get_base_color(&self, _ctx: &PatternBuilderContext) -> ColorF;
 
-    fn use_shared_pattern(
-        &self,
-    ) -> bool;
+    fn use_shared_pattern(&self) -> bool;
 
     fn can_use_nine_patch(&self) -> bool {
         true

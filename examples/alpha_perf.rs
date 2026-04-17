@@ -17,7 +17,6 @@ use webrender::api::*;
 use webrender::render_api::*;
 use webrender::api::units::DeviceIntSize;
 
-
 struct App {
     rect_count: usize,
 }
@@ -41,11 +40,11 @@ impl Example for App {
             PrimitiveFlags::IS_BACKFACE_VISIBLE,
         );
 
-        for _ in 0 .. self.rect_count {
+        for _ in 0..self.rect_count {
             builder.push_rect(
                 &CommonItemProperties::new(bounds, space_and_clip),
                 bounds,
-                ColorF::new(1.0, 1.0, 1.0, 0.05)
+                ColorF::new(1.0, 1.0, 1.0, 0.05),
             );
         }
 
@@ -61,11 +60,12 @@ impl Example for App {
     ) -> bool {
         match event {
             winit::event::WindowEvent::KeyboardInput {
-                input: winit::event::KeyboardInput {
-                    state: winit::event::ElementState::Pressed,
-                    virtual_keycode: Some(key),
-                    ..
-                },
+                input:
+                    winit::event::KeyboardInput {
+                        state: winit::event::ElementState::Pressed,
+                        virtual_keycode: Some(key),
+                        ..
+                    },
                 ..
             } => {
                 match key {
@@ -88,8 +88,6 @@ impl Example for App {
 }
 
 fn main() {
-    let mut app = App {
-        rect_count: 1,
-    };
+    let mut app = App { rect_count: 1 };
     boilerplate::main_wrapper(&mut app, None);
 }

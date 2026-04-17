@@ -85,14 +85,12 @@ fn test_varying_explicit_precision(
                 .map(|q| q.qualifiers.as_slice())
                 .unwrap_or(&[]);
 
-            let is_varying = qualifiers.iter().any(|qualifier| {
-                match &qualifier.content {
-                    TypeQualifierSpecData::Storage(storage) => match self.shader_kind {
-                        ShaderKind::Vertex => storage.content == StorageQualifierData::Out,
-                        ShaderKind::Fragment => storage.content == StorageQualifierData::In,
-                    }
-                    _ => false,
-                }
+            let is_varying = qualifiers.iter().any(|qualifier| match &qualifier.content {
+                TypeQualifierSpecData::Storage(storage) => match self.shader_kind {
+                    ShaderKind::Vertex => storage.content == StorageQualifierData::Out,
+                    ShaderKind::Fragment => storage.content == StorageQualifierData::In,
+                },
+                _ => false,
             });
 
             let has_explicit_precision = qualifiers
@@ -139,7 +137,6 @@ pub fn test_shaders() {
             let vert_name = format!("{}.vert", name);
             let frag_name = format!("{}.frag", name);
 
-
             let features = config
                 .split(",")
                 .filter(|f| !f.is_empty())
@@ -152,7 +149,6 @@ pub fn test_shaders() {
 
             let mut vert = TranslationUnit::parse(&vert_src).unwrap();
             let mut frag = TranslationUnit::parse(&frag_src).unwrap();
-
 
             test_no_flat_scalar_varyings(&vert_name, &mut vert, ShaderKind::Vertex);
             test_no_flat_scalar_varyings(&frag_name, &mut frag, ShaderKind::Fragment);

@@ -24,29 +24,20 @@ struct RenderResult {
 
 // Convenience method to build a picture rect
 fn pr(x: f32, y: f32, w: f32, h: f32) -> PictureRect {
-    PictureRect::from_origin_and_size(
-        PicturePoint::new(x, y),
-        PictureSize::new(w, h),
-    )
+    PictureRect::from_origin_and_size(PicturePoint::new(x, y), PictureSize::new(w, h))
 }
 
 impl<'a> TestHarness<'a> {
     pub fn new(
         wrench: &'a mut Wrench,
         window: &'a mut WindowWrapper,
-        rx: Receiver<NotifierEvent>
+        rx: Receiver<NotifierEvent>,
     ) -> Self {
-        TestHarness {
-            wrench,
-            window,
-            rx,
-        }
+        TestHarness { wrench, window, rx }
     }
 
     /// Main entry point for invalidation tests
-    pub fn run(
-        mut self,
-    ) {
+    pub fn run(mut self) {
         // List all invalidation tests here
         self.test_basic();
         self.test_composite_nop();
@@ -54,20 +45,12 @@ impl<'a> TestHarness<'a> {
     }
 
     /// Simple validation / proof of concept of invalidation testing
-    fn test_basic(
-        &mut self,
-    ) {
+    fn test_basic(&mut self) {
         // Render basic.yaml, ensure that the valid/dirty rects are as expected
         let results = self.render_yaml("basic");
         let tile_info = results.pc_debug.slice(0).tile(0, 0).as_dirty();
-        assert_eq!(
-            tile_info.local_valid_rect,
-            pr(100.0, 100.0, 500.0, 100.0),
-        );
-        assert_eq!(
-            tile_info.local_dirty_rect,
-            pr(100.0, 100.0, 500.0, 100.0),
-        );
+        assert_eq!(tile_info.local_valid_rect, pr(100.0, 100.0, 500.0, 100.0),);
+        assert_eq!(tile_info.local_dirty_rect, pr(100.0, 100.0, 500.0, 100.0),);
 
         // Render it again and ensure the tile was considered valid (no rasterization was done)
         let results = self.render_yaml("basic");
@@ -75,47 +58,34 @@ impl<'a> TestHarness<'a> {
     }
 
     /// Ensure WR detects composites are needed for position changes within a single tile.
-    fn test_composite_nop(
-        &mut self,
-    ) {
+    fn test_composite_nop(&mut self) {
         // Render composite_nop_1.yaml, ensure that the valid/dirty rects are as expected
         let results = self.render_yaml("composite_nop_1");
         let tile_info = results.pc_debug.slice(0).tile(0, 0).as_dirty();
-        assert_eq!(
-            tile_info.local_valid_rect,
-            pr(100.0, 100.0, 100.0, 100.0),
-        );
-        assert_eq!(
-            tile_info.local_dirty_rect,
-            pr(100.0, 100.0, 100.0, 100.0),
-        );
+        assert_eq!(tile_info.local_valid_rect, pr(100.0, 100.0, 100.0, 100.0),);
+        assert_eq!(tile_info.local_dirty_rect, pr(100.0, 100.0, 100.0, 100.0),);
 
         // Render composite_nop_2.yaml, ensure that the valid/dirty rects are as expected
         let results = self.render_yaml("composite_nop_2");
         let tile_info = results.pc_debug.slice(0).tile(0, 0).as_dirty();
-        assert_eq!(
-            tile_info.local_valid_rect,
-            pr(100.0, 120.0, 100.0, 100.0),
-        );
-        assert_eq!(
-            tile_info.local_dirty_rect,
-            pr(100.0, 120.0, 100.0, 100.0),
-        );
+        assert_eq!(tile_info.local_valid_rect, pr(100.0, 120.0, 100.0, 100.0),);
+        assert_eq!(tile_info.local_dirty_rect, pr(100.0, 120.0, 100.0, 100.0),);
 
         // Main part of this test - ensure WR detects a composite is required in this case
         assert!(results.composite_needed);
     }
 
     /// Ensure that tile cache pictures are not invalidated upon scrolling
-    fn test_scroll_subpic(
-        &mut self,
-    ) {
+    fn test_scroll_subpic(&mut self) {
         // First frame at scroll-offset 0
         let results = self.render_yaml("scroll_subpic_1");
 
         // Ensure we actually rendered something
         assert!(
-            matches!(results.pc_debug.slice(0).tile(0, 0), TileDebugInfo::Dirty(..)),
+            matches!(
+                results.pc_debug.slice(0).tile(0, 0),
+                TileDebugInfo::Dirty(..)
+            ),
             "Ensure the first test frame actually rendered something",
         );
 
@@ -130,10 +100,7 @@ impl<'a> TestHarness<'a> {
     }
 
     /// Render a YAML file, and return the picture cache debug info
-    fn render_yaml(
-        &mut self,
-        filename: &str,
-    ) -> RenderResult {
+    fn render_yaml(&mut self, filename: &str) -> RenderResult {
         let path = format!("invalidation/{}.yaml", filename);
         let mut reader = YamlFrameReader::new(&PathBuf::from(path));
 

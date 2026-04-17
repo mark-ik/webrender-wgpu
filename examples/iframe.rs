@@ -50,15 +50,12 @@ impl Example for App {
         sub_builder.push_rect(
             &CommonItemProperties::new(sub_bounds, space_and_clip),
             sub_bounds,
-            ColorF::new(0.0, 1.0, 0.0, 1.0)
+            ColorF::new(0.0, 1.0, 0.0, 1.0),
         );
         sub_builder.pop_stacking_context();
 
         let mut txn = Transaction::new();
-        txn.set_display_list(
-            Epoch(0),
-            sub_builder.end(),
-        );
+        txn.set_display_list(Epoch(0), sub_builder.end());
         api.send_transaction(document_id, txn);
 
         space_and_clip.spatial_id = builder.push_reference_frame(
@@ -85,9 +82,15 @@ impl Example for App {
         builder.push_rect(
             &CommonItemProperties::new(sub_bounds, space_and_clip),
             sub_bounds,
-            ColorF::new(1.0, 0.0, 0.0, 1.0)
+            ColorF::new(1.0, 0.0, 0.0, 1.0),
         );
-        builder.push_iframe(sub_bounds, sub_bounds, &space_and_clip, sub_pipeline_id, false);
+        builder.push_iframe(
+            sub_bounds,
+            sub_bounds,
+            &space_and_clip,
+            sub_pipeline_id,
+            false,
+        );
         builder.pop_stacking_context();
         builder.pop_reference_frame();
     }

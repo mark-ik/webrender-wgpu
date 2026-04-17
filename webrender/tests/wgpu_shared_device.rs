@@ -24,12 +24,10 @@ fn create_external_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     }))
     .ok()?;
 
-    let (device, queue) = pollster::block_on(adapter.request_device(
-        &wgpu::DeviceDescriptor {
-            label: Some("host-app device"),
-            ..Default::default()
-        },
-    ))
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("host-app device"),
+        ..Default::default()
+    }))
     .ok()?;
 
     Some((device, queue))
@@ -37,8 +35,8 @@ fn create_external_device() -> Option<(wgpu::Device, wgpu::Queue)> {
 
 #[test]
 fn shared_device_creates_successfully() {
-    let (device, queue) = create_external_device()
-        .expect("failed to create wgpu device (no GPU adapter available?)");
+    let (device, queue) =
+        create_external_device().expect("failed to create wgpu device (no GPU adapter available?)");
 
     // Clone handles — this is what a host app would do before handing them to WebRender.
     let wr_device = device.clone();
@@ -57,18 +55,18 @@ fn shared_device_creates_successfully() {
 
 #[test]
 fn shared_device_can_create_and_upload_texture() {
-    let (device, queue) = create_external_device()
-        .expect("failed to create wgpu device (no GPU adapter available?)");
+    let (device, queue) =
+        create_external_device().expect("failed to create wgpu device (no GPU adapter available?)");
 
     let mut wgpu_dev = WgpuDevice::from_shared_device(device.clone(), queue.clone());
 
     // Create a small RGBA8 texture through WebRender's device abstraction.
     let tex = wgpu_dev.create_data_texture(
         "smoke-test",
-        4,  // width
-        4,  // height
+        4, // width
+        4, // height
         wgpu::TextureFormat::Rgba8Unorm,
-        &[0u8; 4 * 4 * 4],  // 4x4 pixels, 4 bytes each
+        &[0u8; 4 * 4 * 4], // 4x4 pixels, 4 bytes each
     );
 
     // Verify we got a texture with the right dimensions.
