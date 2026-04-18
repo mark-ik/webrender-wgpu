@@ -126,7 +126,7 @@ pub struct ClipTreeNode {
     pub clip_rect_origin: LayoutPoint,
     pub parent: ClipNodeId,
 
-    children: Vec<ClipNodeId>,
+    children: FastHashMap<ClipEntry, ClipNodeId>,
 
     // TODO(gw): Consider adding a default leaf for cases when the local_clip_rect is not relevant,
     //           that can be shared among primitives (to reduce amount of clip-chain building).
@@ -196,7 +196,7 @@ impl ClipTree {
                     handle: ClipDataHandle::INVALID,
                     spatial_node_index: SpatialNodeIndex::INVALID,
                     clip_rect_origin: LayoutPoint::zero(),
-                    children: Vec::new(),
+                    children: FastHashMap::default(),
                     parent: ClipNodeId::NONE,
                 }
             ],
@@ -213,7 +213,7 @@ impl ClipTree {
             handle: ClipDataHandle::INVALID,
             spatial_node_index: SpatialNodeIndex::INVALID,
             clip_rect_origin: LayoutPoint::zero(),
-            children: Vec::new(),
+            children: FastHashMap::default(),
             parent: ClipNodeId::NONE,
         });
 
@@ -226,50 +226,40 @@ impl ClipTree {
     /// Add a set of clips to the provided tree node id, reusing existing
     /// nodes in the tree where possible
     fn add_impl(
-        id: ClipNodeId,
+        mut id: ClipNodeId,
         clips: &[ClipEntry],
         nodes: &mut Vec<ClipTreeNode>,
     ) -> ClipNodeId {
         if clips.is_empty() {
             return id;
         }
-
-        let ClipEntry { handle, spatial_node_index, clip_rect_origin } = clips[0];
-        let clip_rect_origin_pt: LayoutPoint = clip_rect_origin.into();
-        let next_clips = &clips[1..];
-
-        let node_index = nodes[id.0 as usize]
-            .children
-            .iter()
-            .find(|n| {
-                let node = &nodes[n.0 as usize];
-                node.handle == handle && node.spatial_node_index == spatial_node_index &&
-                node.clip_rect_origin == clip_rect_origin_pt
-            })
-            .cloned();
-
-        let node_index = match node_index {
-            Some(node_index) => node_index,
-            None => {
-                let node_index = ClipNodeId(nodes.len() as u32);
-                nodes[id.0 as usize].children.push(node_index);
-                let node = ClipTreeNode {
-                    handle,
-                    spatial_node_index,
-                    clip_rect_origin: clip_rect_origin_pt,
-                    children: Vec::new(),
-                    parent: id,
-                };
-                nodes.push(node);
-                node_index
-            }
-        };
-
-        ClipTree::add_impl(
-            node_index,
-            next_clips,
-            nodes,
-        )
+        
+        for clip in clips {
+            let key = *clip; // ClipEntry is Copy
+            
+            let node_index = nodes[id.0 as usize]
+                .children
+                .get(&key)
+                .cloned();
+            
+            let node_index = match node_index {
+                Some(node_index) => node_index,
+                None => {
+                    let node_index = ClipNodeId(nodes.len() as u32);
+                    nodes[id.0 as usize].children.insert(key, node_index);
+                    nodes.push(ClipTreeNode {
+                        handle: key.handle,
+                        spatial_node_index: key.spatial_node_index,
+                        clip_rect_origin: key.clip_rect_origin.into(),
+                        children: FastHashMap::default(),
+                        parent: id,
+                    });
+                    node_index
+                }
+            };
+            id = node_index;
+        }
+        id
     }
 
     /// Add a set of clips to the provided tree node id, reusing existing
@@ -349,7 +339,7 @@ impl ClipTree {
             pt.new_level(format!("{:?}", id));
             pt.add_item(format!("{:?}", node.handle));
 
-            for child_id in &node.children {
+            for child_id in node.children.values() {
                 print_node(*child_id, nodes, pt);
             }
 
@@ -424,7 +414,7 @@ impl ClipTree {
 }
 
 /// A reference to an interned clip paired with the spatial node that positions it.
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, MallocSizeOf)]
 #[cfg_attr(feature = "capture", derive(Serialize))]
 #[cfg_attr(feature = "replay", derive(Deserialize))]
 pub struct ClipEntry {
