@@ -1,4 +1,4 @@
-# SPIR-V-Centered Shader Pipeline for `webrender-wgpu`
+# SPIR-V-Centered, Standards-First Shader Pipeline for `webrender-wgpu`
 
 ## Summary
 
@@ -18,6 +18,46 @@ The migration will keep authored GLSL as the initial input format, but move both
 backends to consume generated artifacts from a shared registry. The plan is phased
 so the `wgpu` backend lands first on the new artifact model, then GL/GLES follows
 without stranding either backend.
+
+Critical principle:
+
+- existing WebRender GLSL is a migration input and a useful regression oracle
+- it is not the normative standard for migrated shared shader variants
+- the normative standards are SPIR-V, target GLSL/ESSL, and WGSL as defined by
+  Khronos and W3C, validated by their tooling and conformance suites
+
+The project should use GLSL to escape GLSL, not to remain quietly governed by it.
+
+## Standards And Oracles
+
+The architecture and validation strategy should explicitly anchor to external
+standards instead of treating the current GL backend as the only well of truth.
+
+Primary standards and tools:
+
+- SPIR-V specification and grammar as the canonical IR contract
+- Khronos `glslang` / `shaderc` as the reference GLSL/ESSL -> SPIR-V front-end
+- Khronos `SPIRV-Tools` validator as the required SPIR-V validity gate
+- SPIRV-Cross as the derivation tool for target GLSL/ESSL and reflection support
+- W3C/GPUWeb WebGPU + WGSL specifications as the runtime contract for the `wgpu` path
+- WebGPU CTS as the conformance oracle for WGSL/WebGPU behavior
+- VK-GL-CTS as the conformance oracle for Vulkan, OpenGL, and OpenGL ES behavior
+
+Oracle order for migrated shared shader variants:
+
+1. valid canonical SPIR-V
+2. valid reflected metadata
+3. valid derived WGSL for WebGPU/wgpu
+4. valid derived GLSL/ESSL for GL targets
+5. WebRender image/output parity
+
+The existing WebRender GLSL backend remains useful as:
+
+- migration input
+- behavior regression oracle
+- implementation reference for intent
+
+but not as the final normative center for migrated shader families.
 
 ## Key Changes
 
@@ -54,6 +94,12 @@ Artifact storage policy:
 Keep `WgpuShaderVariant` as the runtime-facing typed variant key, but make it resolve
 through `ShaderArtifact` instead of `WGSL_SHADERS`.
 
+Normative rule for migrated shared variants:
+
+- build and runtime must be able to regenerate all consumed shader forms from the
+  canonical SPIR-V artifact plus metadata
+- no migrated shared variant may depend on hand-authored GLSL at runtime
+
 ### 2. Build a single shader compilation pipeline in `webrender_build`
 
 Keep the existing shader assembly layer as the bootstrap input:
@@ -73,7 +119,7 @@ Add a new compiled-artifact pipeline with this exact flow:
 
 Tool choices:
 
-- GLSL -> SPIR-V: `shaderc`
+- GLSL -> SPIR-V: `shaderc` / `glslang`
 - SPIR-V -> WGSL: `naga` with `spv-in` + `wgsl-out`
 - SPIR-V -> GLSL/ESSL: SPIRV-Cross
 - metadata extraction: from the parsed SPIR-V / naga module, not by parsing generated WGSL text
@@ -87,6 +133,11 @@ Important build-rule changes:
   - canonical SPIR-V profile for shared variants
   - generated GLSL targets for `GL 150`, `GLES 300`
   - `ESSL 100` remains legacy-only until proven supportable through SPIR-V derivation
+
+Compliance rule:
+
+- if a migrated shared variant cannot be expressed as valid SPIR-V and then
+  re-derived into valid target shaders, it is not considered fully migrated
 
 ### 3. Move the `wgpu` backend to artifact-driven runtime setup
 
@@ -110,6 +161,8 @@ Acceptance point for this phase:
 - all currently enabled `wgpu` variants generate SPIR-V, WGSL, and metadata successfully
 - all `wgpu` pipelines create successfully from generated WGSL and metadata
 - no runtime WGSL parsing remains
+- wasm-facing `wgpu` builds continue to consume WGSL plus metadata only; no wasm
+  runtime path ingests SPIR-V directly
 
 ### 4. Move the GL backend to consume generated GLSL
 
@@ -141,6 +194,11 @@ End-state rule:
 - artifact-backed variants are consumed by both backends
 - legacy-only variants are isolated behind explicit exceptions, not mixed into the main path
 - once each remaining GL-only family has a verified SPIR-V route, remove its legacy path
+
+Standards rule:
+
+- migrated shared variants are judged first against Khronos/W3C validity and
+  conformance expectations, then against existing WebRender behavior
 
 ## Implementation Sequence
 
@@ -185,6 +243,8 @@ End-state rule:
 - build fails on any missing stage artifact, missing metadata, or binding mismatch
 - generated metadata is deterministic across builds
 - artifact digests are stable for unchanged inputs
+- every canonical SPIR-V module passes `spirv-val`
+- target GLSL/ESSL emission is structurally valid for supported target profiles
 
 ### `wgpu` validation
 
@@ -192,6 +252,7 @@ End-state rule:
 - all render pipelines create successfully from generated artifacts
 - current `wgpu_backends.rs` coverage still passes
 - a parity test confirms generated metadata produces the same vertex layouts as the current hardcoded layout logic
+- representative shader families are exercised against WebGPU/WGSL validation expectations, ideally through reusable CTS-style cases or imported CTS-inspired fixtures
 
 ### GL validation
 
@@ -199,6 +260,7 @@ End-state rule:
 - program cache digests remain stable and target-specific
 - fallback remains correct for legacy-only GL extension families
 - no migrated variant uses runtime GLSL assembly anymore
+- representative migrated shared variants are checked against Khronos GL/ES expectations, using VK-GL-CTS-style coverage where practical
 
 ### Image/regression validation
 
@@ -214,13 +276,19 @@ End-state rule:
   - valid SPIR-V
   - valid WGSL
   - valid GL target source
+- add a standards-oracle test report for migrated shared families:
+  - SPIR-V validation status
+  - WGSL validation/load status
+  - GL target compile status
+  - WebRender parity status
 
 ## Assumptions And Defaults
 
 - Long-term canonical runtime artifact is generated SPIR-V plus reflected metadata
-- Initial authored source remains GLSL; manual SPIR-V authoring is not part of this migration
+- Initial authored source remains GLSL only as a migration importer; it is not the normative standard for migrated shared variants
 - Both backends are in scope, but migration is phased: `wgpu` first on the new artifact model, then GL shared variants, then GL-only exceptions
 - Generated artifacts remain build outputs only; they are not checked into the repo
-- `shaderc` is the GLSL -> SPIR-V compiler, `naga` handles SPIR-V -> WGSL and metadata validation, and SPIRV-Cross handles SPIR-V -> GLSL/ESSL
+- `shaderc` / `glslang` are the GLSL -> SPIR-V compilers, `spirv-val` is required for SPIR-V validity, `naga` handles SPIR-V -> WGSL and metadata validation, and SPIRV-Cross handles SPIR-V -> GLSL/ESSL
 - `ESSL 100` and other extension-heavy GL-only families stay on the legacy path until their SPIR-V derivation is explicitly validated
+- `wasm32-unknown-unknown` remains a first-class portability constraint: wasm runtime paths consume generated WGSL and metadata, not SPIR-V directly
 - No public embedders-facing renderer API changes are required; the meaningful interface changes are internal generated shader registry/types and backend device initialization logic
