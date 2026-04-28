@@ -79,6 +79,10 @@ pub fn boot() -> Result<Device, BootError> {
         required_features: REQUIRED_FEATURES,
         required_limits: wgpu::Limits {
             max_inter_stage_shader_variables: 28,
+            // Per §4.7: push-constant tier requires non-zero
+            // `max_immediate_size`. 128B matches Vulkan's portable
+            // minimum and is enough for per-draw flags / indices.
+            max_immediate_size: 128,
             ..Default::default()
         },
         ..Default::default()

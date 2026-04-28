@@ -398,25 +398,64 @@ draw call), debug labels populated.
 
 Checklist:
 
-- [ ] Author `shaders/brush_solid.wgsl` directly. No naga, no SPIR-V
-  intermediate.
-- [ ] `wgpu/pipeline.rs`: single pipeline cache entry; bind-group
-  layout has `has_dynamic_offset: true` for the per-draw uniform; at
-  least one `override` declared in the WGSL even if trivial, to
-  exercise the specialization path.
-- [ ] `wgpu/buffer.rs`: vertex+index arenas, plus a uniform arena
-  that sub-allocates at `min_uniform_buffer_offset_alignment`, plus a
-  storage-buffer-bound table (small, possibly just one entry) so the
-  storage-buffer access pattern is exercised end-to-end.
-- [ ] `wgpu/pass.rs`: accepts `DrawIntent`s, flushes them into one
-  render pass; `BeginRenderPass` exactly once for this slice.
-- [ ] Test: a rectangle render is *recorded* (not drawn), then
-  *flushed*; pixel-diff against an embedded reference PNG.
-- [ ] No file exceeds ~600 LOC.
+- [x] Authored
+  [`shaders/brush_solid.wgsl`](../webrender/src/device/wgpu/shaders/brush_solid.wgsl)
+  directly. No naga, no SPIR-V intermediate.
+- [x] [`wgpu/pipeline.rs`](../webrender/src/device/wgpu/pipeline.rs):
+  single pipeline `build_brush_solid`; bind-group layout has
+  `has_dynamic_offset: true` for the per-draw uniform;
+  `MAX_PALETTE_ENTRIES` declared as a WGSL `override` and supplied
+  via `PipelineCompilationOptions::constants` to exercise the
+  specialization path.
+- [x] [`wgpu/buffer.rs`](../webrender/src/device/wgpu/buffer.rs):
+  uniform arena that sub-allocates at
+  `min_uniform_buffer_offset_alignment`, plus a storage-buffer-bound
+  palette so the §4.6 storage-buffer access pattern runs end-to-end.
+- [x] [`wgpu/pass.rs`](../webrender/src/device/wgpu/pass.rs):
+  `DrawIntent` accepted and flushed into one render pass;
+  `BeginRenderPass` exactly once per `flush_pass` call.
+- [x] Test: `device::wgpu::tests::render_rect_smoke` records a
+  single `DrawIntent`, flushes it via `pass::flush_pass`, reads back
+  the 8×8 target, and asserts the centre-row pixel matches the
+  palette-bound colour. Single-sample pixel check for S2's smallest-
+  end-to-end purpose; full PNG oracle comparison comes online in S3.
+- [x] No file exceeds ~600 LOC.
 
 S2 is the slice that *sets* the architectural shape. S4 and S6 then
 extend that shape across more shaders and scenes; the patterns do
 not change.
+
+**Sequenced fixes that landed during S2**:
+
+- `wgpu::PushConstantRange` was removed in wgpu 29;
+  `PipelineLayoutDescriptor` carries a single `immediate_size: u32`
+  instead. There is no per-stage range — the shader's
+  `var<immediate>` declaration locks the stage(s) that read it.
+- `PipelineLayoutDescriptor::bind_group_layouts` is now
+  `&[Option<&BindGroupLayout>]` — sparse layouts allowed; present
+  entries must be wrapped in `Some(&layout)`.
+- `PipelineCompilationOptions::constants` is `&[(&str, f64)]`, not a
+  `HashMap`. The slice must outlive the options struct.
+- `RenderPipelineDescriptor::multiview` was renamed to
+  `multiview_mask` (matches `RenderPassDescriptor::multiview_mask`).
+- `RenderPass::set_immediates(offset, data)` takes only two args; the
+  stage is implicit (inferred from the pipeline's `immediate_size`
+  declaration plus the shader's `var<immediate>` reads).
+- WGSL `var<push_constant>` was renamed to `var<immediate>` in
+  naga 29's WGSL parser. `push_constant` is kept as a reserved
+  keyword so the parser surfaces a clear error when old code is
+  encountered. The SPIR-V backend still maps `Immediate` →
+  `PushConstant` storage class.
+- WGSL override-specialized array sizes (`array<T, OVERRIDE>`)
+  cannot be the top-level type of a storage binding: storage bindings
+  require their type to be `CREATION_RESOLVED` at module creation,
+  but override values aren't supplied until pipeline creation. Use a
+  runtime-sized array (`array<T>`) for the binding and apply the
+  override elsewhere (e.g., index clamps).
+- `Limits::max_immediate_size` defaults to `0` even when
+  `Features::IMMEDIATES` is enabled. Must be requested explicitly
+  (set to 128 in `core.rs::boot` — portable Vulkan minimum).
+  Features enable capability; limits unlock budget.
 
 ### S3 — Reference oracle capture
 
@@ -592,8 +631,14 @@ S0 → (S1 ∥ S3) → S2 → S4 → (S5 ∥ S6) → S7 → S8 → S9.
 - **S1**: ✅ landed 2026-04-28. `boot_clear_readback_smoke` test
   boots wgpu, clears a 4×4 target to red, reads back, asserts the
   pixel matches (255, 0, 0, 255). 1.29s test runtime.
-- **S2**: single rectangle renders correctly against embedded
-  reference PNG.
+- **S2**: ✅ landed 2026-04-28.
+  `device::wgpu::tests::render_rect_smoke` records a single
+  `DrawIntent`, flushes via `pass::flush_pass` into one render pass,
+  reads back the 8×8 target, asserts the centre-row pixel matches
+  the palette-bound colour. Exercises §4.6 storage buffer, §4.7
+  dynamic-offset uniform + immediate (push constant), §4.8 record-
+  then-flush, §4.9 WGSL override specialization. 0.78s for both
+  wgpu tests combined.
 - **S3**: oracle PNGs frozen for the seed scene set; capture procedure
   documented.
 - **S4**: each seed scene passes pixel-diff against oracle.

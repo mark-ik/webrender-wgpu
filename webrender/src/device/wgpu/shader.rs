@@ -4,3 +4,7 @@
 
 //! WGSL module loading + cache (`include_str!`-based); WGSL `override`
 //! specialization. See plan §4.9, §6 S1.
+
+/// Solid-colour brush shader. Authored WGSL; exercises override,
+/// dynamic uniform, storage buffer, and push-constant tiers.
+pub const BRUSH_SOLID_WGSL: &str = include_str!("shaders/brush_solid.wgsl");

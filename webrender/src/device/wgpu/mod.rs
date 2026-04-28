@@ -16,3 +16,6 @@ pub mod pipeline;
 pub mod pass;
 pub mod frame;
 pub mod readback;
+
+#[cfg(test)]
+mod tests;
