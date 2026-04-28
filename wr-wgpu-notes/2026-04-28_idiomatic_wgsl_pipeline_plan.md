@@ -335,7 +335,7 @@ Checklist:
   and `[workspace.package]` setup as 5 packaging-prep commits we did
   not inherit. Adopting Servo's `[workspace.package]` workspace-managed
   pattern is deferred; manual per-crate bumps are sufficient for now.
-- [ ] Push to `origin/idiomatic-wgpu-pipeline`
+- [x] Pushed to `origin/idiomatic-wgpu-pipeline`
 - [x] Added superseded notice + link to this doc on:
   - [2026-04-27_dual_servo_parity_plan.md](2026-04-27_dual_servo_parity_plan.md)
   - [2026-04-18_upstream_cherry_pick_plan.md](2026-04-18_upstream_cherry_pick_plan.md)
@@ -354,30 +354,38 @@ result via pixel readback, exits clean.
 
 Checklist:
 
-- [ ] New module `webrender/src/device/wgpu/` (decomposed from day
-  one; no file > ~600 LOC):
-  - `wgpu/mod.rs` — public surface
-  - `wgpu/core.rs` — Adapter / Device / Queue boot, surface lifecycle,
-    `REQUIRED_FEATURES` check, debug-label population
-  - `wgpu/format.rs` — wgpu↔WebRender format mapping (pure functions)
-  - `wgpu/buffer.rs` — vertex/index/uniform/storage buffer arenas;
-    dynamic-offset suballocator
-  - `wgpu/texture.rs` — Texture/View/Sampler caches; async upload paths
-  - `wgpu/shader.rs` — WGSL module loading + cache (`include_str!`-
-    based); WGSL `override` specialization
-  - `wgpu/binding.rs` — BindGroupLayout + BindGroup caches
-  - `wgpu/pipeline.rs` — RenderPipeline cache; async compile;
-    `wgpu::PipelineCache` disk-backed reuse
-  - `wgpu/pass.rs` — render-pass batching; ingests `DrawIntent`s;
-    flushes per pass
-  - `wgpu/frame.rs` — CommandEncoder lifecycle, submit/present
-  - `wgpu/readback.rs` — pixel readback for tests
-- [ ] Headless test target: clears to a known color, reads back,
-  asserts exact match.
-- [ ] No coupling to anything in `webrender/res/`,
-  `webrender_build/src/`, or `webrender/src/shader_source/`.
-- [ ] No `super::GpuDevice` trait conformance. The renderer body
+- [x] New module `webrender/src/device/wgpu/` scaffolded (decomposed
+  from day one; no file > ~600 LOC):
+  - [x] `wgpu/mod.rs` — public surface (declares submodules)
+  - [x] `wgpu/core.rs` — Adapter / Device / Queue boot,
+    `REQUIRED_FEATURES` check, debug-label population. **Boot
+    landed.** `IMMEDIATES | DUAL_SOURCE_BLENDING` required;
+    rejection on missing features. `max_inter_stage_shader_variables: 28`
+    matches servo-wgpu's known wgpu 29 setting. Surface lifecycle
+    deferred until a windowed slice surfaces it.
+  - [x] `wgpu/format.rs`, `wgpu/buffer.rs`, `wgpu/texture.rs`,
+    `wgpu/shader.rs`, `wgpu/binding.rs`, `wgpu/pipeline.rs`,
+    `wgpu/pass.rs`, `wgpu/frame.rs`, `wgpu/readback.rs` — stub
+    files with module docs; populated in S2 / S6.
+- [x] Headless test target: `device::wgpu::core::tests::boot_clear_readback_smoke`
+  — boots, clears a 4×4 to red, reads back, asserts pixel matches.
+  Inline in `core.rs` for now; refactor into `frame.rs` /
+  `readback.rs` when there's a second usage.
+- [x] No coupling to `webrender/res/`, `webrender_build/src/`, or
+  `webrender/src/shader_source/`.
+- [x] No `super::GpuDevice` trait conformance. The renderer body
   adapts to wgpu at the device boundary.
+
+**Sequenced fixes that landed during S1**:
+
+- `wgpu::Features::PUSH_CONSTANTS` was removed in wgpu 29 (renamed
+  to `IMMEDIATES` per WebGPU spec evolution — same underlying GPU
+  primitive). `core.rs::REQUIRED_FEATURES` and the §4.7 plan prose
+  use the wgpu 29 name in code; plan keeps "push constants" in prose
+  since it's the better-known name across Vulkan / Metal / DX12.
+- wgpu 29 added `depth_slice` to `RenderPassColorAttachment` and
+  `multiview_mask` to `RenderPassDescriptor`. Smoke test includes
+  both as `None`.
 
 ### S2 — Smallest end-to-end shader, sets the architectural shape
 
@@ -581,8 +589,9 @@ S0 → (S1 ∥ S3) → S2 → S4 → (S5 ∥ S6) → S7 → S8 → S9.
 
 - **S0**: branch exists; supersession notes added on the six prior
   plans; PROGRESS.md updated.
-- **S1**: cleared frame captured via pixel readback; binary exits
-  clean.
+- **S1**: ✅ landed 2026-04-28. `boot_clear_readback_smoke` test
+  boots wgpu, clears a 4×4 target to red, reads back, asserts the
+  pixel matches (255, 0, 0, 255). 1.29s test runtime.
 - **S2**: single rectangle renders correctly against embedded
   reference PNG.
 - **S3**: oracle PNGs frozen for the seed scene set; capture procedure

@@ -4,6 +4,7 @@
 
 mod gl;
 pub mod query_gl;
+pub mod wgpu;
 
 pub use self::gl::*;
 pub use self::query_gl as query;
