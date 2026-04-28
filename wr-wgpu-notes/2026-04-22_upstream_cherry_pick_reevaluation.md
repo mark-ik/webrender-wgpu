@@ -1,5 +1,7 @@
 # 2026-04-22 Upstream Cherry-Pick Re-Evaluation
 
+> **SUPERSEDED 2026-04-28** by [2026-04-28_idiomatic_wgsl_pipeline_plan.md](2026-04-28_idiomatic_wgsl_pipeline_plan.md). Preserved for context; do not act on it.
+
 This note re-evaluates the 2026-04-18 cherry-pick watchlist against the current
 state of the local fork and the current state of `upstream/upstream` in
 `servo/webrender`.

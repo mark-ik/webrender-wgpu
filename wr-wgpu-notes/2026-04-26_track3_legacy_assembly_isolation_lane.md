@@ -1,5 +1,7 @@
 # Track 3 — Runtime Legacy Source Assembly Isolation Lane
 
+> **SUPERSEDED 2026-04-28** by [2026-04-28_idiomatic_wgsl_pipeline_plan.md](2026-04-28_idiomatic_wgsl_pipeline_plan.md). Preserved for context; do not act on it.
+
 This note captures a concrete slice ladder for Phase 5 closure Track 3 of
 `2026-04-18_spirv_shader_pipeline_plan.md`: shrink the runtime legacy
 GLSL prefix/main-string assembly helpers until they are reachable only from

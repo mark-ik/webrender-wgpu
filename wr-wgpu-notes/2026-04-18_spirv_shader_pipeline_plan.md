@@ -1,5 +1,7 @@
 # Authored-SPIR-V, Naga-Derived Shader Pipeline for `webrender-wgpu`
 
+> **SUPERSEDED 2026-04-28** by [2026-04-28_idiomatic_wgsl_pipeline_plan.md](2026-04-28_idiomatic_wgsl_pipeline_plan.md). Preserved for context; do not act on it.
+
 ## Summary
 
 Reset the branch around a different source of truth.

@@ -1,5 +1,7 @@
 # Dual-Servo Parity Plan
 
+> **SUPERSEDED 2026-04-28** by [2026-04-28_idiomatic_wgsl_pipeline_plan.md](2026-04-28_idiomatic_wgsl_pipeline_plan.md). Preserved for context; do not act on it.
+
 ## Goal
 
 `webrender-wgpu` should be capable of driving both:

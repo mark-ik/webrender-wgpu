@@ -170,6 +170,103 @@ is one backend feature. There is no `gl_backend`, no compile matrix,
 no parity gate, no dual-write glue, no sync layer. Every change goes
 through one path.
 
+### 4.6 Storage buffers, not data textures
+
+WebRender today uses 2D textures (`gpu_cache_texture`,
+`transforms_texture`, `prim_header_texture`) as carriers for
+structured GPU-side data — a workaround for GL pre-4.3 not having
+SSBOs broadly. Modern wgpu has `BufferBindingType::Storage {
+read_only: true }` on every backend we target. The wgpu-native shape
+uses storage buffers for shared tables: direct random access, no
+`texelFetch` 2D-coord arithmetic, no RGBA32F packing of non-color
+data.
+
+Caveats:
+
+- Respect `max_storage_buffer_binding_size` (typically 128MB portable;
+  up to 2GB on some desktop wgpu/Vulkan but not portably).
+- Respect `max_storage_buffers_per_shader_stage` (commonly 8–16;
+  budget shader bindings accordingly).
+- WebRender's existing `gpu_cache` paging logic carries forward for
+  tables that grow past binding-size limits; only the access path
+  changes.
+
+### 4.7 Uniform hierarchy
+
+Per-draw and per-frame data uses a four-tier hierarchy chosen by size
+and update cadence:
+
+| Tier | Size | Cadence | Use |
+|---|---|---|---|
+| Push constants | ≤128B (Vulkan), ≤256B (Metal) | per-draw | flags, indices, tile coords |
+| Dynamic uniform buffer | aligned to `min_uniform_buffer_offset_alignment` (typically 256B), up to `max_uniform_buffer_binding_size` (~64KB) | per-draw | per-primitive transforms, material refs |
+| Storage buffer | large, indexed | per-frame, indexed per draw | shared tables (gpu_cache, transforms, prim instance arrays) |
+| Static uniform buffer | small | per-pass / per-frame | viewport, time, global constants |
+
+Bind-group layouts are created once per pipeline. Bind groups are
+created with `has_dynamic_offset: true` so a single
+`set_bind_group(offset)` per draw selects the per-draw region without
+rebinding the group.
+
+### 4.8 Record draws, never execute inline
+
+The device API surface has no `draw()`. Display-list traversal
+records `DrawIntent` values — pipeline, bind groups, dynamic offsets,
+vertex range — into per-pass buckets. `pass.rs` flushes a bucket as
+a single `wgpu::RenderPass`, sorting intents by pipeline within the
+pass to minimize state changes. One `BeginRenderPass` per target
+switch.
+
+This reflects the Vulkan/Metal/DX12 cost model: render-pass
+boundaries are expensive, pipeline switches inside a pass are cheap,
+draw calls inside a pipeline group are very cheap. WebRender already
+has a pass structure in `RenderTaskGraph` — `pass.rs`'s job is to
+consume that structure correctly into wgpu render-pass lifetimes,
+not to invent batching.
+
+### 4.9 Pipeline specialization via WGSL overrides
+
+WGSL `override` declarations are pipeline-time constants. Many of
+the ~50 variants in `WgpuShaderVariant::ALL` are GLSL `#define`
+permutations (alpha vs. opaque, fast-path vs. full, dual-source vs.
+single). With overrides, those collapse to **one WGSL source plus N
+specialized pipelines** via `wgpu::PipelineLayoutDescriptor` constant
+overrides. Keeps the shader corpus DRY, isolates true family
+differences (brush vs. text vs. clip vs. composite) from per-variant
+parameter differences, and reduces the WGSL authoring burden in S6.
+
+### 4.10 Required wgpu features
+
+The device requires a documented `wgpu::Features` set at adapter
+selection. Adapters without the required set are rejected at boot.
+
+Core required:
+
+- `PUSH_CONSTANTS` (per §4.7)
+- `DUAL_SOURCE_BLENDING` (subpixel AA in `PsTextRunDualSource` family)
+
+Optional / capability-dependent:
+
+- `INDIRECT_FIRST_INSTANCE` — if indirect drawing is introduced later
+- `PIPELINE_STATISTICS_QUERY` — debug only
+
+The required set is declared in `core.rs::REQUIRED_FEATURES` so
+adapter selection is explicit and reviewable. Debug labels on
+buffers/textures/pipelines/passes are populated by default (free
+RenderDoc/Xcode/PIX value).
+
+### 4.11 Async pipeline compilation + on-disk pipeline cache
+
+Pipeline creation is expensive (hundreds of ms for complex shaders).
+S6's ~50-shader corpus, even after override-based collapse, is enough
+that synchronous compile-at-boot would be a visible startup hit.
+
+- All pipelines are compiled async at boot from `pipeline.rs`'s cache.
+- `wgpu::PipelineCache` (disk-backed serialized pipelines) is enabled
+  so second-run boots reuse compiled artifacts.
+- Until the cache warms, the app shows a "warming" state rather than
+  blocking the main thread. Visible only on first run.
+
 ---
 
 ## 5. Anti-patterns to avoid
@@ -196,9 +293,25 @@ through one path.
   textures, compute, async submission — wgpu uses it. Goal is a wgpu
   backend that is *better* than the old GL path where wgpu makes that
   possible, not merely equivalent.
+- **No data textures for structured data.** Per §4.6: shared tables
+  (gpu_cache, transforms, prim instance arrays) live in storage
+  buffers, not 2D textures. Carrying `texelFetch` access patterns
+  forward is the GL-era assumption we are explicitly removing.
+- **No per-draw bind-group creation.** Bind groups are created at
+  pipeline-binding setup with `has_dynamic_offset: true`;
+  `set_bind_group(offset)` selects per-draw data. Creating fresh bind
+  groups per draw is the cost we're eliminating.
+- **No inline `device.draw()`.** Per §4.8: display-list traversal
+  records `DrawIntent`s; `pass.rs` flushes per pass. There is no API
+  surface for "execute this draw now."
+- **No GLSL-style `#define` permutation explosion.** Per §4.9: where
+  variants differ only by parameter (alpha-vs-opaque,
+  fast-path-vs-full, dual-source toggle), use WGSL `override`
+  specialization. New shader source only when the family genuinely
+  differs.
 - **No new code on `spirv-shader-pipeline` or its descendants.** That
-  branch is frozen at S0. Bug fixes only if absolutely required for an
-  in-flight servo-wgpu user; never feature additions.
+  branch is frozen at S0. Bug fixes only if absolutely required for
+  an in-flight servo-wgpu user; never feature additions.
 
 ---
 
@@ -208,22 +321,30 @@ Each slice is independently shippable and produces a real artifact.
 
 ### S0 — Branch and freeze
 
-**Done condition**: `wgpu-native` branch exists off `upstream/upstream`;
+**Done condition**: branch off `upstream/upstream` exists;
 `spirv-shader-pipeline` documented as superseded.
 
 Checklist:
 
-- [ ] `git switch -c wgpu-native upstream/upstream`
-- [ ] Push to `origin/wgpu-native`
-- [ ] Add a superseded notice + link to this doc on:
+- [x] `git switch -c idiomatic-wgpu-pipeline upstream/upstream`
+- [x] Bump crate versions to satisfy servo-wgpu's `^0.68` patch:
+  `webrender`, `webrender_api`, `webrender_build`, `wr_glyph_rasterizer`
+  to `0.68.0`; matching inter-crate dep version refs updated. Mozilla's
+  `upstream/upstream` is frozen at `0.62.0` because Mozilla doesn't bump
+  versions in gecko-dev — Servo's `upstream/0.68` adds the version-bump
+  and `[workspace.package]` setup as 5 packaging-prep commits we did
+  not inherit. Adopting Servo's `[workspace.package]` workspace-managed
+  pattern is deferred; manual per-crate bumps are sufficient for now.
+- [ ] Push to `origin/idiomatic-wgpu-pipeline`
+- [x] Added superseded notice + link to this doc on:
   - [2026-04-27_dual_servo_parity_plan.md](2026-04-27_dual_servo_parity_plan.md)
   - [2026-04-18_upstream_cherry_pick_plan.md](2026-04-18_upstream_cherry_pick_plan.md)
   - [2026-04-22_upstream_cherry_pick_reevaluation.md](2026-04-22_upstream_cherry_pick_reevaluation.md)
   - [2026-04-18_spirv_shader_pipeline_plan.md](2026-04-18_spirv_shader_pipeline_plan.md)
   - [2026-04-21_spirv_pipeline_reset_execution.md](2026-04-21_spirv_pipeline_reset_execution.md)
   - [2026-04-26_track3_legacy_assembly_isolation_lane.md](2026-04-26_track3_legacy_assembly_isolation_lane.md)
-- [ ] Note in [PROGRESS.md](PROGRESS.md): `spirv-shader-pipeline` is
-  dead state, no new work lands there.
+- [x] [PROGRESS.md](PROGRESS.md) updated: idiomatic-wgpu-pipeline is
+  the active branch; spirv-shader-pipeline is dead state.
 
 ### S1 — Empty wgpu device skeleton
 
@@ -233,32 +354,61 @@ result via pixel readback, exits clean.
 
 Checklist:
 
-- [ ] New module `webrender/src/device/wgpu/` (decomposed from day one)
+- [ ] New module `webrender/src/device/wgpu/` (decomposed from day
+  one; no file > ~600 LOC):
   - `wgpu/mod.rs` — public surface
-  - `wgpu/init.rs` — adapter / device / queue boot
-  - `wgpu/frame.rs` — render pass / encoder bookkeeping
-  - `wgpu/readback.rs` — pixel capture for tests
+  - `wgpu/core.rs` — Adapter / Device / Queue boot, surface lifecycle,
+    `REQUIRED_FEATURES` check, debug-label population
+  - `wgpu/format.rs` — wgpu↔WebRender format mapping (pure functions)
+  - `wgpu/buffer.rs` — vertex/index/uniform/storage buffer arenas;
+    dynamic-offset suballocator
+  - `wgpu/texture.rs` — Texture/View/Sampler caches; async upload paths
+  - `wgpu/shader.rs` — WGSL module loading + cache (`include_str!`-
+    based); WGSL `override` specialization
+  - `wgpu/binding.rs` — BindGroupLayout + BindGroup caches
+  - `wgpu/pipeline.rs` — RenderPipeline cache; async compile;
+    `wgpu::PipelineCache` disk-backed reuse
+  - `wgpu/pass.rs` — render-pass batching; ingests `DrawIntent`s;
+    flushes per pass
+  - `wgpu/frame.rs` — CommandEncoder lifecycle, submit/present
+  - `wgpu/readback.rs` — pixel readback for tests
 - [ ] Headless test target: clears to a known color, reads back,
   asserts exact match.
 - [ ] No coupling to anything in `webrender/res/`,
   `webrender_build/src/`, or `webrender/src/shader_source/`.
+- [ ] No `super::GpuDevice` trait conformance. The renderer body
+  adapts to wgpu at the device boundary.
 
-### S2 — Smallest end-to-end shader
+### S2 — Smallest end-to-end shader, sets the architectural shape
 
 **Done condition**: a single rectangle renders at the correct color
-and position via authored WGSL.
+and position via authored WGSL, **using the architectural patterns
+from §4.6–4.9 from line one**: storage-buffer access for structured
+data, dynamic-offset uniform for per-draw uniforms, push constants
+for per-draw flags, `DrawIntent` recording into `pass.rs` (no inline
+draw call), debug labels populated.
 
 Checklist:
 
-- [ ] Author `shaders/brush_solid.wgsl` (or equivalent — the simplest
-  family) directly. No naga, no SPIR-V intermediate.
-- [ ] New module `webrender/src/device/wgpu/pipeline.rs`: bind-group
-  layout + render-pipeline construction for the one shader.
-- [ ] Vertex/index buffer setup: separate
-  `webrender/src/device/wgpu/buffers.rs`.
-- [ ] Test: render a 100×100 red rect at (50, 50) on a 200×200 frame;
-  pixel-diff against an embedded reference PNG.
-- [ ] No file in this slice exceeds ~600 LOC.
+- [ ] Author `shaders/brush_solid.wgsl` directly. No naga, no SPIR-V
+  intermediate.
+- [ ] `wgpu/pipeline.rs`: single pipeline cache entry; bind-group
+  layout has `has_dynamic_offset: true` for the per-draw uniform; at
+  least one `override` declared in the WGSL even if trivial, to
+  exercise the specialization path.
+- [ ] `wgpu/buffer.rs`: vertex+index arenas, plus a uniform arena
+  that sub-allocates at `min_uniform_buffer_offset_alignment`, plus a
+  storage-buffer-bound table (small, possibly just one entry) so the
+  storage-buffer access pattern is exercised end-to-end.
+- [ ] `wgpu/pass.rs`: accepts `DrawIntent`s, flushes them into one
+  render pass; `BeginRenderPass` exactly once for this slice.
+- [ ] Test: a rectangle render is *recorded* (not drawn), then
+  *flushed*; pixel-diff against an embedded reference PNG.
+- [ ] No file exceeds ~600 LOC.
+
+S2 is the slice that *sets* the architectural shape. S4 and S6 then
+extend that shape across more shaders and scenes; the patterns do
+not change.
 
 ### S3 — Reference oracle capture
 
@@ -338,6 +488,23 @@ Checklist by family:
 - [ ] Each family has at least one scene in the oracle.
 - [ ] Pipeline cache decomposed: separate cache per family or by
   pipeline-key shape; no single 2000-LOC pipeline-cache impl.
+- [ ] **WGSL override-based specialization (per §4.9)**: where two
+  variants in `WgpuShaderVariant::ALL` differ only by parameter
+  (alpha vs. opaque, fast-path vs. full, dual-source toggle),
+  collapse to one WGSL source + N specialized pipelines via
+  `PipelineLayoutDescriptor` overrides. Document the
+  family-vs-variant distinction in the corpus.
+- [ ] **Glyph cache: texture-array migration.** Replace the
+  single-atlas approach with a layered texture array; layer-per-
+  format possible (color emoji vs. mono glyph), no fragmentation,
+  layer growth on demand. Sub-task of S6, not blocking; can land
+  after the rest of the corpus. Atlas is owned internally by
+  webrender-wgpu (per Q14, resolved 2026-04-28).
+- [ ] **`wgpu::RenderBundle` for picture-cache tile replay**
+  (investigation): if WebRender's picture cache holds rendered tiles
+  that replay across frames, recording each tile as a render bundle
+  avoids re-encoding cost. Frame-time win; investigate after the
+  corpus is authored, not before.
 
 ### S7 — Servo-wgpu integration
 
@@ -474,9 +641,8 @@ S0 → (S1 ∥ S3) → S2 → S4 → (S5 ∥ S6) → S7 → S8 → S9.
 
 These belong to S0/S1 and are flagged for input rather than assumed.
 
-1. **Branch name.** `wgpu-native` (default), `wgpu-only`, or
-   `wgpu-rebuild`? Bikeshed but matters for the next month of git
-   output.
+1. ~~**Branch name.**~~ Resolved 2026-04-28: branched
+   `idiomatic-wgpu-pipeline` from `upstream/upstream`.
 2. **Crate layout.** Stay with `webrender/` and rebuild internals,
    rename to `webrender_wgpu`, or split out a new top-level
    `wgpu_renderer/` crate that depends on webrender for display-list
@@ -509,8 +675,95 @@ These belong to S0/S1 and are flagged for input rather than assumed.
    to main.
 8. **Disposition of the frozen `spirv-shader-pipeline` branch.** Keep
    indefinitely as historical artifact, or delete after some interval
-   once `wgpu-native` is mature? Default: keep until S9 receipts
-   land, then decide.
+   once `idiomatic-wgpu-pipeline` is mature? Default: keep until S9
+   receipts land, then decide.
+
+9. **Variant collapse via WGSL overrides.** S6 §4.9 plans to collapse
+   ~50 variants via override specialization. How aggressive: collapse
+   all parameter-only variants (likely about half the corpus), or
+   stay closer to one-WGSL-per-variant for readability and only
+   collapse where the parameter delta is small? Default: aggressive
+   collapse where the family is the same; re-split only if a
+   specialization causes shader compile-time blow-up or readability
+   issues.
+
+10. **Decision recorded — compute-based clipping is deferred.**
+    Floated during planning. WebRender's clip system (`cs_clip_*`
+    shader family + clip-mask render targets + `RenderTaskGraph`
+    clip dependency tracking) is a multi-quarter rewrite with
+    active research debate (rasterized vs. SDF vs. per-tile compute
+    clip). Conflating it with this branch gates S4–S6 on an
+    unsolved-for-WebRender problem. The existing rasterized-clip
+    structure ports to wgpu cleanly as authored WGSL. Compute-based
+    clip rewrite is a follow-up plan, not part of this one.
+
+11. **Decision recorded — texture-array glyph cache is a S6
+    sub-task.** Floated during planning. Single-atlas inherited from
+    `upstream/upstream` is correct; texture-array migration is an
+    optimization (no fragmentation, layer-per-format possible)
+    slotted as a S6 sub-task, not a core architectural pillar.
+
+12. **`wgpu::RenderBundle` for retained content** (investigation,
+    not core). Picture-cache tile replay across frames without
+    re-encoding is a frame-time win. Slot for investigation in S6
+    after the shader corpus is authored.
+
+13. **Async pipeline compilation UX.** Per §4.11, first-run pipeline
+    compilation is async + the app shows a "warming" state until
+    pipelines resolve. What does "warming" look like for Servo's
+    integration — empty page, loading splash, or render-anyway-
+    with-fallback-pipeline? Default: render fallback (cleared
+    background) until the pipeline for a given draw is ready;
+    don't block the main thread.
+
+14. **Decision recorded 2026-04-28 — webrender-wgpu owns the glyph
+    atlas (resolution (a) below).** Confirmed: webrender-wgpu keeps
+    the internal atlas; graphshell-gpu does not duplicate it on
+    content paths that land in WebRender. Graphshell's
+    `2026-04-20_graphshell_gpu_spec.md §5.5` (currently "leaning")
+    needs a corresponding update to qualify its "single glyph atlas"
+    line as scoped to the graphshell-gpu-owned paths (Direct Lane /
+    vello), not the WebRender path. Original conflict context
+    preserved below for posterity.
+
+    - **WebRender does not shape text** — embedders shape, then
+      submit pre-shaped glyph runs via the display-list API. Parley
+      sits *above* webrender-wgpu (in graphshell's HTML Lane:
+      Stylo → Taffy → Parley → webrender-wgpu) and is API-compatible
+      without any change to webrender-wgpu's text path. **There is
+      no parley-vs-swash conflict at the shaping layer.**
+    - **Atlas ownership *is* the conflict.** Webrender-wgpu owns the
+      glyph atlas internally today via [wr_glyph_rasterizer/](../wr_glyph_rasterizer/).
+      Graphshell's [graphshell_gpu_spec.md §5.5](../../graphshell/design_docs/graphshell_docs/technical_architecture/2026-04-20_graphshell_gpu_spec.md)
+      states a "leaning" decision for **a single glyph atlas owned
+      by `graphshell-gpu`**, keyed by
+      `(font_id, glyph_id, size_bucket, subpixel_pos)`. Both can't
+      be the canonical atlas.
+
+    Three resolutions:
+
+    - (a) **Status quo / defer** — webrender-wgpu keeps its internal
+      atlas; graphshell's §5.5 is revised to "single atlas, lives
+      inside the WebRender consumer." Cheapest. The current S6
+      glyph-cache sub-task implicitly assumes this. Reasonable
+      until graphshell-gpu actually needs an atlas for non-WebRender
+      renderers (vello, Direct Lane).
+    - (b) **Move the atlas out** — webrender-wgpu's text path is
+      reshaped so the atlas is borrowed from `graphshell-gpu`.
+      `wr_glyph_rasterizer` becomes a populator of a borrowed
+      atlas surface, not an owner. Bigger change; affects API
+      surface and texture-cache plumbing. Only worth it if
+      graphshell-gpu's vello/Direct-Lane atlas usage is concrete.
+    - (c) **Two atlases with key-level dedup** — each subsystem
+      keeps an atlas; they share the keying scheme but pages live
+      in both places. Usually worst-of-both-worlds; listed for
+      completeness.
+
+    **The decision lives in graphshell, not here.** This plan defers
+    to whichever direction graphshell-gpu lands; S6's texture-array
+    migration is mostly the same work in (a) and (b) up to the
+    ownership-boundary call. Default until graphshell-gpu work
+    reaches text: (a).
 
 ---
 

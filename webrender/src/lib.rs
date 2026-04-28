@@ -193,6 +193,7 @@ pub use crate::hit_test::SharedHitTester;
 pub use crate::internal_types::FastHashMap;
 pub use crate::screen_capture::{AsyncScreenshotHandle, RecordedFrameHandle};
 pub use crate::texture_cache::TextureCacheConfig;
+pub use crate::util::FastTransform;
 pub use api as webrender_api;
 pub use webrender_build::shader::{ProgramSourceDigest, ShaderKind};
 pub use crate::tile_cache::TileOffset;

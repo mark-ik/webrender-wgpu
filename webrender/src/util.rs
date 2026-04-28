@@ -1041,6 +1041,12 @@ impl<Src, Dst> Clone for FastTransform<Src, Dst> {
 
 impl<Src, Dst> Copy for FastTransform<Src, Dst> { }
 
+impl<Src, Dst> Default for FastTransform<Src, Dst> {
+    fn default() -> Self {
+        Self::identity()
+    }
+}
+
 impl<Src, Dst> FastTransform<Src, Dst> {
     pub fn identity() -> Self {
         FastTransform::Offset(Vector2D::zero())

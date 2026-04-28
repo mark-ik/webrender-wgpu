@@ -1,5 +1,7 @@
 # 2026-04-18 Upstream Cherry-Pick Plan
 
+> **SUPERSEDED 2026-04-28** by [2026-04-28_idiomatic_wgsl_pipeline_plan.md](2026-04-28_idiomatic_wgsl_pipeline_plan.md). Preserved for context; do not act on it.
+
 This note captures the recommended cherry-pick plan from `upstream/upstream`
 onto `wgpu-backend-0.68-experimental`, using `upstream/0.68` as the baseline.
 
