@@ -510,10 +510,14 @@ Checklist:
   **Promoted to its own follow-up plan**: the recon at S4-1/5
   closure (2026-04-28) showed 169 `self.device.*` callsites + 57
   unique device methods + ~25 GL-shaped imported types in
-  ~11.6k LOC of `webrender/src/renderer/`. Tracked in
-  [`2026-04-28_renderer_body_wgpu_adapter_plan.md`](2026-04-28_renderer_body_wgpu_adapter_plan.md).
-  Closure of that plan's slice A8 also closes this S4 checkbox and
-  starts the remaining four oracle scenes passing.
+  ~11.6k LOC of `webrender/src/renderer/`. Originally tracked in
+  the body-adapter plan; that plan was superseded 2026-04-29
+  by the
+  [pipeline-first migration plan](2026-04-29_pipeline_first_migration_plan.md)
+  (textures-first ordering preserved GL anti-patterns; "narrowest
+  first callsite" was a fiction — see new plan §1). Closure of the
+  new plan's phase D also closes this S4 checkbox and starts the
+  remaining four oracle scenes passing.
 - [x] Tolerance policy in place: exact match by default.
   `oracle_blank_smoke` asserts `count_pixel_diffs(..., tolerance=0)
   == 0` and passes. Documented `fuzzy-if` per scene only when a
@@ -678,16 +682,17 @@ S0 → (S1 ∥ S3) → S2 → S4 → (S5 ∥ S6) → S7 → S8 → S9.
   `png` subcommand on 0.68 doesn't declare the
   `keyframes`/`list-resources`/`watch` args; local oracle worktree
   carries a one-function patch to skip those decorators.
-- **S4**: ⏳ paused at 1/5 pending the renderer-body adapter plan.
+- **S4**: ⏳ paused at 1/5 pending the pipeline-first migration plan.
   - `blank` ✅ matches oracle exactly (3840×2160, tolerance 0) via
     `oracle_blank_smoke` (2026-04-28). Load-render-diff harness
     landed.
   - `rotated_line`, `fractional_radii`, `indirect_rotate`,
     `linear_aligned_border_radius` — gated on
-    [`2026-04-28_renderer_body_wgpu_adapter_plan.md`](2026-04-28_renderer_body_wgpu_adapter_plan.md)
-    slice A8. The remaining scenes need primitive rendering through
-    the renderer body, which itself needs its GL-shaped device
-    boundary rewritten to wgpu-native first.
+    [`2026-04-29_pipeline_first_migration_plan.md`](2026-04-29_pipeline_first_migration_plan.md)
+    phase D (which itself depends on P0–P8 — embedder handoff plus
+    each shader family migrated). The remaining scenes need primitive
+    rendering through the renderer body via the wgpu pipelines, which
+    is what P1+ delivers.
 - **S5**: chosen CTS subset green in CI.
 - **S6**: all ~50 shader programs authored; family-level reftests
   pass.

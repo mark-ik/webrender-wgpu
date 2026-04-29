@@ -1,13 +1,25 @@
 # Renderer-Body wgpu-Native Adapter Plan (2026-04-28)
 
-**Status**: Active follow-up to
-[2026-04-28 idiomatic-wgsl pipeline plan §S4](2026-04-28_idiomatic_wgsl_pipeline_plan.md).
-Spawned at S4-1/5 closure when recon surfaced the integration scope.
+**Status**: **Superseded 2026-04-29** by the
+[2026-04-29 pipeline-first migration plan](2026-04-29_pipeline_first_migration_plan.md).
+The body-adapter framing carried two GL-era assumptions:
+textures-first ordering preserved the GL data-as-texture
+anti-pattern, and "first per-pass callsite migration" was a
+fiction (every callsite touches a Texture, a Program, and a
+target — no narrowest-callsite exists in isolation). A2.X.5's
+internal `WgpuDevice::boot()` was a hack — two adapter
+selections, no shared textures with the embedder. Reverted as
+`40661cd22`.
 
-**Lane**: Rewrite webrender's renderer body so its boundary with the
-GPU is wgpu-native instead of GL-shaped. Per the parent plan §5,
-"no GL-shaped trait conformance" — the renderer body adapts to wgpu
-at its device boundary.
+**A1 / A2.X.0–4 / A2.3.0 work landed under this plan survives
+intact** as the wgpu-native foundation the new plan builds on
+(see new plan §2). This file is preserved as historical record
+of the adapter-first ordering and its limits.
+
+**Lane (historical)**: Rewrite webrender's renderer body so its
+boundary with the GPU is wgpu-native instead of GL-shaped. Per the
+parent plan §5, "no GL-shaped trait conformance" — the renderer
+body adapts to wgpu at its device boundary.
 
 **Related**:
 

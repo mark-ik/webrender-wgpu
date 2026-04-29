@@ -1,0 +1,526 @@
+# Pipeline-First wgpu Migration Plan (2026-04-29)
+
+**Status**: Active — supersedes the
+[2026-04-28 renderer-body wgpu adapter plan](2026-04-28_renderer_body_wgpu_adapter_plan.md).
+
+**Lane**: Replace WebRender's GL backend with an idiomatic wgpu / WGSL
+backend, end-to-end. No GL-shaped types preserved as wgpu wrappers. No
+second wgpu boot. No data-as-texture carryover. Renderer-body migration
+sequenced one shader family at a time, with each slice producing a real
+wgpu-native rendering operation through the renderer body.
+
+**Related**:
+
+- Parent plan:
+  [2026-04-28_idiomatic_wgsl_pipeline_plan.md](2026-04-28_idiomatic_wgsl_pipeline_plan.md)
+- Superseded follow-up:
+  [2026-04-28_renderer_body_wgpu_adapter_plan.md](2026-04-28_renderer_body_wgpu_adapter_plan.md)
+  (A1 / A2.X.0–4 / A2.3.0 work landed on that plan survives intact —
+  see §2)
+- Existing wgpu module: [`webrender/src/device/wgpu/`](../webrender/src/device/wgpu/)
+- Existing GL device (target for deletion in phase D):
+  [`webrender/src/device/gl.rs`](../webrender/src/device/gl.rs)
+
+---
+
+## 1. Why this supersedes the prior adapter plan
+
+The 2026-04-28 adapter plan ordered migration A2 (textures) → A3
+(vertex / buffer) → A4 (shader / pipeline) → … → A8 (re-export flip).
+That ordering carried two GL-era assumptions:
+
+1. **Textures-first treats data as the unit.** wgpu does not migrate
+   textures in isolation — a texture only matters as an input to a
+   pipeline's bind group. Migrating
+   `dither_matrix_texture: Option<Texture>` →
+   `Option<WgpuTexture>` would have preserved the GL anti-pattern of
+   using a 2D texture as a 64-byte data carrier (parent plan §4.6
+   forbids this for shared tables; dither is the same shape). The
+   fully idiomatic dither shape is a WGSL `const` inline in the
+   consuming shaders.
+2. **A2.X "first per-pass callsite migration" was a fiction.** Every
+   renderer pass-encoding callsite touches a `Texture`, a `Program`,
+   and a render target — you can't migrate one without the others.
+   Trying to find a "narrowest first callsite" forces either
+   parallel wgpu-native plumbing for one path or a `Texture` /
+   `DrawTarget` dual-handle bridge, both of which are shims.
+
+The adapter plan also let A2.X.5 install a `WgpuDevice` on `Renderer`
+via an internal `WgpuDevice::boot()`, separate from the embedder's
+wgpu device. Two adapter selections, two devices, no shared textures,
+no possible `ExternalTexture` integration — exactly the kind of
+"wgpu-shaped GL" the parent plan §5 forbids. Commit `ad655dc09` is
+reverted (`40661cd22`); the reverted state is preserved in branch
+history as a documented misstep.
+
+This plan reorders around shader families. Each slice migrates one
+family end-to-end with all of its inputs (textures, buffers, bindings,
+pipeline, pass encoding) reshaped to their idiomatic wgpu form
+together. The renderer's main draw loop dispatches per-family between
+GL (unmigrated) and wgpu (migrated) during transition; once every
+family migrates, GL deletion follows.
+
+---
+
+## 2. What survives from prior work
+
+A1 / A2.X.0–4 / A2.3.0 work from the superseded adapter plan survives
+intact. The wgpu module landed there is the foundation this plan
+builds on.
+
+| Module | Prior status | Role under pipeline-first |
+|---|---|---|
+| `device/wgpu/core.rs` | A1 ✅ | `boot()` becomes a test-only helper; production uses `with_external(handles)` introduced in P0. `REQUIRED_FEATURES` constant unchanged. |
+| `device/wgpu/pass.rs` | A2.X.0–2 ✅ | `DrawIntent`, `RenderPassTarget`, `ColorAttachment`, `DepthAttachment`, `flush_pass`. Idiomatic; unchanged. |
+| `device/wgpu/frame.rs` | A2.X.4 ✅ | `create_encoder` / `submit`. Unchanged. |
+| `device/wgpu/pipeline.rs` | S2 ✅ | `build_brush_solid` is the P1 pilot's pipeline. Other family `build_*` factories land per P slice. |
+| `device/wgpu/buffer.rs` | S2 ✅ | Uniform arena + storage-buffer creator. Used by P1+. |
+| `device/wgpu/binding.rs` | S2 ✅ | `brush_solid_bind_group` is the P1 pilot's bind-group factory. Sampler cache lands in P2. |
+| `device/wgpu/texture.rs` | A2.0 ✅ | `WgpuTexture` for legitimately texture-shaped inputs (image cache, glyph atlas, render targets). Not used for data carriers. |
+| `device/wgpu/format.rs` | A2.1.0 ✅ | Format mappings for legit textures. |
+| `device/wgpu/readback.rs` | A2.3.0 ✅ | RGBA8 readback for the oracle harness; eventually for renderer `read_pixels`. |
+| `device/wgpu/adapter.rs` | A1 ✅ | `WgpuDevice` shape; `boot()` swaps to `with_external(handles)` in P0. |
+| `device/wgpu/shaders/brush_solid.wgsl` | S2 ✅ | The P1 pilot's WGSL. |
+
+Seven wgpu device-side tests remain green and are the receipt that
+A1 / A2.X foundational machinery is wgpu-correct.
+
+---
+
+## 3. What gets deleted (no wgpu wrapper struct)
+
+These GL-shaped concepts have no wgpu equivalent and do not get a
+`WgpuFoo` replacement. They disappear when their users migrate.
+
+- **`VAO`** — wgpu sets vertex buffers per-pass via
+  `RenderPass::set_vertex_buffer`; no VAO concept.
+- **`VBOId` / `RBOId` / `FBOId`** — wgpu has no GL-handle types.
+  Buffers are `wgpu::Buffer`; textures are `wgpu::Texture` /
+  `TextureView`; framebuffers are an emergent property of
+  `BeginRenderPass`.
+- **`UploadPBOPool` / `UploadMethod`** — `wgpu::Queue::write_texture`
+  is async-by-default and batched at the driver level.
+- **`Program` / `ProgramBinary` / `ProgramCache` /
+  `ProgramCacheObserver`** — replaced by `wgpu::RenderPipeline`
+  (per-family) plus `wgpu::PipelineCache` (parent §4.11). No
+  webrender-specific binary blob format.
+- **`get_unoptimized_shader_source` and `webrender/res/*.glsl`** —
+  WGSL is authored under `device/wgpu/shaders/`.
+- **`get_gl_target`** — wgpu textures carry their dimension via
+  descriptor.
+- **GL `Capabilities`** — replaced by `wgpu::Features` +
+  `wgpu::Limits`, declared in `core::REQUIRED_FEATURES`.
+- **Y-flip ortho carry** — wgpu surface orientation is explicit;
+  declare it.
+- **CPU-side channel swaps, manual blend tables, fixed-function
+  emulation** — anti-patterns from the dual-servo era.
+- **`bind_program` / `bind_texture` / `set_uniform` mutable per-call
+  binding state** — pipelines bind once per render pass; per-draw
+  differences come from dynamic offsets (`set_bind_group(offset)`)
+  or push constants (`set_immediates`).
+
+---
+
+## 4. What gets reshaped (data carriers → idiomatic wgpu)
+
+These are GL-era data-as-texture patterns. They get *deleted in their
+texture form* and *recreated* in their idiomatic wgpu shape — typically
+a storage buffer per parent plan §4.6, sometimes a WGSL `const`. The
+migration happens with the consumer slice, not as a standalone "data
+lifecycle migration."
+
+| Today (GL) | Tomorrow (wgpu) | Why |
+|---|---|---|
+| `gpu_buffer_texture_f` (RGBA32F 2D) | `wgpu::Buffer` storage, `read_only: true` | Per-frame structured table; direct random access via index. |
+| `gpu_buffer_texture_i` (RGBA32I 2D) | storage buffer | Same shape as above. |
+| `transforms_texture` | storage buffer | Per-primitive transforms; indexed per draw. |
+| `prim_header_texture` | storage buffer | Per-primitive metadata; indexed per draw. |
+| `vertex_data_textures` (`Vec<VertexDataTextures>`, triple-buffered) | storage buffers | Triple-buffer becomes wgpu submit-boundary semantics; explicit. |
+| `dither_matrix_texture` (8×8 R8) | WGSL `const DITHER` inline in consuming shaders | 64 bytes — too small to be a binding. |
+| `gpu_cache_texture` (paged 2D) | one or more `wgpu::Buffer` storage entries | Existing paging logic carries forward; only the access path changes. Respect `max_storage_buffer_binding_size` (typ. 128 MB portable). |
+
+`gpu_cache` may need multiple storage bindings if the working set
+exceeds a single buffer's portable size limit; that decision is
+sized at P1 entry (§10 Q2).
+
+---
+
+## 5. What stays texture-shaped
+
+These are genuine images / framebuffer surfaces. They migrate as
+`wgpu::Texture` and live in `device/wgpu/texture.rs`'s purview.
+
+- **Texture cache** (`texture_resolver.texture_cache_map`): image
+  cache, glyph atlas, picture-cache tiles, standalone textures.
+  Sampled in shaders.
+- **Render-target attachments**: color and depth attachments produced
+  by `RenderTaskGraph` passes; carried as `wgpu::TextureView`.
+- **Zoom-debug widget**: a rendered widget bitmap.
+- **External textures**: embedder-supplied `wgpu::TextureView` via
+  servo-wgpu's `WgpuRenderingContext`-style handoff. No separate
+  type — just a view from the embedder's wgpu device, valid because
+  the embedder's device is *the same* wgpu device the renderer holds
+  (P0 handoff).
+
+---
+
+## 6. Slice plan
+
+Each slice produces a real artifact and is independently reviewable.
+P0 is gating; P1..P8 each migrate one shader family end-to-end; D
+deletes GL.
+
+### P0 — Embedder wgpu handoff
+
+**Done condition**: `create_webrender_instance` accepts wgpu primitives
+from the embedder; webrender does not boot wgpu in production. Servo-
+wgpu's call site updated to pass its already-existing wgpu device /
+queue.
+
+Checklist:
+
+- [ ] New `WgpuHandles` struct in `device::wgpu::core` carrying
+  `Arc<wgpu::Instance>`, `Arc<wgpu::Adapter>`, `Arc<wgpu::Device>`,
+  `Arc<wgpu::Queue>` (or equivalent — exact ownership shape decided
+  at slice entry: `Arc` is the natural form for "shared with
+  embedder," but if servo-wgpu hands by-value we adopt that).
+- [ ] `WgpuDevice::with_external(handles: WgpuHandles) -> Self`
+  replaces internal-boot for production. `core::boot()` survives
+  gated behind `cfg(test)` (or moved to a `core::test_boot` helper).
+- [ ] `core::REQUIRED_FEATURES` check runs against the embedder's
+  adapter at `with_external(...)`; `BootError::MissingFeatures`
+  surfaces as `RendererError::WgpuFeaturesMissing`.
+- [ ] `create_webrender_instance(gl, wgpu, notifier, options,
+  shaders)` — new `wgpu: WgpuHandles` parameter. GL parameter
+  remains during transition.
+- [ ] Servo-wgpu's call site updated to pass its
+  `wgpu::Device` / `Queue` — already created for compositor /
+  surface use. Coordinate via a pre-P0 tag on
+  `idiomatic-wgpu-pipeline` so servo-wgpu can pin until both sides
+  land.
+
+Receipt: `cargo check -p webrender` green; the seven existing wgpu
+device-side tests pass via `core::test_boot`; servo-wgpu compiles
+against the new signature.
+
+### P1 — `brush_solid` end-to-end pilot
+
+**Done condition**: `brush_solid` primitives render correctly through
+the actual renderer body via wgpu; pixel-diff against a captured
+oracle within tolerance.
+
+This is the largest single slice in the plan. It forces every
+architectural decision in parent plan §4.6–4.11 to land at once for
+one family.
+
+What lands:
+
+- [ ] **Storage-buffer reshape** of `gpu_cache`, `transforms`,
+  `prim_headers` for `brush_solid`'s consumption. The 2D-texture
+  forms remain populated for unmigrated families until D; this slice
+  adds parallel storage-buffer producers fed by the same backend
+  data.
+- [ ] **§4.7 uniform hierarchy** wired in production: dynamic-offset
+  uniform buffer for per-draw transforms; push constants
+  (`var<immediate>`) for per-draw flags / indices; static uniform
+  for per-pass viewport / time.
+- [ ] **§4.8 record-then-flush** in the renderer body: the
+  `brush_solid` path's draw call becomes a `DrawIntent` recorded
+  into a per-pass bucket; pass replay through
+  `WgpuDevice::encode_pass`.
+- [ ] **§4.9 override specialization**: `brush_solid` alpha vs.
+  opaque variants collapse to one WGSL plus override-specialized
+  pipelines (the override pattern from S2 already works for
+  `MAX_PALETTE_ENTRIES`; widen to alpha-mode here).
+- [ ] **§4.11 async pipeline compile + on-disk cache** introduced
+  for the `brush_solid` pipeline; `wgpu::PipelineCache` gets its
+  on-disk path. Warming UX deferred to compositor integration but
+  the cache mechanic lands here.
+- [ ] **Render-target attachment**: one `wgpu::Texture` /
+  `wgpu::TextureView` for `brush_solid`'s output, attached via
+  `RenderPassTarget`. Render-target lifecycle (size, recreation on
+  resize) lands here.
+- [ ] **Per-family draw-loop dispatch**: the renderer's main draw
+  loop recognizes `brush_solid` batches and routes them through
+  wgpu; other families fall through to GL during transition. Single
+  `match` in the draw loop — not a trait, not a compatibility shim.
+  Annotated with a TODO marker so all migration sites grep
+  (§10 Q1).
+
+Receipt: a `brush_solid`-only oracle scene (e.g., an authored solid-
+rectangle YAML rendered through Wrench → captured PNG) pixel-matches
+through the renderer body's wgpu path. Tolerance default 0;
+documented per-scene tolerance only on root cause (parent §S4
+"No hacks"). Test name: `renderer::wgpu_brush_solid_smoke` or
+similar; runs as part of `cargo test -p webrender`.
+
+### P2 — Brush family expansion
+
+**Done condition**: `brush_image`, `brush_image_repeat`,
+`brush_blend`, `brush_mix_blend`, `brush_linear_gradient`,
+`brush_opacity`, `brush_yuv_image` migrate through the same
+pipeline-first pattern P1 established.
+
+What lands beyond P1:
+
+- [ ] **Sampled texture machinery**: `wgpu::Texture` +
+  `wgpu::Sampler` + bind-group entries for image-cache textures.
+- [ ] **Sampler cache** in `WgpuDevice` (same
+  `Mutex<HashMap>::entry().or_insert_with()` pattern as the brush
+  pipeline cache).
+- [ ] **Texture-cache integration**: `texture_resolver.
+  texture_cache_map` entries become `wgpu::Texture` for image-cache,
+  picture-cache tile, atlas, and standalone categories.
+- [ ] **YUV / blend-mode / opacity variants** through override
+  specialization where parameter-only.
+
+Receipt: brush-family oracle scenes match. The texture cache entries
+consumed by migrated families no longer back to GL textures.
+
+### P3 — `ps_quad` family
+
+**Done condition**: textured / gradient / radial / conic / mask /
+mask-fast-path quad shaders migrate.
+
+What lands beyond P2:
+
+- [ ] More override specialization cases (gradient interpolation
+  modes, mask vs. mask-fast-path).
+- [ ] First time a single pipeline family handles multiple primitive
+  types via overrides.
+
+### P4 — Clip-mask family (`cs_clip_*`)
+
+**Done condition**: `cs_clip_rectangle` (incl. fast path) and
+`cs_clip_box_shadow` migrate.
+
+What lands beyond P3:
+
+- [ ] **First cache-task render pass**: clip masks render to
+  dedicated render-target textures used as inputs to subsequent
+  draws. Demonstrates multi-pass orchestration via
+  `RenderTaskGraph` + `encode_pass` per pass.
+- [ ] **Depth attachment policy** exercised under realistic load
+  (clear / discard via `RenderPassTarget`).
+
+### P5 — Cache-task family (gradient / blur / scale / svg-filter)
+
+**Done condition**: `cs_fast_linear_gradient`, `cs_linear_gradient`,
+`cs_radial_gradient`, `cs_conic_gradient`, `cs_blur` (color + alpha),
+`cs_scale`, `cs_svg_filter`, `cs_svg_filter_node` migrate.
+
+### P6 — Border / line cache tasks
+
+**Done condition**: `cs_border_solid`, `cs_border_segment`,
+`cs_line_decoration` migrate.
+
+### P7 — Text family
+
+**Done condition**: `ps_text_run` + dual-source variants migrate.
+Glyph atlas becomes a `wgpu::Texture` (or texture array per
+parent §S6 sub-task; parent §Q14 atlas-ownership stays as resolved).
+
+What lands beyond P6:
+
+- [ ] **Glyph atlas as `wgpu::Texture`** — the genuine-texture case;
+  no reshape to buffer.
+- [ ] **Dual-source blending** verified at runtime via subpixel-AA
+  test scene.
+
+### P8 — Composite / debug / utility
+
+**Done condition**: `composite` (incl. fast path + yuv variants),
+`debug_color`, `debug_font`, `ps_clear`, `ps_copy` migrate.
+
+After P8, every shader family in `WgpuShaderVariant::ALL`
+(parent §S6) renders through wgpu. The renderer's draw loop has
+only the wgpu branch reached at runtime, even though the GL branch
+still compiles.
+
+### D — Delete GL backend
+
+**Done condition**: `cargo build` is GL-free.
+`cargo tree | grep -i gl` returns nothing surprising. The binary
+works in servo-wgpu.
+
+Checklist:
+
+- [ ] Delete `webrender/src/device/gl.rs`, `query_gl.rs`.
+- [ ] Drop `gleam` dep from `webrender/Cargo.toml`.
+- [ ] Delete authored GLSL: `webrender/res/*.glsl`.
+- [ ] Delete `swgl/`, `glsl-to-cxx/`.
+- [ ] Delete `webrender_build/src/glsl.rs`,
+  `webrender_build/src/wgsl.rs` if any, and any
+  `shader_runtime_contract*` content.
+- [ ] Delete `dither_matrix_texture`, `gpu_buffer_texture_f/i`,
+  `vertex_data_textures`, `transforms_texture`, `prim_header_texture`
+  from `Renderer`. (The data is still produced — into storage
+  buffers — but the texture-shaped fields go.)
+- [ ] Delete VAO / VBO / PBO / FBO / `Program` / `ProgramCache` /
+  `Capabilities` infrastructure.
+- [ ] Delete `Renderer::device: Device` (the GL one). The wgpu
+  handles become the only GPU surface.
+- [ ] `gl: Rc<dyn gl::Gl>` parameter to `create_webrender_instance`
+  deleted.
+- [ ] Per-family draw-loop dispatch collapses to a single wgpu path.
+- [ ] Servo-wgpu drops its GL dep.
+
+Receipt: parent plan §S4 oracle scenes all pass through the wgpu
+path; `cargo build -p webrender` clean; binary works in servo-wgpu.
+
+---
+
+## 7. Sequencing
+
+Hard dependencies:
+
+- P0 → everything (need embedder handoff before any family-side
+  work)
+- P1 → P2..P8 (need the pilot's pattern before extending)
+- P2 → P3..P7 (need sampled-texture machinery)
+- P4 → P5, P6 (need cache-task pass shape)
+- D → all P slices (need every family migrated)
+
+Suggested order: P0 → P1 → P2 → P3 → P4 → P5 → P6 → P7 → P8 → D.
+
+P3..P6 are largely independent of each other after P2's machinery
+lands; multiple hands could parallelize. P7 (text) is gated on glyph
+atlas decisions (parent §Q14, resolved as "atlas owned by webrender-
+wgpu").
+
+---
+
+## 8. Receipts
+
+- **P0**: `cargo check -p webrender` green; existing 7 wgpu device-
+  side tests pass; servo-wgpu compiles against new signature.
+- **P1**: `brush_solid`-only oracle scene pixel-matches through the
+  renderer body's wgpu path (tolerance 0 default; documented
+  per-scene tolerance only on root cause).
+- **P2..P8**: each family's representative oracle scene matches.
+- **D**: `cargo tree | grep -i gl` clean; binary works in
+  servo-wgpu's compositor; parent plan §S4 oracle set fully passes
+  through the wgpu path.
+
+---
+
+## 9. Risks
+
+- **Each P slice is multi-day to multi-week.** Renderer-body surgery
+  against a 5,316-LOC god object. Slow, careful, more compile / debug
+  cycles per turn than design slices were.
+- **P0 changes Servo's call site.** Pre-P0 tag on
+  `idiomatic-wgpu-pipeline` for servo-wgpu to pin against until both
+  sides land in lockstep.
+- **Storage-buffer size limits.** `max_storage_buffer_binding_size`
+  is typically 128 MB portable; gpu_cache may push this. Existing
+  paging logic carries forward; verify pre-P1 (§10 Q2).
+- **Per-family dispatch in the draw loop is transitional code that
+  lives across P1..P8.** Each P slice slims it; D collapses it.
+  Until D, both backends compile.
+- **Async pipeline compile UX (parent §Q13).** First-run compile
+  latency surfaces during P1+; warming UX shape decided alongside
+  servo-wgpu compositor integration.
+- **WGSL feature parity with GL-era usage.** Dynamic indexing into
+  storage buffers, dual-source blending, override specialization
+  bounds. Surface concrete cases as P slices encounter them; document
+  here.
+- **Reverted A2.X.5 commit (`ad655dc09`) preserved in branch
+  history.** Documented as a misstep (independent boot was a hack).
+  Branch history is honest about why.
+
+---
+
+## 10. Open questions
+
+1. **Per-family dispatch shape.** A `match` on family kind in the
+   renderer's draw loop is the simplest. Risk: two parallel branches
+   become entrenched. Default: single `match` with a TODO grep
+   target; revisit if it grows beyond ~50 LOC.
+2. **`gpu_cache` as one storage buffer or many?** A single binding
+   may exceed `max_storage_buffer_binding_size`; multiple bindings
+   stress `max_storage_buffers_per_shader_stage`. Decide at P1
+   entry against realistic gpu_cache size on the test machine and
+   the portable wgpu adapters servo-wgpu targets.
+3. **`ExternalTexture` design.** Embedder-supplied
+   `wgpu::TextureView`. Materializes in P2 alongside texture-cache
+   integration. Now naturally supported because embedder and
+   webrender share one wgpu device (P0 handoff).
+4. **Pipeline cache key shape.** Per-family vs. per-(family,
+   format, override) keys. Default: per-(family, format, immediates)
+   matches what `WgpuDevice::ensure_brush_solid` already does.
+5. **Disposition of `core::boot()` after P0.** Stay test-only?
+   Move to `core::test_boot` to make the boundary obvious in code?
+   Default: gate behind `cfg(test)` initially; rename if tests
+   acquire a separate fixture file.
+6. **Oracle worktree retirement.** The oracle harness depends on
+   `upstream/0.68` + GL Wrench at
+   `../webrender-wgpu-oracle`. After D, can the worktree be retired?
+   It still captures pixels for new scenes. Default: keep until
+   parent §S4 oracle set is fully captured for the corpus we
+   expect to test against.
+7. **WGSL `const` vs. uniform buffer for dither.** A WGSL `const`
+   inlines into every consuming shader (cheap at 64 bytes). A
+   tiny uniform buffer would be shared. Default: `const` per
+   shader unless multiple families converge on identical dither
+   tables and the inline duplication becomes annoying.
+
+---
+
+## 11. Bottom line
+
+Pipeline-first, family-by-family. Embedder owns the wgpu device.
+Data-as-texture carriers get deleted, not migrated. The renderer's
+main draw loop dispatches per-family during transition; once every
+family migrates, GL deletion follows.
+
+Start P0. The rest follows shader families in roughly increasing
+complexity. P1 (`brush_solid`) is the largest single slice in the
+plan because it forces every architectural decision in parent plan
+§4.6–4.11 to land at once; subsequent slices reuse its machinery.
+
+---
+
+## 12. Appendix: GL → idiomatic wgpu translation
+
+| GL shape | Idiomatic wgpu replacement | Pattern / notes |
+|---|---|---|
+| `Device` | `WgpuDevice` constructed via `with_external(handles)` | No internal boot in production. |
+| `Texture` (data carrier) | `wgpu::Buffer` storage, read-only | gpu_cache, transforms, prim_headers, gpu_buffer_texture_f/i, vertex_data_textures. |
+| `Texture` (image) | `wgpu::Texture` + `wgpu::TextureView` | Image cache, glyph atlas, render targets. |
+| `ExternalTexture` | embedder-supplied `wgpu::TextureView` | Same wgpu device shared with embedder via P0 handoff. |
+| `TextureSlot` | bind-group binding index (u32) | Compile-time slot, not runtime active-texture-unit. |
+| `TextureFilter` | `wgpu::FilterMode` in a `wgpu::Sampler` | Sampler cache in `WgpuDevice` lands P2. |
+| `TextureFlags` | _deleted_ | GL-specific. |
+| `Program` / `ProgramBinary` / `ProgramCache` | `wgpu::RenderPipeline` + `wgpu::PipelineCache` | One pipeline per (family, format, override) key. |
+| `ProgramCacheObserver` | _deleted_ | Cache observation is wgpu's. |
+| `ShaderError` | wgpu validation error via `Result` | Surface naturally. |
+| `VAO` | _deleted_ | Per-pass `set_vertex_buffer`. |
+| `VertexAttribute` / `VertexAttributeKind` / `VertexDescriptor` | `wgpu::VertexAttribute` / `VertexFormat` / `VertexBufferLayout` | Per-pipeline. |
+| `VertexUsageHint` | _ignored_ | wgpu manages buffer usage at allocation. |
+| `UploadMethod` / `UploadPBOPool` | _deleted_ | `Queue::write_texture` is the replacement. |
+| `DrawTarget` | `wgpu::TextureView` + `RenderPassTarget` policy | Color load / store declared at pass begin. |
+| `ReadTarget` | `wgpu::Texture` with `COPY_SRC` usage | Adapter readback via `read_rgba8_texture`. |
+| `FBOId` / `RBOId` / `VBOId` | _deleted_ | wgpu has no GL handles. |
+| `DepthFunction` | `wgpu::CompareFunction` | Per-pipeline. |
+| `FormatDesc` | `wgpu::TextureFormat` | Per-pipeline / per-texture. |
+| `Texel` | `wgpu::TextureFormat` element type | For legit textures only. |
+| `GpuFrameId` | unchanged (host-side counter) | Carry through. |
+| `GpuProfiler` / `GpuTimer` | `wgpu::QuerySet` | Needs `Features::TIMESTAMP_QUERY`; lands when profiler integrates. |
+| `GpuDebugMethod` / `GpuSampler` | _ignored or stubbed_ | |
+| `Capabilities` | `wgpu::Features` + `wgpu::Limits` | Declared in `core::REQUIRED_FEATURES`. |
+| `dither_matrix_texture` | WGSL `const DITHER` | 64 bytes — too small to be a binding; inline in consuming shaders. |
+| `gpu_buffer_texture_f/i` | storage buffer, `read_only: true` | Per-frame structured table. |
+| `transforms_texture` | storage buffer | Per-primitive transforms. |
+| `prim_header_texture` | storage buffer | Per-primitive metadata. |
+| `vertex_data_textures` | storage buffer (or vertex buffer if per-vertex) | Triple-buffer → wgpu submit-boundary semantics. |
+| `gpu_cache_texture` | one or more storage buffers | Existing paging carries forward; access path changes. |
+| `bind_program` / `bind_texture` / `set_uniform` | _deleted_ | Per-pass `set_pipeline` + `set_bind_group(offset)`; no mutable per-call binding state. |
+| `get_gl_target` | _deleted_ | Texture descriptor carries the dimension. |
+| `get_unoptimized_shader_source` | _deleted_ | WGSL is authored under `device/wgpu/shaders/`. |
+| `clear_target(...)` mutable state | `RenderPassTarget` color / depth load policy | Declared at pass begin. |
+| `invalidate_depth_target()` | `StoreOp::Discard` on depth attachment | Declared at pass begin. |
+| Y-flip ortho carry | _deleted_ | Surface orientation declared explicitly. |
+| CPU-side channel swaps | _deleted_ | wgpu pipeline state declared explicitly. |
+| Manual blend tables | _deleted_ | wgpu blend state declared per pipeline. |
+| Fixed-function emulation | _deleted_ | wgpu has no fixed-function. |
