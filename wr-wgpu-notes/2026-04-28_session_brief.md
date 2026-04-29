@@ -46,6 +46,7 @@ landed. Pre-P0 tag `pre-p0` at `aa1850ed7` for servo-wgpu pinning.
 | Foundational A2.3.0 | ✅ | `WgpuDevice::read_rgba8_texture`; oracle harness uses it |
 | ❌ A2.X.5 | reverted | independent `WgpuDevice::boot()` was a hack — embedder must own the wgpu device. Reverted as `40661cd22`; original `ad655dc09` preserved in branch history. |
 | **P0 — Embedder wgpu handoff** | ✅ webrender side | `WgpuHandles` struct, `WgpuDevice::with_external`, `Renderer.wgpu_device`, new `create_webrender_instance(gl, wgpu, …)` signature, `RendererError::WgpuFeaturesMissing`. `core::boot()` + `WgpuDevice::boot()` gated behind `cfg(test)`. Servo-wgpu side outstanding (pin against `pre-p0` tag until its call-site updates). |
+| **P1.1 — brush_solid storage-buffer shape** | ✅ | brush_solid WGSL now reads from `PrimitiveHeader` + `gpu_buffer_f` storage buffers (mirrors GL `prim_shared.glsl::PrimitiveHeader` collapsed into one std430 struct, plus `fetch_from_gpu_buffer_*`'s `vec4<f32>` table). `ALPHA_PASS` WGSL override replaces `MAX_PALETTE_ENTRIES`. `DrawIntent::uniform_offset` → `dynamic_offsets: Vec<u32>`. `render_rect_smoke` updated. P1.2+ wires Transform, vertex attributes, picture-task, clip, draw-loop dispatch. |
 
 **Concrete artifacts**:
 
@@ -77,7 +78,8 @@ landed. Pre-P0 tag `pre-p0` at `aa1850ed7` for servo-wgpu pinning.
 1. ~~**P0 — Embedder wgpu handoff.**~~ ✅ webrender side landed
    2026-04-29. Servo-wgpu side outstanding — pins against `pre-p0`
    tag (`aa1850ed7`) until its call-site updates land.
-2. **P1 — `brush_solid` end-to-end pilot.** First family migrated.
+2. **P1 — `brush_solid` end-to-end pilot.** Sub-slices (P1.1 ✅,
+   P1.2 → P1.9). First family migrated.
    Largest single slice; forces every architectural decision in
    parent §4.6–4.11 to land at once: storage-buffer reshape of
    `gpu_cache` / `transforms` / `prim_headers` for `brush_solid`'s

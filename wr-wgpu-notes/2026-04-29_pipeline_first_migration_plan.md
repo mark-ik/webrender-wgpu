@@ -233,11 +233,56 @@ seven device-side wgpu tests pass via `WgpuDevice::boot()` (the
 the actual renderer body via wgpu; pixel-diff against a captured
 oracle within tolerance.
 
-This is the largest single slice in the plan. It forces every
-architectural decision in parent plan §4.6–4.11 to land at once for
-one family.
+This is the largest single slice in the plan and lands as a sequence
+of sub-slices, each independently committed. P1 closes when every
+sub-slice has landed and the oracle-match receipt passes.
 
-What lands:
+#### Sub-slices (planned)
+
+- [x] **P1.1 — Production-shape storage buffers in brush_solid smoke
+  (2026-04-29).** Replaced the S2 contrived palette/push-constant
+  shape with two production-shape storage buffers: `PrimitiveHeader`
+  (mirrors `prim_shared.glsl::PrimitiveHeader` collapsed into a
+  single 64-byte std430 struct — parent §4.6) and `gpu_buffer_f`
+  (mirrors GL `fetch_from_gpu_buffer_*`, `vec4<f32>` array indexed by
+  `header.specific_prim_address`). brush_solid now fetches its
+  header by `instance_index` and reads its colour via
+  `gpu_buffer_f[header.specific_prim_address]`, the same shape
+  production will use. The `ALPHA_PASS` WGSL `override` replaces
+  `MAX_PALETTE_ENTRIES` as the demo of §4.9 specialisation.
+  `DrawIntent::uniform_offset` (a single `u32`) became
+  `dynamic_offsets: Vec<u32>` to support bind groups with no
+  dynamic-offset entries (the new layout has none). `render_rect_smoke`
+  exercises the new path; remaining 6 wgpu tests untouched. **Not
+  yet wired**: `Transform`, `PictureTask`, `ClipArea`, per-instance
+  vertex attributes (`aData`), draw-loop dispatch in renderer body —
+  P1.2 onward.
+- [ ] **P1.2 — Transform storage buffer.** `brush_solid` reads
+  `header.transform_id` to fetch a 4×4 matrix; vertex shader applies
+  it. Smoke renders a non-identity-transformed quad to validate.
+- [ ] **P1.3 — Per-instance vertex attributes.** Replace
+  `instance_index → header_index` with the GL-shaped `aData ivec4`
+  vertex stream, so multiple primitives can ride one draw call.
+- [ ] **P1.4 — PictureTask + render-target attachment.** Read
+  `header.picture_task_address` for content_origin / device pixel
+  scale; first wgpu-native render target lifecycle in the renderer.
+- [ ] **P1.5 — ClipArea + alpha-pass override variant.** Both
+  pipeline cache entries (opaque + alpha) fully wired; `ALPHA_PASS`
+  override does real work.
+- [ ] **P1.6 — Per-family draw-loop dispatch.** First renderer-body
+  edit: `draw_alpha_batch_container` recognises
+  `BrushBatchKind::Solid` and routes to wgpu via
+  `self.wgpu_device.encode_pass`. Other families fall through to
+  GL.
+- [ ] **P1.7 — Pipeline cache (§4.11).** `wgpu::PipelineCache` with
+  on-disk path; async compile.
+- [ ] **P1.8 — Authored brush_solid-only oracle scene + capture.**
+  Extends `webrender/tests/oracle/` via the
+  `webrender-wgpu-oracle` worktree.
+- [ ] **P1.9 — End-to-end test: oracle\_brush\_solid\_smoke
+  matches.** Closes P1.
+
+#### What lands across the sub-slices
 
 - [ ] **Storage-buffer reshape** of `gpu_cache`, `transforms`,
   `prim_headers` for `brush_solid`'s consumption. The 2D-texture

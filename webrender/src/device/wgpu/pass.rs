@@ -94,8 +94,11 @@ pub struct DrawIntent {
     pub bind_group: wgpu::BindGroup,
     pub vertex_range: Range<u32>,
     pub instance_range: Range<u32>,
-    /// Dynamic offset into the bound uniform arena (per §4.7).
-    pub uniform_offset: u32,
+    /// Dynamic offsets into bind-group entries that have
+    /// `has_dynamic_offset: true` (per §4.7). The length of this slice
+    /// must match the count of dynamic-offset entries in the bind
+    /// group's layout. Empty if the bind group has no dynamic offsets.
+    pub dynamic_offsets: Vec<u32>,
     /// Push-constant payload (per §4.7); stage VERTEX. Empty if the
     /// pipeline has no push-constant range.
     pub push_constants: Vec<u8>,
@@ -138,7 +141,7 @@ pub fn flush_pass(
     });
     for draw in draws {
         pass.set_pipeline(&draw.pipeline);
-        pass.set_bind_group(0, &draw.bind_group, &[draw.uniform_offset]);
+        pass.set_bind_group(0, &draw.bind_group, &draw.dynamic_offsets);
         if !draw.push_constants.is_empty() {
             // wgpu 29: `set_immediates(offset, data)` — stage is fixed
             // by the pipeline's `immediate_size` declaration; no stage

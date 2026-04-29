@@ -52,12 +52,13 @@ fn count_pixel_diffs(actual: &[u8], expected: &[u8], tolerance: u8) -> usize {
     diffs
 }
 
-/// S2 receipt: record a single rectangle DrawIntent, flush via
-/// `pass.rs`, read back the target, assert the pixels match the palette
-/// colour. End-to-end exercise of the §4.6–4.9 architectural patterns:
-/// storage-buffer palette read, dynamic-offset per-draw uniform,
-/// push-constant palette index, WGSL override-specialized constant,
-/// `DrawIntent` recording into `pass::flush_pass` (no inline draw).
+/// P1.1 receipt: render one solid quad through the production-shape
+/// brush_solid pipeline. Inputs flow through two storage buffers that
+/// mirror `prim_shared.glsl::PrimitiveHeader` and the gpu_buffer's
+/// brush-specific `vec4` slot — replacing the S2 palette/push-constant
+/// smoke shape. Renderer-side wiring (per-instance vertex attributes,
+/// transform, picture-task, clip-area, draw-loop dispatch) lands in
+/// later P1 sub-slices; this smoke pins the storage-buffer pattern.
 #[test]
 fn render_rect_smoke() {
     let adapter = adapter::WgpuDevice::boot().expect("wgpu boot");
@@ -66,7 +67,7 @@ fn render_rect_smoke() {
     let dim = 8_u32;
 
     let target = dev.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("S2 smoke target"),
+        label: Some("P1.1 smoke target"),
         size: wgpu::Extent3d {
             width: dim,
             height: dim,
@@ -83,49 +84,60 @@ fn render_rect_smoke() {
 
     let pipe = pipeline::build_brush_solid(&dev.device, format);
 
-    // Per-draw uniform: full-clip-space rect at slot 0.
-    let entry_size: u64 = 16; // vec4<f32>
-    let (uniform_buffer, _stride) = buffer::create_uniform_arena(&dev.device, entry_size, 1);
-    let rect: [f32; 4] = [-1.0, -1.0, 2.0, 2.0];
-    let rect_bytes: Vec<u8> = rect.iter().flat_map(|f| f.to_ne_bytes()).collect();
-    dev.queue.write_buffer(&uniform_buffer, 0, &rect_bytes);
+    // PrimitiveHeader storage: one entry. `local_rect` covers full clip
+    // space (-1..1); `specific_prim_address` points at gpu_buffer slot 0
+    // where the colour lives. The other fields are placeholders until
+    // P1.2+ wires the transform / picture-task / clip pipeline.
+    //
+    // Layout (std430, 64 bytes; matches the WGSL struct in
+    // `shaders/brush_solid.wgsl`):
+    //   local_rect            vec4<f32>
+    //   local_clip_rect       vec4<f32>
+    //   z, specific_prim_address, transform_id, picture_task_address
+    //                         4 × i32
+    //   user_data             vec4<i32>
+    let mut header_bytes: Vec<u8> = Vec::with_capacity(64);
+    for f in [-1.0_f32, -1.0, 1.0, 1.0] {
+        header_bytes.extend_from_slice(&f.to_ne_bytes());
+    }
+    for f in [-1.0_f32, -1.0, 1.0, 1.0] {
+        header_bytes.extend_from_slice(&f.to_ne_bytes());
+    }
+    for i in [0_i32, /* specific_prim_address */ 0, 0, 0] {
+        header_bytes.extend_from_slice(&i.to_ne_bytes());
+    }
+    for i in [0_i32; 4] {
+        header_bytes.extend_from_slice(&i.to_ne_bytes());
+    }
+    let prim_headers =
+        buffer::create_storage_buffer(&dev.device, &dev.queue, "P1.1 prim_headers", &header_bytes);
 
-    // Storage palette: index 0 is opaque red.
-    let mut palette = vec![[0.0_f32; 4]; 16];
-    palette[0] = [1.0, 0.0, 0.0, 1.0];
-    let palette_bytes: Vec<u8> = palette
-        .iter()
-        .flat_map(|c| c.iter().flat_map(|f| f.to_ne_bytes()))
-        .collect();
-    let palette_buffer =
-        buffer::create_storage_buffer(&dev.device, &dev.queue, "S2 palette", &palette_bytes);
+    // GpuBuffer storage: slot 0 holds opaque red as a vec4<f32>.
+    let color: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+    let gpu_buffer_bytes: Vec<u8> = color.iter().flat_map(|f| f.to_ne_bytes()).collect();
+    let gpu_buffer_f =
+        buffer::create_storage_buffer(&dev.device, &dev.queue, "P1.1 gpu_buffer_f", &gpu_buffer_bytes);
 
-    let bind_group = binding::brush_solid_bind_group(
-        &dev.device,
-        &pipe.layout,
-        &uniform_buffer,
-        entry_size,
-        &palette_buffer,
-    );
+    let bind_group =
+        binding::brush_solid_bind_group(&dev.device, &pipe.layout, &prim_headers, &gpu_buffer_f);
 
-    // Record one DrawIntent — palette_index = 0 → red.
-    // Pipeline + bind_group now ride on the intent itself
-    // (multi-pipeline passes work via per-draw `pipeline` switching).
-    let palette_index: u32 = 0;
+    // One DrawIntent: instance_index 0 reads PrimitiveHeader[0],
+    // which addresses gpu_buffer_f[0] for the colour. No push constants
+    // (production routes everything through indexed storage reads).
     let draws = vec![pass::DrawIntent {
         pipeline: pipe.pipeline.clone(),
         bind_group: bind_group.clone(),
         vertex_range: 0..4,
         instance_range: 0..1,
-        uniform_offset: 0,
-        push_constants: palette_index.to_ne_bytes().to_vec(),
+        dynamic_offsets: Vec::new(),
+        push_constants: Vec::new(),
     }];
 
-    let mut encoder = adapter.create_encoder("S2 smoke encoder");
+    let mut encoder = adapter.create_encoder("P1.1 smoke encoder");
     adapter.encode_pass(
         &mut encoder,
         pass::RenderPassTarget {
-            label: "S2 smoke pass",
+            label: "P1.1 smoke pass",
             color: pass::ColorAttachment::clear(&target_view, wgpu::Color::TRANSPARENT),
             depth: None,
         },
@@ -133,8 +145,8 @@ fn render_rect_smoke() {
     );
     adapter.submit(encoder);
 
-    // The full-NDC quad covers the whole target. Sample the centre row's
-    // first pixel to confirm the palette colour reached the framebuffer.
+    // The full-NDC quad covers the whole target. Centre row's first
+    // pixel confirms the storage-buffer fetch path delivers the colour.
     let actual_rgba = readback_target(&adapter, &target, dim, dim);
     let mid_row = (dim / 2) as usize;
     let row_start = mid_row * dim as usize * 4;
