@@ -16,9 +16,11 @@
 /// - Slot 2: GpuBuffer storage buffer (read-only). Holds brush-specific
 ///   `vec4<f32>` slots indexed by `header.specific_prim_address` (per
 ///   GL `fetch_from_gpu_buffer_1f`).
-///
-/// Per-frame and per-pass uniforms (viewport, device_pixel_scale, blend
-/// mode hints) land alongside picture-task wiring in P1.4.
+/// - Slot 3: RenderTaskData storage buffer (read-only). Mirrors GL
+///   `sRenderTasks`. Both PictureTask and ClipArea read from this
+///   table — `user_data` is task-type-specific.
+/// - Slot 4: PerFrame uniform (read-only). Carries `u_transform`
+///   (orthographic projection) per parent §4.7 tier 4.
 pub fn brush_solid_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     let storage_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
         binding,
@@ -30,26 +32,40 @@ pub fn brush_solid_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         },
         count: None,
     };
+    let uniform_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::VERTEX,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    };
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("brush_solid bind group layout"),
         entries: &[
             storage_entry(0),
             storage_entry(1),
             storage_entry(2),
+            storage_entry(3),
+            uniform_entry(4),
         ],
     })
 }
 
-/// Build a brush_solid bind group from PrimitiveHeader, Transform, and
-/// GpuBuffer storage buffers. All three bound as full-buffer ranges;
-/// per-draw indexing happens inside the shader via `instance_index`,
-/// `header.transform_id`, and `header.specific_prim_address`.
+/// Build a brush_solid bind group from PrimitiveHeader, Transform,
+/// GpuBuffer, RenderTaskData storage buffers and the PerFrame uniform.
+/// All bound as full-buffer ranges; per-draw indexing happens inside
+/// the shader via the `a_data` decode chain.
 pub fn brush_solid_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     prim_headers: &wgpu::Buffer,
     transforms: &wgpu::Buffer,
     gpu_buffer_f: &wgpu::Buffer,
+    render_tasks: &wgpu::Buffer,
+    per_frame: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("brush_solid bind group"),
@@ -66,6 +82,14 @@ pub fn brush_solid_bind_group(
             wgpu::BindGroupEntry {
                 binding: 2,
                 resource: gpu_buffer_f.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: render_tasks.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: per_frame.as_entire_binding(),
             },
         ],
     })

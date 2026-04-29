@@ -61,3 +61,22 @@ pub fn create_vertex_buffer(
     queue.write_buffer(&buffer, 0, contents);
     buffer
 }
+
+/// Create a single-shot uniform buffer initialized with `contents`. Use
+/// this for per-frame / per-pass static uniforms (parent §4.7 tier 4).
+/// Per-draw uniform sub-allocation goes through `create_uniform_arena`.
+pub fn create_uniform_buffer(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    contents: &[u8],
+) -> wgpu::Buffer {
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: contents.len() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(&buffer, 0, contents);
+    buffer
+}

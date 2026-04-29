@@ -135,12 +135,36 @@ fn render_rect_smoke() {
     let gpu_buffer_f =
         buffer::create_storage_buffer(&dev.device, &dev.queue, "P1 gpu_buffer_f", &gpu_buffer_bytes);
 
+    // RenderTaskData storage: one entry, identity-equivalent.
+    //   task_rect = (0, 0, 0, 0): final_offset cancels with content_origin.
+    //   user_data = (1.0, 0.0, 0.0, 0.0): device_pixel_scale=1, content_origin=(0,0).
+    // 32 bytes std430 — see WGSL `RenderTaskData { task_rect, user_data }`.
+    let render_task: [f32; 8] = [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
+    let render_task_bytes: Vec<u8> = render_task.iter().flat_map(|f| f.to_ne_bytes()).collect();
+    let render_tasks =
+        buffer::create_storage_buffer(&dev.device, &dev.queue, "P1 render_tasks", &render_task_bytes);
+
+    // PerFrame uniform: identity orthographic projection. Combined with
+    // a clip-space-shaped local_rect (-1..1) and identity transform,
+    // the full GL vertex math collapses to the P1.3 receipt.
+    let identity_proj: [f32; 16] = [
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    ];
+    let per_frame_bytes: Vec<u8> = identity_proj.iter().flat_map(|f| f.to_ne_bytes()).collect();
+    let per_frame =
+        buffer::create_uniform_buffer(&dev.device, &dev.queue, "P1 per_frame", &per_frame_bytes);
+
     let bind_group = binding::brush_solid_bind_group(
         &dev.device,
         &pipe.layout,
         &prim_headers,
         &transforms,
         &gpu_buffer_f,
+        &render_tasks,
+        &per_frame,
     );
 
     // Per-instance `a_data` vertex buffer. One ivec4 per primitive

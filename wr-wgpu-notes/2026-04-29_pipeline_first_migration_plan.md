@@ -279,9 +279,28 @@ sub-slice has landed and the oracle-match receipt passes.
   `set_vertex_buffer` over them at slots `0..N`. New
   `buffer::create_vertex_buffer` helper. Pipeline gains
   `A_DATA_LAYOUT` (`Sint32x4` at location 0, stride 16, instance step).
-- [ ] **P1.4 — PictureTask + render-target attachment.** Read
-  `header.picture_task_address` for content_origin / device pixel
-  scale; first wgpu-native render target lifecycle in the renderer.
+- [x] **P1.4 — PictureTask (RenderTaskData) + per-frame uniform; full
+  GL vertex math (2026-04-29).** Added `RenderTaskData` storage at
+  bind slot 3 (mirrors GL `render_task.glsl::RenderTaskData` — 32
+  bytes std430; PictureTask and ClipArea are both interpretations of
+  this single struct, `user_data.x` = device_pixel_scale,
+  `user_data.yz` = content_origin / screen_origin) and a `PerFrame`
+  uniform at bind slot 4 (`u_transform: mat4x4<f32>`, mirrors GL
+  `uTransform` orthographic projection — parent §4.7 tier 4). Vertex
+  shader now does the full GL pipeline:
+  `world_pos = transform.m * (local, 0, 1);
+   device_pos = world_pos.xy * device_pixel_scale;
+   final_offset = -content_origin + task.task_rect.xy;
+   clip_pos = u_transform * (device_pos + final_offset * world_pos.w,
+   z * world_pos.w, world_pos.w)`. Smoke feeds identity-equivalent
+   inputs (zero offsets, scale=1, identity projection) so the math
+   collapses to the P1.3 receipt — every multiplication and addition
+   in the production transform pipeline is exercised, just with values
+   that preserve the rendered shape. **Renderer-body render-target
+   lifecycle** (the original P1.4 second clause) is moved to P1.6
+   alongside the draw-loop dispatch where it actually belongs.
+   `buffer::create_uniform_buffer` helper added for single-shot
+   per-frame uniforms (paired with the per-draw `create_uniform_arena`).
 - [ ] **P1.5 — ClipArea + alpha-pass override variant.** Both
   pipeline cache entries (opaque + alpha) fully wired; `ALPHA_PASS`
   override does real work.
