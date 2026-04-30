@@ -301,9 +301,26 @@ sub-slice has landed and the oracle-match receipt passes.
    alongside the draw-loop dispatch where it actually belongs.
    `buffer::create_uniform_buffer` helper added for single-shot
    per-frame uniforms (paired with the per-draw `create_uniform_arena`).
-- [ ] **P1.5 — ClipArea + alpha-pass override variant.** Both
-  pipeline cache entries (opaque + alpha) fully wired; `ALPHA_PASS`
-  override does real work.
+- [x] **P1.5 — ClipArea + clip-mask + alpha-pass override
+  (2026-04-29).** ClipArea reads the same `RenderTaskData` table as
+  PictureTask (one storage, two interpretations — `user_data.yz` is
+  `screen_origin` instead of `content_origin`). Vertex shader now
+  decodes `clip_address = a_data.y`, fetches the clip area, and
+  computes `clip_uv` / `clip_bounds` varyings per GL `write_clip`.
+  Fragment shader gains `do_clip()` (mirrors GL's non-SWGL path):
+  bounds-rect early-out for the dummy zero rect, bounds check, then
+  `textureLoad(clip_mask, vec2<i32>(mask_uv * position.w), 0).r`.
+  `position.w` in WGSL fragment matches GL `gl_FragCoord.w`
+  (per-fragment 1 / clip_pos.w). New bind slot 5 carries the
+  clip-mask texture (R8Unorm `texture_2d<f32>`, no sampler — uses
+  `textureLoad` like GL `texelFetch`); always bound for both
+  pipelines, only read in the alpha-pass shader. New
+  `render_rect_alpha_smoke` test runs `ALPHA_PASS=true` with an 8×8
+  R8 mask of `1.0` and a `screen_origin=(-4,-4)` /
+  `device_pixel_scale=4` ClipArea so every fragment passes bounds
+  and samples `1.0` — output remains red, validating the textureLoad
+  path end-to-end. Existing `render_rect_smoke` (opaque) gains a
+  dummy 1×1 mask binding to satisfy the layout.
 - [ ] **P1.6 — Per-family draw-loop dispatch.** First renderer-body
   edit: `draw_alpha_batch_container` recognises
   `BrushBatchKind::Solid` and routes to wgpu via
@@ -440,6 +457,36 @@ After P8, every shader family in `WgpuShaderVariant::ALL`
 (parent §S6) renders through wgpu. The renderer's draw loop has
 only the wgpu branch reached at runtime, even though the GL branch
 still compiles.
+
+#### CPU rendering after swgl deletion
+
+`swgl` and `glsl-to-cxx` go in phase D. They are GLSL-shaped (a CPU
+emulator of the GL shader corpus); they cannot survive the move to
+authored WGSL. Their loss is intentional but not free.
+
+CPU-rendering use cases (headless CI, no-GPU machines, fallback)
+are served instead by wgpu's existing software-backend paths,
+selected by the embedder via `RequestAdapterOptions {
+force_fallback_adapter: true, … }`:
+
+- **Vulkan via Lavapipe** (Mesa's CPU Vulkan ICD; Linux / Windows /
+  macOS).
+- **DX12 via WARP** (Microsoft's CPU DX12; Windows).
+- **Vulkan via SwiftShader** (Google's CPU Vulkan; used by
+  Chromium for the same purpose).
+
+P0's design already supports this — the embedder chooses the
+adapter, webrender uses what it's given. No webrender-side branching,
+no CPU-specific path.
+
+Trade-off: swgl was *optimised for WebRender's specific shader
+corpus and draw patterns*; Lavapipe / WARP are general-purpose. CPU
+rendering will likely be measurably slower post-deletion. For
+Servo's headless / CI / dev-tier use cases this is acceptable; if a
+deployment ever needs swgl-grade CPU performance, the right response
+is to invest in Lavapipe performance for WebRender's draw patterns
+(benefits the wgpu ecosystem at large), not revive swgl (which
+depends on GLSL we no longer author).
 
 ### D — Delete GL backend
 

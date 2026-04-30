@@ -628,7 +628,20 @@ Checklist:
   from our branch).
 - [ ] Drop `gleam` dep from `webrender/Cargo.toml`.
 - [ ] Delete authored GLSL source tree `webrender/res/*.glsl`.
-- [ ] Delete `swgl/` and `glsl-to-cxx/`.
+- [ ] Delete `swgl/` and `glsl-to-cxx/`. CPU-rendering use cases
+  (headless CI, no-GPU machines, fallback) move to wgpu's software-
+  backend paths — Lavapipe (Mesa CPU Vulkan), WARP (MSFT CPU DX12),
+  or SwiftShader — selected by the embedder via
+  `RequestAdapterOptions { force_fallback_adapter: true }`. No
+  webrender-side CPU code path; the embedder picks the adapter and
+  hands it through `WgpuHandles`. Trade-off: swgl was optimised for
+  WebRender's shader corpus; general-purpose Lavapipe / WARP will be
+  measurably slower for our workload. Acceptable for headless / CI /
+  dev tiers; production-tier CPU rendering would require investing
+  in Lavapipe perf for WR draw patterns rather than reviving swgl
+  (which depended on the GLSL we no longer author). Detailed in
+  pipeline-first migration plan §6 → "CPU rendering after swgl
+  deletion."
 - [ ] Delete `webrender_build/src/glsl.rs`,
   `webrender_build/src/wgsl.rs` (if any), and any
   `shader_runtime_contract*` content. Keep `webrender_build` only
