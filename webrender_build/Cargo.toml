@@ -9,8 +9,10 @@ edition = "2018"
 
 [features]
 serialize_program = ["serde"]
+shader-gen = ["shaderc"]
 
 [dependencies]
 bitflags = "2"
 lazy_static = "1"
+shaderc = { version = "0.8", optional = true }
 serde = { optional = true, version = "1.0", features = ["serde_derive"] }

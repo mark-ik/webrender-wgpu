@@ -3,6 +3,7 @@ members = [
     "examples",
     "webrender",
     "webrender_api",
+    "webrender_build",
     "wrench",
     "example-compositor/compositor",
 ]

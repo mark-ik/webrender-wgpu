@@ -1567,6 +1567,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "hashbrown"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f467dd6dccf739c208452f8014c75c18bb8301b050ad1cfb27153803edb0f51"
+
+[[package]]
 name = "hashlink"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1830,13 +1836,14 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "2.10.0"
+version = "2.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe4cd85333e22411419a0bcae1297d25e58c9443848b11dc6a86fefe8c78a661"
+checksum = "d466e9454f08e4a911e14806c24e16fba1b4c121d1ea474396f396069cf949d9"
 dependencies = [
  "equivalent",
- "hashbrown 0.15.4",
+ "hashbrown 0.17.0",
  "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -2191,9 +2198,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.20"
+version = "0.4.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5e6163cb8c49088c2c36f57875e58ccd8c87c7427f7fbd50ea6710b2f3f2e8f"
+checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "malloc_buf"
@@ -3187,6 +3194,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "roxmltree"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "921904a62e410e37e215c40381b7117f830d9d89ba60ab5236170541dd25646b"
+dependencies = [
+ "xmlparser",
+]
+
+[[package]]
 name = "rustc-demangle"
 version = "0.1.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3400,6 +3416,27 @@ dependencies = [
  "cfg-if 1.0.0",
  "cpufeatures",
  "digest",
+]
+
+[[package]]
+name = "shaderc"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "27e07913ada18607bb60d12431cbe3358d3bbebbe95948e1618851dc01e63b7b"
+dependencies = [
+ "libc",
+ "shaderc-sys",
+]
+
+[[package]]
+name = "shaderc-sys"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73120d240fe22196300f39ca8547ca2d014960f27b19b47b21288b396272f7f7"
+dependencies = [
+ "cmake",
+ "libc",
+ "roxmltree",
 ]
 
 [[package]]
@@ -3797,7 +3834,7 @@ version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ae2a4cf385da23d1d53bc15cdfa5c2109e93d8d362393c801e87da2f72f0e201"
 dependencies = [
- "indexmap 2.10.0",
+ "indexmap 2.14.0",
  "serde_core",
  "serde_spanned",
  "toml_datetime",
@@ -3938,7 +3975,7 @@ dependencies = [
  "glob",
  "goblin",
  "heck",
- "indexmap 2.10.0",
+ "indexmap 2.14.0",
  "once_cell",
  "serde",
  "tempfile",
@@ -3980,7 +4017,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "98f51ebca0d9a4b2aa6c644d5ede45c56f73906b96403c08a1985e75ccb64a01"
 dependencies = [
  "anyhow",
- "indexmap 2.10.0",
+ "indexmap 2.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.100",
@@ -4023,7 +4060,7 @@ checksum = "a806dddc8208f22efd7e95a5cdf88ed43d0f3271e8f63b47e757a8bbdb43b63a"
 dependencies = [
  "anyhow",
  "heck",
- "indexmap 2.10.0",
+ "indexmap 2.14.0",
  "tempfile",
  "uniffi_internal_macros",
 ]
@@ -4395,6 +4432,7 @@ dependencies = [
  "bitflags 2.11.0",
  "lazy_static",
  "serde",
+ "shaderc",
 ]
 
 [[package]]
@@ -4871,6 +4909,12 @@ name = "xml-rs"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2bb76e5c421bbbeb8924c60c030331b345555024d56261dae8f3e786ed817c23"
+
+[[package]]
+name = "xmlparser"
+version = "0.13.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "66fee0b777b0f5ac1c69bb06d361268faafa61cd4682ae064a171c16c433e9e4"
 
 [[package]]
 name = "yaml-rust"
