@@ -1,8 +1,8 @@
 [package]
-name = "webrender"
-version = "0.68.0"
+name = "netrender"
+version = "0.0.1"
 license = "MPL-2.0"
-description = "wgpu-native renderer skeleton (post-Phase-D rip-out)"
+description = "wgpu-native renderer skeleton (post-Phase-D rip-out of webrender)"
 edition = "2018"
 
 [dependencies]

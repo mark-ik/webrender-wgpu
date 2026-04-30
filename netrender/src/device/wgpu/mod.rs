@@ -4,7 +4,7 @@
 
 //! wgpu device. Decomposed per the idiomatic-wgsl pipeline plan §6 S1
 //! (no file > ~600 LOC). See
-//! `wr-wgpu-notes/2026-04-28_idiomatic_wgsl_pipeline_plan.md`.
+//! `netrender-notes/2026-04-28_idiomatic_wgsl_pipeline_plan.md`.
 
 pub mod core;
 pub mod format;

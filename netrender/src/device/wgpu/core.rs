@@ -19,7 +19,7 @@ pub const REQUIRED_FEATURES: wgpu::Features =
     wgpu::Features::IMMEDIATES.union(wgpu::Features::DUAL_SOURCE_BLENDING);
 
 /// Bundle of wgpu primitives owned by the embedder and passed through
-/// `create_webrender_instance` to the renderer (P0). All four wgpu 29
+/// `create_netrender_instance` to the renderer (P0). All four wgpu 29
 /// handle types are `Clone` (Arc-wrapped internally), so passing by
 /// value is cheap.
 ///
@@ -90,7 +90,7 @@ pub fn boot() -> Result<WgpuHandles, BootError> {
     }
 
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("webrender-wgpu device"),
+        label: Some("netrender device"),
         required_features: REQUIRED_FEATURES,
         required_limits: wgpu::Limits {
             max_inter_stage_shader_variables: 28,

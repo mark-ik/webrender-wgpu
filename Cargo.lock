@@ -499,6 +499,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "netrender"
+version = "0.0.1"
+dependencies = [
+ "log",
+ "png",
+ "pollster",
+ "wgpu",
+]
+
+[[package]]
 name = "num-traits"
 version = "0.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -956,16 +966,6 @@ checksum = "854ba17bb104abfb26ba36da9729addc7ce7f06f5c0f90f3c391f8461cca21f9"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "webrender"
-version = "0.68.0"
-dependencies = [
- "log",
- "png",
- "pollster",
- "wgpu",
 ]
 
 [[package]]

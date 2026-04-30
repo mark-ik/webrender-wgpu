@@ -12,16 +12,16 @@ use crate::device::wgpu::core::WgpuHandles;
 use crate::renderer::{Renderer, RendererError};
 
 #[derive(Default)]
-pub struct WebRenderOptions {}
+pub struct NetrenderOptions {}
 
 /// Construct a wgpu-only `Renderer`. The embedder owns the wgpu
 /// device (per pipeline-first migration plan §6 P0) and hands the
 /// instance/adapter/device/queue handles in here. The renderer will
 /// fail with `WgpuFeaturesMissing(missing)` if the embedder's
 /// adapter doesn't expose the features `WgpuDevice` requires.
-pub fn create_webrender_instance(
+pub fn create_netrender_instance(
     handles: WgpuHandles,
-    _options: WebRenderOptions,
+    _options: NetrenderOptions,
 ) -> Result<Renderer, RendererError> {
     let wgpu_device = WgpuDevice::with_external(handles)
         .map_err(RendererError::WgpuFeaturesMissing)?;

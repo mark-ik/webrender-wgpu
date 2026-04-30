@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "webrender",
+    "netrender",
 ]
 resolver = "2"
 
