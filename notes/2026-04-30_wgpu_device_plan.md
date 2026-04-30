@@ -46,25 +46,75 @@ golden has not drifted vs. fresh reflection. This catches:
 This is option (b) "wgpu auto-derive at runtime" plus (c) "reflected golden as
 verification oracle" — not option (c) hand-authored as the prior branches did.
 
-### A2. Coexistence: trait-ified `GpuDevice`, sibling impls, feature-gated
+### A2. Coexistence: medium-trait split by concern, sibling impls, feature-gated
 
-Mirrors `origin/wgpu-device-renderer-gl-parity` exactly. New shape:
+Departs from `origin/wgpu-device-renderer-gl-parity`'s 3-method minimal trait
+(which forked the renderer above the device, accepting duplicated paths and
+drift risk) and from a full 168-method abstraction (which would force one of
+GL or wgpu into an unnatural shape). Middle path: split `Device`'s public
+surface into a small set of traits scoped by concern. Each trait is
+defensible in size, both backends implement each one with natural-shaped
+code, and the renderer above the device is generic over trait bounds rather
+than feature-gated.
+
+Trait split (names and scope; exact method lists settle in P0):
+
+- **`GpuResources`** — texture/buffer/sampler/FBO/PBO/VAO/VBO ownership and
+  upload. Roughly: `create_texture`, `delete_texture`,
+  `upload_texture_immediate`, `upload_texture`, `copy_*_texture*`, `create_fbo`,
+  `delete_fbo`, `create_pbo`, `create_vao*`, `create_vbo`, `allocate_vbo`,
+  `fill_vbo`, `update_vao_*`, `map_pbo_for_readback`, `attach_read_texture*`,
+  `invalidate_render_target`, `reuse_render_target`. ~25 methods.
+- **`GpuShaders`** — program/pipeline/uniform/binding management.
+  `compile_shader`, `create_program*`, `link_program`, `bind_program`,
+  `delete_program`, `get_uniform_location`, `set_uniforms`,
+  `bind_shader_samplers`, `set_shader_texture_size`. ~10 methods. On wgpu,
+  "program" maps to a `RenderPipeline` keyed by (SPIRV module, vertex layout,
+  baked state).
+- **`GpuFrame`** — frame lifecycle, capabilities, parameters.
+  `begin_frame`, `end_frame`, `reset_state`, `get_capabilities`,
+  `max_texture_size`, `preferred_color_formats`, `swizzle_settings`,
+  `supports_extension`, `set_parameter`, `report_memory`,
+  `echo_driver_messages`, the depth/ortho/PBO query getters. ~15 methods.
+- **`GpuPass`** — per-pass binding, state, draw, blit, readback.
+  `bind_read_target`, `bind_draw_target`, `reset_*_target`,
+  `bind_external_draw_target`, `bind_vao`, `bind_custom_vao`, `bind_texture`,
+  `bind_external_texture`, `set_blend*`, `set_scissor_rect`,
+  `enable/disable_scissor`, `enable/disable_color_write`,
+  `enable/disable_depth*`, `disable_stencil`, `set_blend_mode_*`,
+  `draw_triangles_*`, `draw_indexed_triangles*`, `draw_nonindexed_*`,
+  `blit_render_target*`, `read_pixels*`, `get_tex_image_into`. ~30 methods.
+
+Total: ~80 methods across 4 traits. Down from 168 because GL-internal
+helpers (`gl()`, `rc_gl()`, `gl_describe_format`, GL-FBO impl details) stay
+on the concrete `GlDevice` and are not exposed to renderer code that wants
+to be backend-agnostic.
+
+Where GL and wgpu semantics genuinely diverge — VAO emulation on wgpu
+(buffer + layout pair), immediate state vs. baked-into-pipeline state, GL's
+`bind_program` vs. wgpu's pipeline-as-state — the trait method's contract is
+defined in wgpu-friendly terms (state set declaratively per pass) and the GL
+impl adapts using its existing state-tracking machinery.
+
+File layout:
 
 ```text
 webrender/src/device/
-  mod.rs        — defines `pub trait GpuDevice` + cfg-gated re-exports
-  gl.rs         — existing impl, gated by `feature = "gl_backend"`
-  wgpu.rs       — new impl (or wgpu/ subdir if it grows), gated by `feature = "wgpu_backend"`
+  mod.rs        — declares the four traits + cfg-gated module re-exports
+  gl.rs         — existing impl, gated by `feature = "gl_backend"`,
+                  implementing all four traits on `GlDevice` (renamed from `Device`)
+  wgpu.rs       — new impl, gated by `feature = "wgpu_backend"`
+                  (or `wgpu/` subdir if it grows past one file)
   query_gl.rs   — unchanged
 ```
 
-`webrender/src/renderer/init.rs` dispatches on which backend feature is active.
-Both backends are compile-checked together in CI; pick one at link time.
+`webrender/src/renderer/init.rs` keeps two factory functions
+(`create_webrender_instance` for GL, `create_webrender_instance_wgpu` for
+wgpu) because device construction inputs differ (`Rc<dyn gl::Gl>` vs. wgpu
+`Instance + Surface`). Downstream of construction, renderer code is generic
+over trait bounds; no per-method feature-gating.
 
-Trait surface follows `Device`'s existing public API in `gl.rs` so the renderer
-above doesn't fork. Where wgpu semantics genuinely diverge (e.g., command
-encoder lifetimes, dynamic offsets), the trait method gets a wgpu-friendly
-default and the GL impl adapts.
+Both backends compile-check together in CI; one is selected at link time.
 
 ### A3. Vertex layouts: one mechanical adapter from existing typed schema
 
@@ -95,26 +145,37 @@ adapter's output is asserted against reflection in tests.
 Each phase has explicit done conditions. Phases are sequential except where
 noted.
 
-### P0 — Trait extraction
+### P0 — Trait split + GL impl behind feature
+
+Substantive — defines the trait surface that everything else extends.
 
 Done when:
-- `pub trait GpuDevice` exists in `webrender/src/device/mod.rs`
-- Existing GL impl moves behind `#[cfg(feature = "gl_backend")]`, builds and
-  passes existing tests with that feature
-- `cargo build -p webrender --features gl_backend` clean
-- No wgpu code yet; this phase is risk-free refactor
 
-Reference: study `origin/wgpu-device-renderer-gl-parity:webrender/src/device/mod.rs`
-for the trait shape that proved sufficient for reftest parity.
+- `pub trait GpuResources`, `GpuShaders`, `GpuFrame`, `GpuPass` declared in
+  `webrender/src/device/mod.rs` with full method signatures
+- Existing GL `Device` (renamed `GlDevice`) moves behind
+  `#[cfg(feature = "gl_backend")]` and implements all four traits
+- Renderer code that previously called `device.foo()` against the concrete
+  `Device` continues to compile, now against trait bounds
+- `cargo build -p webrender --features gl_backend` clean
+- Existing reftests pass under `gl_backend` (no behavioral change)
+- No wgpu code yet
+
+Method assignment to traits is finalized in this phase. Reference
+`origin/wgpu-device-renderer-gl-parity:webrender/src/device/mod.rs` for what
+the renderer above the device actually needs from each concern, but expand
+the trait coverage beyond their 3-method minimum.
 
 ### P1 — Skeleton wgpu device
 
 Done when:
 - `webrender/src/device/wgpu.rs` exists with `WgpuDevice` struct implementing
-  `GpuDevice` for every method, even if most are `unimplemented!()`
+  all four traits — methods may be `unimplemented!()` but signatures match
 - `wgpu` dep added to `webrender/Cargo.toml` under `[features] wgpu_backend`
 - `cargo build -p webrender --features wgpu_backend` clean
 - Construction wires an `Adapter`, `Device`, `Queue`, surface format
+- `cargo build -p webrender --features "gl_backend wgpu_backend"` clean
+  (both backends compile together; one selected at link time later)
 
 ### P2 — SPIRV loading + reflection oracle
 
