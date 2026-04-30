@@ -49,7 +49,7 @@ use core::time::Duration;
 
 use crate::pattern::PatternKind;
 use crate::render_api::{DebugCommand, ApiMsg, MemoryReport};
-use crate::batch::{AlphaBatchContainer, BatchKind, BatchFeatures, BatchTextures, BrushBatchKind, ClipBatchList};
+use crate::batch::{AlphaBatchContainer, BatchKind, BatchFeatures, BatchTextures, BrushBatchKind, ClipBatchList, PrimitiveBatch};
 use crate::batch::ClipMaskInstanceList;
 #[cfg(any(feature = "capture", feature = "replay"))]
 use crate::capture::{CaptureConfig, ExternalCaptureImage, PlainExternalImage};
@@ -3009,6 +3009,21 @@ impl Renderer {
                         continue;
                     }
 
+                    // Pipeline-first migration plan §6 P1.6: per-family
+                    // dispatch hook. Recognised wgpu-migrated families
+                    // are routed to `self.wgpu_device` ahead of the GL
+                    // path; unmigrated families fall through. Today no
+                    // family has a populated wgpu render path through
+                    // the renderer body — `try_dispatch_wgpu` returns
+                    // `false` for everything, so behaviour is unchanged.
+                    // P1.6b+ wires brush_solid through; P2..P8 widen
+                    // the family list. Phase D collapses the dispatch
+                    // to a single wgpu branch and deletes the GL fall-
+                    // through.
+                    if self.try_dispatch_wgpu(batch) {
+                        continue;
+                    }
+
                     self.shaders.borrow_mut()
                         .get(&batch.key, batch.features, self.debug_flags, &self.device)
                         .bind(
@@ -4752,6 +4767,28 @@ impl Renderer {
             false,
         ));
         self.device.clear_target(Some(color), None, None);
+    }
+
+    /// Pipeline-first migration plan §6 P1.6: per-family dispatch hook.
+    ///
+    /// Returns `true` if the batch was rendered through `self.wgpu_device`
+    /// and the GL fallthrough should be skipped. Returns `false` for any
+    /// family whose wgpu render path is not yet wired — the caller
+    /// continues with the existing GL `bind` + `draw_instanced_batch`
+    /// flow.
+    ///
+    /// Today every family returns `false` (the hook is in place but no
+    /// family is populated yet). P1.6b+ populates `BrushBatchKind::Solid`;
+    /// later P slices widen. Phase D collapses to a single wgpu branch
+    /// and the function disappears with the GL `device` field.
+    fn try_dispatch_wgpu(&mut self, batch: &PrimitiveBatch) -> bool {
+        match batch.key.kind {
+            // Future arms land here per-family. The renderer-side
+            // bridge (storage-buffer producers for gpu_cache /
+            // transforms / prim_headers, render-target lifecycle,
+            // clip-mask routing) is built up across P1.6b+.
+            _ => false,
+        }
     }
 }
 

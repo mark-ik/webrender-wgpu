@@ -321,11 +321,33 @@ sub-slice has landed and the oracle-match receipt passes.
   and samples `1.0` — output remains red, validating the textureLoad
   path end-to-end. Existing `render_rect_smoke` (opaque) gains a
   dummy 1×1 mask binding to satisfy the layout.
-- [ ] **P1.6 — Per-family draw-loop dispatch.** First renderer-body
-  edit: `draw_alpha_batch_container` recognises
-  `BrushBatchKind::Solid` and routes to wgpu via
-  `self.wgpu_device.encode_pass`. Other families fall through to
-  GL.
+- [~] **P1.6 — Per-family draw-loop dispatch** (split into 6a / 6b+):
+  - [x] **P1.6a — Dispatch hook landed (2026-04-29).** First
+    renderer-body edit. `draw_alpha_batch_container` (mod.rs:3022)
+    now calls `self.try_dispatch_wgpu(batch)` before the GL
+    `bind` + `draw_instanced_batch` path; if the wgpu side returns
+    `true` the GL path is skipped. The `try_dispatch_wgpu` method
+    is the per-family `match` site — currently a single `_ =>
+    false` arm, so behaviour is unchanged. The hook establishes
+    the dispatch contract; subsequent sub-slices populate
+    families. `PrimitiveBatch` added to the renderer's batch
+    imports.
+  - [ ] **P1.6b — `BrushBatchKind::Solid` body.** Bridge the
+    renderer-side per-batch source data (`gpu_buffer_texture_f`,
+    `transforms_texture`, `prim_header_texture`,
+    `batch.instances`) into wgpu storage / vertex buffers, build a
+    wgpu render-target view, and call
+    `self.wgpu_device.encode_pass(...)` with the `brush_solid`
+    pipeline. First sub-slice where the GL fallthrough actually
+    skips for a real family.
+  - [ ] **P1.6c — Render-target lifecycle on Renderer.**
+    `WgpuRenderTargets` cache (sized to match GL `DrawTarget`
+    extents); reused across frames. Dispatched through
+    `encode_pass`'s `RenderPassTarget`.
+  - [ ] **P1.6d — Alpha-batch loop dispatch.** Same hook in the
+    `alpha_batch_container.alpha_batches` loop (mod.rs:3045).
+    Lands once 6b's bridge handles the alpha-pass override
+    pipeline.
 - [ ] **P1.7 — Pipeline cache (§4.11).** `wgpu::PipelineCache` with
   on-disk path; async compile.
 - [ ] **P1.8 — Authored brush_solid-only oracle scene + capture.**
