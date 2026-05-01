@@ -40,9 +40,14 @@ use std::os::raw::c_void;
 use super::gl::{
     Capabilities,
     GpuFrameId,
+    Program,
+    ShaderError,
     StrideAlignment,
     TextureFormatPair,
+    TextureSlot,
+    UniformLocation,
     UploadMethod,
+    VertexDescriptor,
 };
 
 /// Frame lifecycle, capabilities, parameters, and global queries.
@@ -124,12 +129,37 @@ pub trait GpuResources: GpuFrame {
 /// program (`bind_program`, `set_uniforms`, `set_shader_texture_size`) live on
 /// `GpuPass` because they're per-pass operations, not lifecycle.
 pub trait GpuShaders: GpuFrame {
-    // Associated types (filled in as methods are moved):
-    //   type Program;
-    //   type UniformLocation;
-    //
-    // Methods to follow: create_program, create_program_linked, link_program,
-    //   delete_program, get_uniform_location, bind_shader_samplers.
+    /// Concrete program/pipeline handle owned by this backend.
+    type Program;
+    /// Concrete uniform-location handle owned by this backend.
+    type UniformLocation;
+
+    fn create_program(
+        &mut self,
+        base_filename: &'static str,
+        features: &[&'static str],
+    ) -> Result<Self::Program, ShaderError>;
+
+    fn create_program_linked(
+        &mut self,
+        base_filename: &'static str,
+        features: &[&'static str],
+        descriptor: &VertexDescriptor,
+    ) -> Result<Self::Program, ShaderError>;
+
+    fn link_program(
+        &mut self,
+        program: &mut Self::Program,
+        descriptor: &VertexDescriptor,
+    ) -> Result<(), ShaderError>;
+
+    fn delete_program(&mut self, program: Self::Program);
+
+    fn get_uniform_location(&self, program: &Self::Program, name: &str) -> Self::UniformLocation;
+
+    fn bind_shader_samplers<S>(&mut self, program: &Self::Program, bindings: &[(&'static str, S)])
+    where
+        S: Into<TextureSlot> + Copy;
 }
 
 /// Per-pass binding, state, draw commands, blits, readback.

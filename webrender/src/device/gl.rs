@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use super::traits::GpuFrame;
+use super::traits::{GpuFrame, GpuShaders};
 use super::super::shader_source::{OPTIMIZED_SHADERS, UNOPTIMIZED_SHADERS};
 use api::{ImageDescriptor, ImageFormat, Parameter, BoolParameter, IntParameter, ImageRendering};
 use api::{MixBlendMode, ImageBufferKind, VoidPtrToSizeFn};
@@ -5024,5 +5024,50 @@ impl GpuFrame for Device {
 
     fn depth_targets_memory(&self) -> usize {
         Device::depth_targets_memory(self)
+    }
+}
+
+impl GpuShaders for Device {
+    type Program = Program;
+    type UniformLocation = UniformLocation;
+
+    fn create_program(
+        &mut self,
+        base_filename: &'static str,
+        features: &[&'static str],
+    ) -> Result<Program, ShaderError> {
+        Device::create_program(self, base_filename, features)
+    }
+
+    fn create_program_linked(
+        &mut self,
+        base_filename: &'static str,
+        features: &[&'static str],
+        descriptor: &VertexDescriptor,
+    ) -> Result<Program, ShaderError> {
+        Device::create_program_linked(self, base_filename, features, descriptor)
+    }
+
+    fn link_program(
+        &mut self,
+        program: &mut Program,
+        descriptor: &VertexDescriptor,
+    ) -> Result<(), ShaderError> {
+        Device::link_program(self, program, descriptor)
+    }
+
+    fn delete_program(&mut self, program: Program) {
+        Device::delete_program(self, program)
+    }
+
+    fn get_uniform_location(&self, program: &Program, name: &str) -> UniformLocation {
+        Device::get_uniform_location(self, program, name)
+    }
+
+    fn bind_shader_samplers<S>(&mut self, program: &Program, bindings: &[(&'static str, S)])
+    where
+        S: Into<TextureSlot> + Copy,
+    {
+        Device::bind_shader_samplers(self, program, bindings)
     }
 }
