@@ -40,175 +40,46 @@ use webrender_build::shader::{
 };
 use malloc_size_of::MallocSizeOfOps;
 
-// GpuFrameId, TextureSlot, TextureFilter, VertexUsageHint moved to
-// device/types.rs (backend-neutral, accessible from both backends).
-// Re-exported here so existing internal references continue to resolve.
-pub use super::types::{GpuFrameId, TextureFilter, TextureSlot, VertexUsageHint};
+// Backend-neutral types lifted to device/types.rs. Re-exported here so
+// existing internal references continue to resolve. Each follows the same
+// lift pattern: pure type definition (data + pure impls) in types.rs;
+// any GL-specific impls (e.g. translation to gl crate constants) live in
+// gl.rs as either a private trait extension or a separate impl block.
+pub use super::types::{
+    DepthFunction, GpuFrameId, ShaderError, StrideAlignment, Texel, TextureFilter,
+    TextureFormatPair, TextureSlot, UploadMethod, VertexAttribute, VertexAttributeKind,
+    VertexDescriptor, VertexUsageHint,
+};
 
 // In some places we need to temporarily bind a texture to any slot.
 const DEFAULT_TEXTURE: TextureSlot = TextureSlot(0);
 
-#[repr(u32)]
-pub enum DepthFunction {
-    Always = gl::ALWAYS,
-    Less = gl::LESS,
-    LessEqual = gl::LEQUAL,
+// GL translation for the lifted DepthFunction enum.
+trait DepthFunctionGlExt {
+    fn to_gl(&self) -> gl::GLuint;
 }
 
-/// A structure defining a particular workflow of texture transfers.
-#[derive(Clone, Debug)]
-#[cfg_attr(feature = "capture", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
-pub struct TextureFormatPair<T> {
-    /// Format the GPU natively stores texels in.
-    pub internal: T,
-    /// Format we expect the users to provide the texels in.
-    pub external: T,
-}
-
-impl<T: Copy> From<T> for TextureFormatPair<T> {
-    fn from(value: T) -> Self {
-        TextureFormatPair {
-            internal: value,
-            external: value,
+impl DepthFunctionGlExt for DepthFunction {
+    fn to_gl(&self) -> gl::GLuint {
+        match self {
+            DepthFunction::Always => gl::ALWAYS,
+            DepthFunction::Less => gl::LESS,
+            DepthFunction::LessEqual => gl::LEQUAL,
         }
     }
 }
 
-#[derive(Debug)]
-pub enum VertexAttributeKind {
-    F32,
-    U8Norm,
-    U16Norm,
-    I32,
-    U16,
-}
-
-#[derive(Debug)]
-pub struct VertexAttribute {
-    pub name: &'static str,
-    pub count: u32,
-    pub kind: VertexAttributeKind,
-}
-
-impl VertexAttribute {
-    pub const fn quad_instance_vertex() -> Self {
-        VertexAttribute {
-            name: "aPosition",
-            count: 2,
-            kind: VertexAttributeKind::U8Norm,
-        }
-    }
-
-    pub const fn gpu_buffer_address(name: &'static str) -> Self {
-        VertexAttribute {
-            name,
-            count: 1,
-            kind: VertexAttributeKind::I32,
-        }
-    }
-
-    pub const fn f32x4(name: &'static str) -> Self {
-        VertexAttribute {
-            name,
-            count: 4,
-            kind: VertexAttributeKind::F32,
-        }
-    }
-
-    pub const fn f32x3(name: &'static str) -> Self {
-        VertexAttribute {
-            name,
-            count: 3,
-            kind: VertexAttributeKind::F32,
-        }
-    }
-
-    pub const fn f32x2(name: &'static str) -> Self {
-        VertexAttribute {
-            name,
-            count: 2,
-            kind: VertexAttributeKind::F32,
-        }
-    }
-
-    pub const fn f32(name: &'static str) -> Self {
-        VertexAttribute {
-            name,
-            count: 1,
-            kind: VertexAttributeKind::F32,
-        }
-    }
-
-    pub const fn i32x4(name: &'static str) -> Self {
-        VertexAttribute {
-            name,
-            count: 4,
-            kind: VertexAttributeKind::I32,
-        }
-    }
-
-    pub const fn i32x2(name: &'static str) -> Self {
-        VertexAttribute {
-            name,
-            count: 2,
-            kind: VertexAttributeKind::I32,
-        }
-    }
-
-    pub const fn i32(name: &'static str) -> Self {
-        VertexAttribute {
-            name,
-            count: 1,
-            kind: VertexAttributeKind::I32,
-        }
-    }
-
-    pub const fn u16(name: &'static str) -> Self {
-        VertexAttribute {
-            name,
-            count: 1,
-            kind: VertexAttributeKind::U16,
-        }
-    }
-
-    pub const fn u16x2(name: &'static str) -> Self {
-        VertexAttribute {
-            name,
-            count: 2,
-            kind: VertexAttributeKind::U16,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct VertexDescriptor {
-    pub vertex_attributes: &'static [VertexAttribute],
-    pub instance_attributes: &'static [VertexAttribute],
-}
+/// A structure defining a particular workflow of texture transfers.
+// TextureFormatPair, VertexAttributeKind, VertexAttribute (constructors +
+// size_in_bytes), and VertexDescriptor moved to device/types.rs. The
+// GL-specific `bind_to_vao` impl on VertexAttribute remains here.
 
 enum FBOTarget {
     Read,
     Draw,
 }
 
-/// Method of uploading texel data from CPU to GPU.
-#[derive(Debug, Clone)]
-pub enum UploadMethod {
-    /// Just call `glTexSubImage` directly with the CPU data pointer
-    Immediate,
-    /// Accumulate the changes in PBO first before transferring to a texture.
-    PixelBuffer(VertexUsageHint),
-}
-
-/// Plain old data that can be used to initialize a texture.
-pub unsafe trait Texel: Copy + Default {
-    fn image_format() -> ImageFormat;
-}
-
-unsafe impl Texel for u8 {
-    fn image_format() -> ImageFormat { ImageFormat::R8 }
-}
+// UploadMethod and Texel (with the u8 impl) moved to device/types.rs.
 
 /// Returns the size in bytes of a depth target with the given dimensions.
 fn depth_target_size_in_bytes(dimensions: &DeviceIntSize) -> usize {
@@ -263,23 +134,11 @@ pub fn get_unoptimized_shader_source(shader_name: &str, base_path: Option<&PathB
     }
 }
 
-impl VertexAttributeKind {
-    fn size_in_bytes(&self) -> u32 {
-        match *self {
-            VertexAttributeKind::F32 => 4,
-            VertexAttributeKind::U8Norm => 1,
-            VertexAttributeKind::U16Norm => 2,
-            VertexAttributeKind::I32 => 4,
-            VertexAttributeKind::U16 => 2,
-        }
-    }
-}
+// VertexAttributeKind::size_in_bytes and VertexAttribute::size_in_bytes
+// moved to device/types.rs (now `pub fn` instead of `fn` so the GL impl
+// below can call across modules). Only the GL-specific bind_to_vao stays.
 
 impl VertexAttribute {
-    fn size_in_bytes(&self) -> u32 {
-        self.count * self.kind.size_in_bytes()
-    }
-
     fn bind_to_vao(
         &self,
         attr_index: gl::GLuint,
@@ -1066,11 +925,7 @@ pub struct Capabilities {
     pub renderer_name: String,
 }
 
-#[derive(Clone, Debug)]
-pub enum ShaderError {
-    Compilation(String, String), // name, error message
-    Link(String, String),        // name, error message
-}
+// ShaderError moved to device/types.rs.
 
 /// A refcounted depth target, which may be shared by multiple textures across
 /// the device.
@@ -1097,25 +952,7 @@ enum TexStorageUsage {
     Always,
 }
 
-/// Describes a required alignment for a stride,
-/// which can either be represented in bytes or pixels.
-#[derive(Copy, Clone, Debug)]
-pub enum StrideAlignment {
-    Bytes(NonZeroUsize),
-    Pixels(NonZeroUsize),
-}
-
-impl StrideAlignment {
-    pub fn num_bytes(&self, format: ImageFormat) -> NonZeroUsize {
-        match *self {
-            Self::Bytes(bytes) => bytes,
-            Self::Pixels(pixels) => {
-                assert!(format.bytes_per_pixel() > 0);
-                NonZeroUsize::new(pixels.get() * format.bytes_per_pixel() as usize).unwrap()
-            }
-        }
-    }
-}
+// StrideAlignment moved to device/types.rs.
 
 // We get 24 bits of Z value - use up 22 bits of it to give us
 // 4 bits to account for GPU issues. This seems to manifest on
@@ -3912,7 +3749,7 @@ impl GlDevice {
     pub fn enable_depth(&self, depth_func: DepthFunction) {
         assert!(self.depth_available, "Enabling depth test without depth target");
         self.gl.enable(gl::DEPTH_TEST);
-        self.gl.depth_func(depth_func as gl::GLuint);
+        self.gl.depth_func(depth_func.to_gl());
     }
 
     pub fn disable_depth(&self) {

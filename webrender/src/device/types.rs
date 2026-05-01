@@ -13,6 +13,8 @@
 //! wgpu impl wires up. See assignment-doc R2 for the full lift/associated-type
 //! categorization.
 
+use api::ImageFormat;
+use std::num::NonZeroUsize;
 use std::ops::Add;
 
 /// Sequence number for frames, as tracked by the device layer.
@@ -57,4 +59,174 @@ pub enum VertexUsageHint {
     Static,
     Dynamic,
     Stream,
+}
+
+/// Depth-test comparison function.
+///
+/// Backend-neutral named variants — backends translate to their own enum
+/// (GL: `gl::ALWAYS`/`gl::LESS`/`gl::LEQUAL`; wgpu: `wgpu::CompareFunction`).
+/// Variants match webrender's current usage; expand additively if a backend
+/// impl needs more (e.g. `Equal`, `Greater`, `Never`).
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum DepthFunction {
+    Always,
+    Less,
+    LessEqual,
+}
+
+/// Vertex attribute scalar type.
+#[derive(Debug, Copy, Clone)]
+pub enum VertexAttributeKind {
+    F32,
+    U8Norm,
+    U16Norm,
+    I32,
+    U16,
+}
+
+impl VertexAttributeKind {
+    pub fn size_in_bytes(&self) -> u32 {
+        match *self {
+            VertexAttributeKind::F32 => 4,
+            VertexAttributeKind::U8Norm => 1,
+            VertexAttributeKind::U16Norm => 2,
+            VertexAttributeKind::I32 => 4,
+            VertexAttributeKind::U16 => 2,
+        }
+    }
+}
+
+/// Single vertex attribute slot in a vertex schema.
+#[derive(Debug)]
+pub struct VertexAttribute {
+    pub name: &'static str,
+    pub count: u32,
+    pub kind: VertexAttributeKind,
+}
+
+impl VertexAttribute {
+    pub const fn quad_instance_vertex() -> Self {
+        VertexAttribute {
+            name: "aPosition",
+            count: 2,
+            kind: VertexAttributeKind::U8Norm,
+        }
+    }
+
+    pub const fn gpu_buffer_address(name: &'static str) -> Self {
+        VertexAttribute {
+            name,
+            count: 1,
+            kind: VertexAttributeKind::I32,
+        }
+    }
+
+    pub const fn f32x4(name: &'static str) -> Self {
+        VertexAttribute { name, count: 4, kind: VertexAttributeKind::F32 }
+    }
+
+    pub const fn f32x3(name: &'static str) -> Self {
+        VertexAttribute { name, count: 3, kind: VertexAttributeKind::F32 }
+    }
+
+    pub const fn f32x2(name: &'static str) -> Self {
+        VertexAttribute { name, count: 2, kind: VertexAttributeKind::F32 }
+    }
+
+    pub const fn f32(name: &'static str) -> Self {
+        VertexAttribute { name, count: 1, kind: VertexAttributeKind::F32 }
+    }
+
+    pub const fn i32x4(name: &'static str) -> Self {
+        VertexAttribute { name, count: 4, kind: VertexAttributeKind::I32 }
+    }
+
+    pub const fn i32x2(name: &'static str) -> Self {
+        VertexAttribute { name, count: 2, kind: VertexAttributeKind::I32 }
+    }
+
+    pub const fn i32(name: &'static str) -> Self {
+        VertexAttribute { name, count: 1, kind: VertexAttributeKind::I32 }
+    }
+
+    pub const fn u16(name: &'static str) -> Self {
+        VertexAttribute { name, count: 1, kind: VertexAttributeKind::U16 }
+    }
+
+    pub const fn u16x2(name: &'static str) -> Self {
+        VertexAttribute { name, count: 2, kind: VertexAttributeKind::U16 }
+    }
+
+    pub fn size_in_bytes(&self) -> u32 {
+        self.count * self.kind.size_in_bytes()
+    }
+}
+
+/// Vertex schema: per-vertex + per-instance attribute lists.
+#[derive(Debug)]
+pub struct VertexDescriptor {
+    pub vertex_attributes: &'static [VertexAttribute],
+    pub instance_attributes: &'static [VertexAttribute],
+}
+
+/// Method of uploading texel data from CPU to GPU.
+#[derive(Debug, Clone)]
+pub enum UploadMethod {
+    /// Just call the device's direct sub-image upload (GL: `glTexSubImage`).
+    Immediate,
+    /// Accumulate the changes in a PBO first before transferring to a texture.
+    PixelBuffer(VertexUsageHint),
+}
+
+/// Plain old data that can be used to initialize a texture.
+pub unsafe trait Texel: Copy + Default {
+    fn image_format() -> ImageFormat;
+}
+
+unsafe impl Texel for u8 {
+    fn image_format() -> ImageFormat { ImageFormat::R8 }
+}
+
+/// Native/external texture format pair (some backends require both an
+/// internal storage format and an external transfer format for uploads).
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "capture", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
+pub struct TextureFormatPair<T> {
+    /// Format the GPU natively stores texels in.
+    pub internal: T,
+    /// Format we expect the users to provide the texels in.
+    pub external: T,
+}
+
+impl<T: Copy> From<T> for TextureFormatPair<T> {
+    fn from(value: T) -> Self {
+        TextureFormatPair { internal: value, external: value }
+    }
+}
+
+/// Stride alignment requirement for PBO uploads.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum StrideAlignment {
+    Bytes(NonZeroUsize),
+    Pixels(NonZeroUsize),
+}
+
+impl StrideAlignment {
+    pub fn num_bytes(&self, format: ImageFormat) -> NonZeroUsize {
+        match *self {
+            Self::Bytes(bytes) => bytes,
+            Self::Pixels(pixels) => {
+                let bpp = format.bytes_per_pixel() as usize;
+                NonZeroUsize::new(pixels.get() * bpp).expect("non-zero stride")
+            }
+        }
+    }
+}
+
+/// Errors produced by shader compilation/linking.
+#[derive(Debug, Clone)]
+pub enum ShaderError {
+    Compilation(String, String), // name, error message
+    Link(String, String),        // name, error message
 }
