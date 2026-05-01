@@ -2,6 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+use super::traits::GpuFrame;
 use super::super::shader_source::{OPTIMIZED_SHADERS, UNOPTIMIZED_SHADERS};
 use api::{ImageDescriptor, ImageFormat, Parameter, BoolParameter, IntParameter, ImageRendering};
 use api::{MixBlendMode, ImageBufferKind, VoidPtrToSizeFn};
@@ -4918,5 +4919,110 @@ impl<'a> TextureUploader<'a> {
 fn texels_to_u8_slice<T: Texel>(texels: &[T]) -> &[u8] {
     unsafe {
         slice::from_raw_parts(texels.as_ptr() as *const u8, texels.len() * mem::size_of::<T>())
+    }
+}
+
+// ============================================================================
+// Trait impls
+// ============================================================================
+//
+// `Device` keeps its inherent methods (renderer code calls them directly via
+// `device.foo()`). The trait impls below delegate to those inherent methods,
+// providing the trait surface for code that wants backend-agnostic bounds.
+// As the wgpu backend lands and the renderer migrates to trait bounds, the
+// inherent methods on Device may eventually fold into the trait impls; for
+// now the duplication is by design (zero risk to existing callers).
+
+impl GpuFrame for Device {
+    fn begin_frame(&mut self) -> GpuFrameId {
+        Device::begin_frame(self)
+    }
+
+    fn end_frame(&mut self) {
+        Device::end_frame(self)
+    }
+
+    fn reset_state(&mut self) {
+        Device::reset_state(self)
+    }
+
+    fn set_parameter(&mut self, param: &Parameter) {
+        Device::set_parameter(self, param)
+    }
+
+    fn get_capabilities(&self) -> &Capabilities {
+        Device::get_capabilities(self)
+    }
+
+    fn max_texture_size(&self) -> i32 {
+        Device::max_texture_size(self)
+    }
+
+    fn clamp_max_texture_size(&mut self, size: i32) {
+        Device::clamp_max_texture_size(self, size)
+    }
+
+    fn surface_origin_is_top_left(&self) -> bool {
+        Device::surface_origin_is_top_left(self)
+    }
+
+    fn preferred_color_formats(&self) -> TextureFormatPair<ImageFormat> {
+        Device::preferred_color_formats(self)
+    }
+
+    fn swizzle_settings(&self) -> Option<SwizzleSettings> {
+        Device::swizzle_settings(self)
+    }
+
+    fn supports_extension(&self, extension: &str) -> bool {
+        Device::supports_extension(self, extension)
+    }
+
+    fn depth_bits(&self) -> i32 {
+        Device::depth_bits(self)
+    }
+
+    fn max_depth_ids(&self) -> i32 {
+        Device::max_depth_ids(self)
+    }
+
+    fn ortho_near_plane(&self) -> f32 {
+        Device::ortho_near_plane(self)
+    }
+
+    fn ortho_far_plane(&self) -> f32 {
+        Device::ortho_far_plane(self)
+    }
+
+    fn required_pbo_stride(&self) -> StrideAlignment {
+        Device::required_pbo_stride(self)
+    }
+
+    fn upload_method(&self) -> &UploadMethod {
+        Device::upload_method(self)
+    }
+
+    fn use_batched_texture_uploads(&self) -> bool {
+        Device::use_batched_texture_uploads(self)
+    }
+
+    fn use_draw_calls_for_texture_copy(&self) -> bool {
+        Device::use_draw_calls_for_texture_copy(self)
+    }
+
+    fn batched_upload_threshold(&self) -> i32 {
+        Device::batched_upload_threshold(self)
+    }
+
+    fn echo_driver_messages(&self) {
+        Device::echo_driver_messages(self)
+    }
+
+    fn report_memory(&self, size_op_funs: &MallocSizeOfOps, swgl: *mut c_void) -> MemoryReport {
+        Device::report_memory(self, size_op_funs, swgl)
+    }
+
+    fn depth_targets_memory(&self) -> usize {
+        Device::depth_targets_memory(self)
     }
 }
