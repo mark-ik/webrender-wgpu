@@ -40,12 +40,14 @@ use webrender_build::shader::{
 };
 use malloc_size_of::MallocSizeOfOps;
 
-// Backend-neutral types lifted to device/types.rs. Re-exported here so
-// existing internal references continue to resolve. Each follows the same
-// lift pattern: pure type definition (data + pure impls) in types.rs;
-// any GL-specific impls (e.g. translation to gl crate constants) live in
-// gl.rs as either a private trait extension or a separate impl block.
-pub use super::types::{
+// Backend-neutral types lifted to device/types.rs. Brought into scope here
+// so existing internal references resolve without changes. Plain `use`,
+// not `pub use`: `mod gl` is private to `device/`, and `mod.rs` already
+// re-exports the types directly via `pub use self::types::{...}`. Lift
+// pattern: pure type definition (data + pure impls) lives in types.rs;
+// any GL-specific behavior (translation to gl crate constants etc.)
+// lives in gl.rs as a private *GlExt extension trait.
+use super::types::{
     Capabilities, DepthFunction, GpuFrameId, ShaderError, StrideAlignment, Texel,
     TextureFilter, TextureFormatPair, TextureSlot, UploadMethod, VertexAttribute,
     VertexAttributeKind, VertexDescriptor, VertexUsageHint,
@@ -135,10 +137,22 @@ pub fn get_unoptimized_shader_source(shader_name: &str, base_path: Option<&PathB
 }
 
 // VertexAttributeKind::size_in_bytes and VertexAttribute::size_in_bytes
-// moved to device/types.rs (now `pub fn` instead of `fn` so the GL impl
-// below can call across modules). Only the GL-specific bind_to_vao stays.
+// moved to device/types.rs (now `pub fn` instead of `fn` so the GL
+// extension trait below can call across modules). The GL-specific
+// bind_to_vao behavior follows the established *GlExt pattern (mirrors
+// VertexUsageHintGlExt and DepthFunctionGlExt).
+trait VertexAttributeGlExt {
+    fn bind_to_vao(
+        &self,
+        attr_index: gl::GLuint,
+        divisor: gl::GLuint,
+        stride: gl::GLint,
+        offset: gl::GLuint,
+        gl: &dyn gl::Gl,
+    );
+}
 
-impl VertexAttribute {
+impl VertexAttributeGlExt for VertexAttribute {
     fn bind_to_vao(
         &self,
         attr_index: gl::GLuint,
@@ -1803,7 +1817,7 @@ impl GlDevice {
 
             max_texture_size,
             cached_programs,
-            frame_id: GpuFrameId(0),
+            frame_id: GpuFrameId::new(0),
             extensions,
             texture_storage_usage,
             requires_null_terminated_shader_source,
@@ -3630,13 +3644,13 @@ impl GlDevice {
 
         self.gl.active_texture(gl::TEXTURE0);
 
-        self.frame_id.0 += 1;
+        self.frame_id = self.frame_id + 1;
 
         // Save any shaders compiled this frame to disk.
         // If this is the tenth frame then treat startup as complete, meaning the
         // current set of in-use shaders are the ones to load on the next startup.
         if let Some(ref cache) = self.cached_programs {
-            cache.update_disk_cache(self.frame_id.0 == 10);
+            cache.update_disk_cache(self.frame_id == GpuFrameId::new(10));
         }
     }
 

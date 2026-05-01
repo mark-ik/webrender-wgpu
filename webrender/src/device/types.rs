@@ -21,7 +21,7 @@ use std::ops::Add;
 #[derive(Debug, Copy, Clone, PartialEq, Ord, Eq, PartialOrd)]
 #[cfg_attr(feature = "capture", derive(Serialize))]
 #[cfg_attr(feature = "replay", derive(Deserialize))]
-pub struct GpuFrameId(pub usize);
+pub struct GpuFrameId(usize);
 
 impl GpuFrameId {
     pub fn new(value: usize) -> Self {
