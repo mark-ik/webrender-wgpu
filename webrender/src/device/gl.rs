@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use super::traits::{GpuFrame, GpuResources, GpuShaders};
+use super::traits::{GpuFrame, GpuPass, GpuResources, GpuShaders};
 use super::super::shader_source::{OPTIMIZED_SHADERS, UNOPTIMIZED_SHADERS};
 use api::{ImageDescriptor, ImageFormat, Parameter, BoolParameter, IntParameter, ImageRendering};
 use api::{MixBlendMode, ImageBufferKind, VoidPtrToSizeFn};
@@ -5238,5 +5238,205 @@ impl GpuResources for Device {
         format: ImageFormat,
     ) -> (usize, usize) {
         Device::required_upload_size_and_stride(self, size, format)
+    }
+}
+
+impl GpuPass for Device {
+    fn bind_read_target(&mut self, target: ReadTarget) {
+        Device::bind_read_target(self, target)
+    }
+    fn reset_read_target(&mut self) {
+        Device::reset_read_target(self)
+    }
+    fn bind_draw_target(&mut self, target: DrawTarget) {
+        Device::bind_draw_target(self, target)
+    }
+    fn reset_draw_target(&mut self) {
+        Device::reset_draw_target(self)
+    }
+    fn bind_external_draw_target(&mut self, fbo_id: FBOId) {
+        Device::bind_external_draw_target(self, fbo_id)
+    }
+
+    fn bind_program(&mut self, program: &Program) -> bool {
+        Device::bind_program(self, program)
+    }
+    fn set_uniforms(&self, program: &Program, transform: &Transform3D<f32>) {
+        Device::set_uniforms(self, program, transform)
+    }
+    fn set_shader_texture_size(&self, program: &Program, texture_size: DeviceSize) {
+        Device::set_shader_texture_size(self, program, texture_size)
+    }
+
+    fn bind_vao(&mut self, vao: &VAO) {
+        Device::bind_vao(self, vao)
+    }
+    fn bind_custom_vao(&mut self, vao: &CustomVAO) {
+        Device::bind_custom_vao(self, vao)
+    }
+    fn bind_texture<S>(&mut self, slot: S, texture: &Texture, swizzle: Swizzle)
+    where
+        S: Into<TextureSlot>,
+    {
+        Device::bind_texture(self, slot, texture, swizzle)
+    }
+    fn bind_external_texture<S>(&mut self, slot: S, external_texture: &ExternalTexture)
+    where
+        S: Into<TextureSlot>,
+    {
+        Device::bind_external_texture(self, slot, external_texture)
+    }
+
+    fn clear_target(
+        &self,
+        color: Option<[f32; 4]>,
+        depth: Option<f32>,
+        rect: Option<FramebufferIntRect>,
+    ) {
+        Device::clear_target(self, color, depth, rect)
+    }
+
+    fn enable_depth(&self, depth_func: DepthFunction) {
+        Device::enable_depth(self, depth_func)
+    }
+    fn disable_depth(&self) {
+        Device::disable_depth(self)
+    }
+    fn enable_depth_write(&self) {
+        Device::enable_depth_write(self)
+    }
+    fn disable_depth_write(&self) {
+        Device::disable_depth_write(self)
+    }
+    fn disable_stencil(&self) {
+        Device::disable_stencil(self)
+    }
+
+    fn set_scissor_rect(&self, rect: FramebufferIntRect) {
+        Device::set_scissor_rect(self, rect)
+    }
+    fn enable_scissor(&self) {
+        Device::enable_scissor(self)
+    }
+    fn disable_scissor(&self) {
+        Device::disable_scissor(self)
+    }
+    fn enable_color_write(&self) {
+        Device::enable_color_write(self)
+    }
+    fn disable_color_write(&self) {
+        Device::disable_color_write(self)
+    }
+
+    fn set_blend(&mut self, enable: bool) {
+        Device::set_blend(self, enable)
+    }
+    fn set_blend_mode_alpha(&mut self) {
+        Device::set_blend_mode_alpha(self)
+    }
+    fn set_blend_mode_premultiplied_alpha(&mut self) {
+        Device::set_blend_mode_premultiplied_alpha(self)
+    }
+    fn set_blend_mode_premultiplied_dest_out(&mut self) {
+        Device::set_blend_mode_premultiplied_dest_out(self)
+    }
+    fn set_blend_mode_multiply(&mut self) {
+        Device::set_blend_mode_multiply(self)
+    }
+    fn set_blend_mode_subpixel_pass0(&mut self) {
+        Device::set_blend_mode_subpixel_pass0(self)
+    }
+    fn set_blend_mode_subpixel_pass1(&mut self) {
+        Device::set_blend_mode_subpixel_pass1(self)
+    }
+    fn set_blend_mode_subpixel_dual_source(&mut self) {
+        Device::set_blend_mode_subpixel_dual_source(self)
+    }
+    fn set_blend_mode_multiply_dual_source(&mut self) {
+        Device::set_blend_mode_multiply_dual_source(self)
+    }
+    fn set_blend_mode_screen(&mut self) {
+        Device::set_blend_mode_screen(self)
+    }
+    fn set_blend_mode_plus_lighter(&mut self) {
+        Device::set_blend_mode_plus_lighter(self)
+    }
+    fn set_blend_mode_exclusion(&mut self) {
+        Device::set_blend_mode_exclusion(self)
+    }
+    fn set_blend_mode_show_overdraw(&mut self) {
+        Device::set_blend_mode_show_overdraw(self)
+    }
+    fn set_blend_mode_max(&mut self) {
+        Device::set_blend_mode_max(self)
+    }
+    fn set_blend_mode_min(&mut self) {
+        Device::set_blend_mode_min(self)
+    }
+    fn set_blend_mode_advanced(&mut self, mode: MixBlendMode) {
+        Device::set_blend_mode_advanced(self, mode)
+    }
+
+    fn draw_triangles_u16(&mut self, first_vertex: i32, index_count: i32) {
+        Device::draw_triangles_u16(self, first_vertex, index_count)
+    }
+    fn draw_triangles_u32(&mut self, first_vertex: i32, index_count: i32) {
+        Device::draw_triangles_u32(self, first_vertex, index_count)
+    }
+    fn draw_indexed_triangles(&mut self, index_count: i32) {
+        Device::draw_indexed_triangles(self, index_count)
+    }
+    fn draw_indexed_triangles_instanced_u16(&mut self, index_count: i32, instance_count: i32) {
+        Device::draw_indexed_triangles_instanced_u16(self, index_count, instance_count)
+    }
+    fn draw_nonindexed_points(&mut self, first_vertex: i32, vertex_count: i32) {
+        Device::draw_nonindexed_points(self, first_vertex, vertex_count)
+    }
+    fn draw_nonindexed_lines(&mut self, first_vertex: i32, vertex_count: i32) {
+        Device::draw_nonindexed_lines(self, first_vertex, vertex_count)
+    }
+
+    fn blit_render_target(
+        &mut self,
+        src_target: ReadTarget,
+        src_rect: FramebufferIntRect,
+        dest_target: DrawTarget,
+        dest_rect: FramebufferIntRect,
+        filter: TextureFilter,
+    ) {
+        Device::blit_render_target(self, src_target, src_rect, dest_target, dest_rect, filter)
+    }
+    fn blit_render_target_invert_y(
+        &mut self,
+        src_target: ReadTarget,
+        src_rect: FramebufferIntRect,
+        dest_target: DrawTarget,
+        dest_rect: FramebufferIntRect,
+    ) {
+        Device::blit_render_target_invert_y(self, src_target, src_rect, dest_target, dest_rect)
+    }
+
+    fn read_pixels(&mut self, img_desc: &ImageDescriptor) -> Vec<u8> {
+        Device::read_pixels(self, img_desc)
+    }
+    fn read_pixels_into(
+        &mut self,
+        rect: FramebufferIntRect,
+        format: ImageFormat,
+        output: &mut [u8],
+    ) {
+        Device::read_pixels_into(self, rect, format, output)
+    }
+    fn read_pixels_into_pbo(
+        &mut self,
+        read_target: ReadTarget,
+        rect: DeviceIntRect,
+        format: ImageFormat,
+        pbo: &PBO,
+    ) {
+        Device::read_pixels_into_pbo(self, read_target, rect, format, pbo)
+    }
+    fn get_tex_image_into(&mut self, texture: &Texture, format: ImageFormat, output: &mut [u8]) {
+        Device::get_tex_image_into(self, texture, format, output)
     }
 }

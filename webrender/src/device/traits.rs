@@ -25,9 +25,10 @@
 //! See `notes/2026-04-30_p0_method_assignment.md` for the full method-to-trait
 //! assignment. This file is the authoritative trait declaration.
 
-use api::{ImageBufferKind, ImageFormat, Parameter};
-use api::units::DeviceIntSize;
-use crate::internal_types::{RenderTargetInfo, SwizzleSettings};
+use api::{ImageBufferKind, ImageDescriptor, ImageFormat, MixBlendMode, Parameter};
+use api::units::{DeviceIntRect, DeviceIntSize, DeviceSize, FramebufferIntRect};
+use euclid::default::Transform3D;
+use crate::internal_types::{RenderTargetInfo, Swizzle, SwizzleSettings};
 use malloc_size_of::MallocSizeOfOps;
 use crate::render_api::MemoryReport;
 use std::num::NonZeroUsize;
@@ -41,9 +42,13 @@ use std::os::raw::c_void;
 // them through this import.
 use super::gl::{
     Capabilities,
+    DepthFunction,
+    DrawTarget,
+    ExternalTexture,
     FBOId,
     GpuFrameId,
     Program,
+    ReadTarget,
     ShaderError,
     Stream,
     StrideAlignment,
@@ -288,20 +293,118 @@ pub trait GpuShaders: GpuFrame {
 /// Supertrait of `GpuShaders + GpuResources` so the bind methods can name
 /// `Self::Program`, `Self::Texture`, `Self::Vao` etc. without re-declaring
 /// the associated types.
+///
+/// The 16 `set_blend_mode_*` methods land here individually for P0a; P0b
+/// collapses them into one `set_blend_mode(BlendMode)` enum-keyed method.
 pub trait GpuPass: GpuShaders + GpuResources {
-    // Methods to follow:
-    //   bind_read_target, reset_read_target, bind_draw_target, reset_draw_target,
-    //   bind_external_draw_target,
-    //   bind_program, set_uniforms, set_shader_texture_size,
-    //   bind_vao, bind_custom_vao, bind_texture, bind_external_texture,
-    //   clear_target,
-    //   enable_depth, disable_depth, enable_depth_write, disable_depth_write,
-    //   disable_stencil, set_scissor_rect, enable_scissor, disable_scissor,
-    //   enable_color_write, disable_color_write,
-    //   set_blend, set_blend_mode (collapsed enum-keyed; see plan A2 + assignment doc),
-    //   draw_triangles_u16, draw_triangles_u32, draw_indexed_triangles,
-    //   draw_indexed_triangles_instanced_u16, draw_nonindexed_points,
-    //   draw_nonindexed_lines,
-    //   blit_render_target, blit_render_target_invert_y,
-    //   read_pixels, read_pixels_into, read_pixels_into_pbo, get_tex_image_into.
+    // --- Render target binding ---
+
+    fn bind_read_target(&mut self, target: ReadTarget);
+    fn reset_read_target(&mut self);
+    fn bind_draw_target(&mut self, target: DrawTarget);
+    fn reset_draw_target(&mut self);
+    fn bind_external_draw_target(&mut self, fbo_id: FBOId);
+
+    // --- Program / uniform binding (per-pass operations on a bound program) ---
+
+    fn bind_program(&mut self, program: &Self::Program) -> bool;
+    fn set_uniforms(&self, program: &Self::Program, transform: &Transform3D<f32>);
+    fn set_shader_texture_size(&self, program: &Self::Program, texture_size: DeviceSize);
+
+    // --- Vertex array / texture binding ---
+
+    fn bind_vao(&mut self, vao: &Self::Vao);
+    fn bind_custom_vao(&mut self, vao: &Self::CustomVao);
+
+    fn bind_texture<S>(&mut self, slot: S, texture: &Self::Texture, swizzle: Swizzle)
+    where
+        S: Into<TextureSlot>;
+
+    fn bind_external_texture<S>(&mut self, slot: S, external_texture: &ExternalTexture)
+    where
+        S: Into<TextureSlot>;
+
+    // --- Clears ---
+
+    fn clear_target(
+        &self,
+        color: Option<[f32; 4]>,
+        depth: Option<f32>,
+        rect: Option<FramebufferIntRect>,
+    );
+
+    // --- Depth / stencil state ---
+
+    fn enable_depth(&self, depth_func: DepthFunction);
+    fn disable_depth(&self);
+    fn enable_depth_write(&self);
+    fn disable_depth_write(&self);
+    fn disable_stencil(&self);
+
+    // --- Scissor / color write ---
+
+    fn set_scissor_rect(&self, rect: FramebufferIntRect);
+    fn enable_scissor(&self);
+    fn disable_scissor(&self);
+    fn enable_color_write(&self);
+    fn disable_color_write(&self);
+
+    // --- Blend state (16 set_blend_mode_* collapse into set_blend_mode in P0b) ---
+
+    fn set_blend(&mut self, enable: bool);
+    fn set_blend_mode_alpha(&mut self);
+    fn set_blend_mode_premultiplied_alpha(&mut self);
+    fn set_blend_mode_premultiplied_dest_out(&mut self);
+    fn set_blend_mode_multiply(&mut self);
+    fn set_blend_mode_subpixel_pass0(&mut self);
+    fn set_blend_mode_subpixel_pass1(&mut self);
+    fn set_blend_mode_subpixel_dual_source(&mut self);
+    fn set_blend_mode_multiply_dual_source(&mut self);
+    fn set_blend_mode_screen(&mut self);
+    fn set_blend_mode_plus_lighter(&mut self);
+    fn set_blend_mode_exclusion(&mut self);
+    fn set_blend_mode_show_overdraw(&mut self);
+    fn set_blend_mode_max(&mut self);
+    fn set_blend_mode_min(&mut self);
+    fn set_blend_mode_advanced(&mut self, mode: MixBlendMode);
+
+    // --- Draw commands ---
+
+    fn draw_triangles_u16(&mut self, first_vertex: i32, index_count: i32);
+    fn draw_triangles_u32(&mut self, first_vertex: i32, index_count: i32);
+    fn draw_indexed_triangles(&mut self, index_count: i32);
+    fn draw_indexed_triangles_instanced_u16(&mut self, index_count: i32, instance_count: i32);
+    fn draw_nonindexed_points(&mut self, first_vertex: i32, vertex_count: i32);
+    fn draw_nonindexed_lines(&mut self, first_vertex: i32, vertex_count: i32);
+
+    // --- Blits ---
+
+    fn blit_render_target(
+        &mut self,
+        src_target: ReadTarget,
+        src_rect: FramebufferIntRect,
+        dest_target: DrawTarget,
+        dest_rect: FramebufferIntRect,
+        filter: TextureFilter,
+    );
+    fn blit_render_target_invert_y(
+        &mut self,
+        src_target: ReadTarget,
+        src_rect: FramebufferIntRect,
+        dest_target: DrawTarget,
+        dest_rect: FramebufferIntRect,
+    );
+
+    // --- Readback ---
+
+    fn read_pixels(&mut self, img_desc: &ImageDescriptor) -> Vec<u8>;
+    fn read_pixels_into(&mut self, rect: FramebufferIntRect, format: ImageFormat, output: &mut [u8]);
+    fn read_pixels_into_pbo(
+        &mut self,
+        read_target: ReadTarget,
+        rect: DeviceIntRect,
+        format: ImageFormat,
+        pbo: &Self::Pbo,
+    );
+    fn get_tex_image_into(&mut self, texture: &Self::Texture, format: ImageFormat, output: &mut [u8]);
 }
