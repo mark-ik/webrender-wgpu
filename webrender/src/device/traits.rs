@@ -45,10 +45,9 @@ use super::types::{
     TextureFilter, TextureFormatPair, TextureSlot, UploadMethod, VertexDescriptor,
     VertexUsageHint,
 };
-use super::gl::{
-    ExternalTexture,
-    UploadPBOPool,
-};
+// All backend-coupled types are now associated types on the GpuResources
+// trait. traits.rs no longer imports anything from super::gl — the trait
+// surface is fully backend-neutral.
 
 /// Frame lifecycle, capabilities, parameters, and global queries.
 ///
@@ -129,6 +128,14 @@ pub trait GpuResources: GpuFrame {
     /// parameterized form was considered and rejected — the variants
     /// want different handle shapes.
     type DrawTarget;
+    /// Externally-owned texture handle (host-provided). GL: wraps GLuint
+    /// + target; wgpu: would wrap TextureView + Sampler. Constructors
+    /// stay on the concrete type since the renderer call sites are
+    /// already backend-specific.
+    type ExternalTexture;
+    /// Pool of upload PBOs (or backend-equivalent staging buffers).
+    /// Renderer holds one as a field; constructor stays concrete.
+    type UploadPboPool;
     /// RAII handle for a CPU-mapped PBO; lifetime ties it to the bound state.
     type BoundPbo<'a>
     where
@@ -234,7 +241,7 @@ pub trait GpuResources: GpuFrame {
 
     // --- Upload paths ---
 
-    fn upload_texture<'a>(&mut self, pbo_pool: &'a mut UploadPBOPool) -> Self::TextureUploader<'a>;
+    fn upload_texture<'a>(&mut self, pbo_pool: &'a mut Self::UploadPboPool) -> Self::TextureUploader<'a>;
 
     fn upload_texture_immediate<T: Texel>(&mut self, texture: &Self::Texture, pixels: &[T]);
 
@@ -345,7 +352,7 @@ pub trait GpuPass: GpuShaders + GpuResources {
     where
         S: Into<TextureSlot>;
 
-    fn bind_external_texture<S>(&mut self, slot: S, external_texture: &ExternalTexture)
+    fn bind_external_texture<S>(&mut self, slot: S, external_texture: &Self::ExternalTexture)
     where
         S: Into<TextureSlot>;
 
