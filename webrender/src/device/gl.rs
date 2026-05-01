@@ -518,7 +518,7 @@ bitflags! {
 /// WebRender interface to an OpenGL texture.
 ///
 /// Because freeing a texture requires various device handles that are not
-/// reachable from this struct, manual destruction via `Device` is required.
+/// reachable from this struct, manual destruction via `GlDevice` is required.
 /// Our `Drop` implementation asserts that this has happened.
 #[derive(Debug)]
 pub struct Texture {
@@ -715,7 +715,7 @@ impl Drop for PBO {
 }
 
 pub struct BoundPBO<'a> {
-    device: &'a mut Device,
+    device: &'a mut GlDevice,
     pub data: &'a [u8]
 }
 
@@ -755,7 +755,7 @@ pub struct ProgramSourceInfo {
 
 impl ProgramSourceInfo {
     fn new(
-        device: &Device,
+        device: &GlDevice,
         name: &'static str,
         features: &[&'static str],
     ) -> Self {
@@ -855,7 +855,7 @@ impl ProgramSourceInfo {
         }
     }
 
-    fn compute_source(&self, device: &Device, kind: ShaderKind) -> String {
+    fn compute_source(&self, device: &GlDevice, kind: ShaderKind) -> String {
         let full_name = self.full_name();
         match self.source_type {
             ProgramSourceType::Optimized(gl_version) => {
@@ -1151,7 +1151,7 @@ impl StrideAlignment {
 // precision problems.
 const RESERVE_DEPTH_BITS: i32 = 2;
 
-pub struct Device {
+pub struct GlDevice {
     gl: Rc<dyn gl::Gl>,
 
     /// If non-None, |gl| points to a profiling wrapper, and this points to the
@@ -1542,7 +1542,7 @@ fn gl_error_string(code: u32) -> &'static str {
     }
 }
 
-impl Device {
+impl GlDevice {
     pub fn new(
         mut gl: Rc<dyn gl::Gl>,
         crash_annotator: Option<Box<dyn CrashAnnotator>>,
@@ -1556,7 +1556,7 @@ impl Device {
         dump_shader_source: Option<String>,
         surface_origin_is_top_left: bool,
         panic_on_gl_error: bool,
-    ) -> Device {
+    ) -> GlDevice {
         let mut max_texture_size = [0];
         unsafe {
             gl.get_integer_v(gl::MAX_TEXTURE_SIZE, &mut max_texture_size);
@@ -1991,7 +1991,7 @@ impl Device {
         // an attached buffer has been orphaned.
         let requires_vao_rebind_after_orphaning = is_adreno_3xx;
 
-        Device {
+        GlDevice {
             gl,
             base_gl: None,
             crash_annotator,
@@ -4171,7 +4171,7 @@ impl Device {
 
     pub fn echo_driver_messages(&self) {
         if self.capabilities.supports_khr_debug {
-            Device::log_driver_messages(self.gl());
+            GlDevice::log_driver_messages(self.gl());
         }
     }
 
@@ -4327,7 +4327,7 @@ impl<'a> PixelBuffer<'a> {
         }
     }
 
-    fn flush_chunks(&mut self, device: &mut Device) {
+    fn flush_chunks(&mut self, device: &mut GlDevice) {
         for chunk in self.chunks.drain(..) {
             TextureUploader::update_impl(device, chunk);
         }
@@ -4400,7 +4400,7 @@ pub struct UploadPBOPool {
 }
 
 impl UploadPBOPool {
-    pub fn new(device: &mut Device, default_size: usize) -> Self {
+    pub fn new(device: &mut GlDevice, default_size: usize) -> Self {
         let usage_hint = match device.upload_method {
             UploadMethod::Immediate => VertexUsageHint::Stream,
             UploadMethod::PixelBuffer(usage_hint) => usage_hint,
@@ -4417,7 +4417,7 @@ impl UploadPBOPool {
 
     /// To be called at the beginning of a series of uploads.
     /// Moves any buffers which are now ready to be used from the waiting list to the ready list.
-    pub fn begin_frame(&mut self, device: &mut Device) {
+    pub fn begin_frame(&mut self, device: &mut GlDevice) {
         // Iterate through the waiting buffers and check if each fence has been signalled.
         // If a fence is signalled, move its corresponding buffers to the available list.
         // On error, delete the buffers. Stop when we find the first non-signalled fence,
@@ -4449,7 +4449,7 @@ impl UploadPBOPool {
 
     // To be called at the end of a series of uploads.
     // Creates a sync object, and adds the buffers returned during this frame to waiting_buffers.
-    pub fn end_frame(&mut self, device: &mut Device) {
+    pub fn end_frame(&mut self, device: &mut GlDevice) {
         if !self.returned_buffers.is_empty() {
             let sync = device.gl.fence_sync(gl::SYNC_GPU_COMMANDS_COMPLETE, 0);
             if !sync.is_null() {
@@ -4467,7 +4467,7 @@ impl UploadPBOPool {
     /// Obtain a PBO, either by reusing an existing PBO or allocating a new one.
     /// min_size specifies the minimum required size of the PBO. The returned PBO
     /// may be larger than required.
-    fn get_pbo(&mut self, device: &mut Device, min_size: usize) -> Result<UploadPBO, String> {
+    fn get_pbo(&mut self, device: &mut GlDevice, min_size: usize) -> Result<UploadPBO, String> {
 
         // If min_size is smaller than our default size, then use the default size.
         // The exception to this is when due to driver bugs we cannot upload from
@@ -4575,7 +4575,7 @@ impl UploadPBOPool {
 
     /// Returns a PBO to the pool. If the PBO is recyclable it is placed in the waiting list.
     /// Otherwise we orphan the allocation immediately, and will subsequently reuse just the ID.
-    fn return_pbo(&mut self, device: &mut Device, mut buffer: UploadPBO) {
+    fn return_pbo(&mut self, device: &mut GlDevice, mut buffer: UploadPBO) {
         assert!(
             !matches!(buffer.mapping, PBOMapping::Transient(_)),
             "Transiently mapped UploadPBO must be unmapped before returning to pool.",
@@ -4599,7 +4599,7 @@ impl UploadPBOPool {
     }
 
     /// Frees all allocated buffers in response to a memory pressure event.
-    pub fn on_memory_pressure(&mut self, device: &mut Device) {
+    pub fn on_memory_pressure(&mut self, device: &mut GlDevice) {
         for buffer in self.available_buffers.drain(..) {
             device.delete_pbo(buffer.pbo);
         }
@@ -4632,7 +4632,7 @@ impl UploadPBOPool {
         report
     }
 
-    pub fn deinit(&mut self, device: &mut Device) {
+    pub fn deinit(&mut self, device: &mut GlDevice) {
         for buffer in self.available_buffers.drain(..) {
             device.delete_pbo(buffer.pbo);
         }
@@ -4652,7 +4652,7 @@ impl UploadPBOPool {
 }
 
 /// Used to perform a series of texture uploads.
-/// Create using Device::upload_texture(). Perform a series of uploads using either
+/// Create using GlDevice::upload_texture(). Perform a series of uploads using either
 /// upload(), or stage() and upload_staged(), then call flush().
 pub struct TextureUploader<'a> {
     /// A list of buffers containing uploads that need to be flushed.
@@ -4701,7 +4701,7 @@ impl<'a> TextureUploader<'a> {
     /// Once the data has been staged, it can be uploaded with upload_staged().
     pub fn stage(
         &mut self,
-        device: &mut Device,
+        device: &mut GlDevice,
         format: ImageFormat,
         size: DeviceIntSize,
     ) -> Result<UploadStagingBuffer<'a>, String> {
@@ -4741,7 +4741,7 @@ impl<'a> TextureUploader<'a> {
     /// Uploads manually staged texture data to the specified texture.
     pub fn upload_staged(
         &mut self,
-        device: &mut Device,
+        device: &mut GlDevice,
         texture: &'a Texture,
         rect: DeviceIntRect,
         format_override: Option<ImageFormat>,
@@ -4771,7 +4771,7 @@ impl<'a> TextureUploader<'a> {
     /// Uploads texture data to the specified texture.
     pub fn upload<T>(
         &mut self,
-        device: &mut Device,
+        device: &mut GlDevice,
         texture: &'a Texture,
         mut rect: DeviceIntRect,
         stride: Option<i32>,
@@ -4855,7 +4855,7 @@ impl<'a> TextureUploader<'a> {
         }
     }
 
-    fn flush_buffer(device: &mut Device, pbo_pool: &mut UploadPBOPool, mut buffer: PixelBuffer) {
+    fn flush_buffer(device: &mut GlDevice, pbo_pool: &mut UploadPBOPool, mut buffer: PixelBuffer) {
         device.gl.bind_buffer(gl::PIXEL_UNPACK_BUFFER, buffer.inner.pbo.id);
         match buffer.inner.mapping {
             PBOMapping::Unmapped => unreachable!("UploadPBO should be mapped at this stage."),
@@ -4874,7 +4874,7 @@ impl<'a> TextureUploader<'a> {
 
     /// Flushes all pending texture uploads. Must be called after all
     /// required upload() or upload_staged() calls have been made.
-    pub fn flush(mut self, device: &mut Device) {
+    pub fn flush(mut self, device: &mut GlDevice) {
         for buffer in self.buffers.drain(..) {
             Self::flush_buffer(device, self.pbo_pool, buffer);
         }
@@ -4882,7 +4882,7 @@ impl<'a> TextureUploader<'a> {
         device.gl.bind_buffer(gl::PIXEL_UNPACK_BUFFER, 0);
     }
 
-    fn update_impl(device: &mut Device, chunk: UploadChunk) {
+    fn update_impl(device: &mut GlDevice, chunk: UploadChunk) {
         device.bind_texture(DEFAULT_TEXTURE, chunk.texture, Swizzle::default());
 
         let format = chunk.format_override.unwrap_or(chunk.texture.format);
@@ -4951,108 +4951,108 @@ fn texels_to_u8_slice<T: Texel>(texels: &[T]) -> &[u8] {
 // Trait impls
 // ============================================================================
 //
-// `Device` keeps its inherent methods (renderer code calls them directly via
+// `GlDevice` keeps its inherent methods (renderer code calls them directly via
 // `device.foo()`). The trait impls below delegate to those inherent methods,
 // providing the trait surface for code that wants backend-agnostic bounds.
 // As the wgpu backend lands and the renderer migrates to trait bounds, the
-// inherent methods on Device may eventually fold into the trait impls; for
+// inherent methods on GlDevice may eventually fold into the trait impls; for
 // now the duplication is by design (zero risk to existing callers).
 
-impl GpuFrame for Device {
+impl GpuFrame for GlDevice {
     fn begin_frame(&mut self) -> GpuFrameId {
-        Device::begin_frame(self)
+        GlDevice::begin_frame(self)
     }
 
     fn end_frame(&mut self) {
-        Device::end_frame(self)
+        GlDevice::end_frame(self)
     }
 
     fn reset_state(&mut self) {
-        Device::reset_state(self)
+        GlDevice::reset_state(self)
     }
 
     fn set_parameter(&mut self, param: &Parameter) {
-        Device::set_parameter(self, param)
+        GlDevice::set_parameter(self, param)
     }
 
     fn get_capabilities(&self) -> &Capabilities {
-        Device::get_capabilities(self)
+        GlDevice::get_capabilities(self)
     }
 
     fn max_texture_size(&self) -> i32 {
-        Device::max_texture_size(self)
+        GlDevice::max_texture_size(self)
     }
 
     fn clamp_max_texture_size(&mut self, size: i32) {
-        Device::clamp_max_texture_size(self, size)
+        GlDevice::clamp_max_texture_size(self, size)
     }
 
     fn surface_origin_is_top_left(&self) -> bool {
-        Device::surface_origin_is_top_left(self)
+        GlDevice::surface_origin_is_top_left(self)
     }
 
     fn preferred_color_formats(&self) -> TextureFormatPair<ImageFormat> {
-        Device::preferred_color_formats(self)
+        GlDevice::preferred_color_formats(self)
     }
 
     fn swizzle_settings(&self) -> Option<SwizzleSettings> {
-        Device::swizzle_settings(self)
+        GlDevice::swizzle_settings(self)
     }
 
     fn supports_extension(&self, extension: &str) -> bool {
-        Device::supports_extension(self, extension)
+        GlDevice::supports_extension(self, extension)
     }
 
     fn depth_bits(&self) -> i32 {
-        Device::depth_bits(self)
+        GlDevice::depth_bits(self)
     }
 
     fn max_depth_ids(&self) -> i32 {
-        Device::max_depth_ids(self)
+        GlDevice::max_depth_ids(self)
     }
 
     fn ortho_near_plane(&self) -> f32 {
-        Device::ortho_near_plane(self)
+        GlDevice::ortho_near_plane(self)
     }
 
     fn ortho_far_plane(&self) -> f32 {
-        Device::ortho_far_plane(self)
+        GlDevice::ortho_far_plane(self)
     }
 
     fn required_pbo_stride(&self) -> StrideAlignment {
-        Device::required_pbo_stride(self)
+        GlDevice::required_pbo_stride(self)
     }
 
     fn upload_method(&self) -> &UploadMethod {
-        Device::upload_method(self)
+        GlDevice::upload_method(self)
     }
 
     fn use_batched_texture_uploads(&self) -> bool {
-        Device::use_batched_texture_uploads(self)
+        GlDevice::use_batched_texture_uploads(self)
     }
 
     fn use_draw_calls_for_texture_copy(&self) -> bool {
-        Device::use_draw_calls_for_texture_copy(self)
+        GlDevice::use_draw_calls_for_texture_copy(self)
     }
 
     fn batched_upload_threshold(&self) -> i32 {
-        Device::batched_upload_threshold(self)
+        GlDevice::batched_upload_threshold(self)
     }
 
     fn echo_driver_messages(&self) {
-        Device::echo_driver_messages(self)
+        GlDevice::echo_driver_messages(self)
     }
 
     fn report_memory(&self, size_op_funs: &MallocSizeOfOps, swgl: *mut c_void) -> MemoryReport {
-        Device::report_memory(self, size_op_funs, swgl)
+        GlDevice::report_memory(self, size_op_funs, swgl)
     }
 
     fn depth_targets_memory(&self) -> usize {
-        Device::depth_targets_memory(self)
+        GlDevice::depth_targets_memory(self)
     }
 }
 
-impl GpuShaders for Device {
+impl GpuShaders for GlDevice {
     type Program = Program;
     type UniformLocation = UniformLocation;
 
@@ -5061,7 +5061,7 @@ impl GpuShaders for Device {
         base_filename: &'static str,
         features: &[&'static str],
     ) -> Result<Program, ShaderError> {
-        Device::create_program(self, base_filename, features)
+        GlDevice::create_program(self, base_filename, features)
     }
 
     fn create_program_linked(
@@ -5070,7 +5070,7 @@ impl GpuShaders for Device {
         features: &[&'static str],
         descriptor: &VertexDescriptor,
     ) -> Result<Program, ShaderError> {
-        Device::create_program_linked(self, base_filename, features, descriptor)
+        GlDevice::create_program_linked(self, base_filename, features, descriptor)
     }
 
     fn link_program(
@@ -5078,26 +5078,26 @@ impl GpuShaders for Device {
         program: &mut Program,
         descriptor: &VertexDescriptor,
     ) -> Result<(), ShaderError> {
-        Device::link_program(self, program, descriptor)
+        GlDevice::link_program(self, program, descriptor)
     }
 
     fn delete_program(&mut self, program: Program) {
-        Device::delete_program(self, program)
+        GlDevice::delete_program(self, program)
     }
 
     fn get_uniform_location(&self, program: &Program, name: &str) -> UniformLocation {
-        Device::get_uniform_location(self, program, name)
+        GlDevice::get_uniform_location(self, program, name)
     }
 
     fn bind_shader_samplers<S>(&mut self, program: &Program, bindings: &[(&'static str, S)])
     where
         S: Into<TextureSlot> + Copy,
     {
-        Device::bind_shader_samplers(self, program, bindings)
+        GlDevice::bind_shader_samplers(self, program, bindings)
     }
 }
 
-impl GpuResources for Device {
+impl GpuResources for GlDevice {
     type Texture = Texture;
     type Vao = VAO;
     type CustomVao = CustomVAO;
@@ -5115,15 +5115,15 @@ impl GpuResources for Device {
         filter: TextureFilter,
         render_target: Option<RenderTargetInfo>,
     ) -> Texture {
-        Device::create_texture(self, target, format, width, height, filter, render_target)
+        GlDevice::create_texture(self, target, format, width, height, filter, render_target)
     }
 
     fn delete_texture(&mut self, texture: Texture) {
-        Device::delete_texture(self, texture)
+        GlDevice::delete_texture(self, texture)
     }
 
     fn copy_entire_texture(&mut self, dst: &mut Texture, src: &Texture) {
-        Device::copy_entire_texture(self, dst, src)
+        GlDevice::copy_entire_texture(self, dst, src)
     }
 
     fn copy_texture_sub_region(
@@ -5137,49 +5137,49 @@ impl GpuResources for Device {
         width: usize,
         height: usize,
     ) {
-        Device::copy_texture_sub_region(
+        GlDevice::copy_texture_sub_region(
             self, src_texture, src_x, src_y, dest_texture, dest_x, dest_y, width, height,
         )
     }
 
     fn invalidate_render_target(&mut self, texture: &Texture) {
-        Device::invalidate_render_target(self, texture)
+        GlDevice::invalidate_render_target(self, texture)
     }
 
     fn invalidate_depth_target(&mut self) {
-        Device::invalidate_depth_target(self)
+        GlDevice::invalidate_depth_target(self)
     }
 
     fn reuse_render_target<T: Texel>(&mut self, texture: &mut Texture, rt_info: RenderTargetInfo) {
-        Device::reuse_render_target::<T>(self, texture, rt_info)
+        GlDevice::reuse_render_target::<T>(self, texture, rt_info)
     }
 
     fn create_fbo(&mut self) -> FBOId {
-        Device::create_fbo(self)
+        GlDevice::create_fbo(self)
     }
 
     fn create_fbo_for_external_texture(&mut self, texture_id: u32) -> FBOId {
-        Device::create_fbo_for_external_texture(self, texture_id)
+        GlDevice::create_fbo_for_external_texture(self, texture_id)
     }
 
     fn delete_fbo(&mut self, fbo: FBOId) {
-        Device::delete_fbo(self, fbo)
+        GlDevice::delete_fbo(self, fbo)
     }
 
     fn create_pbo(&mut self) -> PBO {
-        Device::create_pbo(self)
+        GlDevice::create_pbo(self)
     }
 
     fn create_pbo_with_size(&mut self, size: usize) -> PBO {
-        Device::create_pbo_with_size(self, size)
+        GlDevice::create_pbo_with_size(self, size)
     }
 
     fn delete_pbo(&mut self, pbo: PBO) {
-        Device::delete_pbo(self, pbo)
+        GlDevice::delete_pbo(self, pbo)
     }
 
     fn create_vao(&mut self, descriptor: &VertexDescriptor, instance_divisor: u32) -> VAO {
-        Device::create_vao(self, descriptor, instance_divisor)
+        GlDevice::create_vao(self, descriptor, instance_divisor)
     }
 
     fn create_vao_with_new_instances(
@@ -5187,35 +5187,35 @@ impl GpuResources for Device {
         descriptor: &VertexDescriptor,
         base_vao: &VAO,
     ) -> VAO {
-        Device::create_vao_with_new_instances(self, descriptor, base_vao)
+        GlDevice::create_vao_with_new_instances(self, descriptor, base_vao)
     }
 
     fn delete_vao(&mut self, vao: VAO) {
-        Device::delete_vao(self, vao)
+        GlDevice::delete_vao(self, vao)
     }
 
     fn create_custom_vao(&mut self, streams: &[Stream<'_>]) -> CustomVAO {
-        Device::create_custom_vao(self, streams)
+        GlDevice::create_custom_vao(self, streams)
     }
 
     fn delete_custom_vao(&mut self, vao: CustomVAO) {
-        Device::delete_custom_vao(self, vao)
+        GlDevice::delete_custom_vao(self, vao)
     }
 
     fn create_vbo<T>(&mut self) -> VBO<T> {
-        Device::create_vbo::<T>(self)
+        GlDevice::create_vbo::<T>(self)
     }
 
     fn delete_vbo<T>(&mut self, vbo: VBO<T>) {
-        Device::delete_vbo::<T>(self, vbo)
+        GlDevice::delete_vbo::<T>(self, vbo)
     }
 
     fn allocate_vbo<V>(&mut self, vbo: &mut VBO<V>, count: usize, usage_hint: VertexUsageHint) {
-        Device::allocate_vbo::<V>(self, vbo, count, usage_hint)
+        GlDevice::allocate_vbo::<V>(self, vbo, count, usage_hint)
     }
 
     fn fill_vbo<V>(&mut self, vbo: &VBO<V>, data: &[V], offset: usize) {
-        Device::fill_vbo::<V>(self, vbo, data, offset)
+        GlDevice::fill_vbo::<V>(self, vbo, data, offset)
     }
 
     fn update_vao_main_vertices<V>(
@@ -5224,7 +5224,7 @@ impl GpuResources for Device {
         vertices: &[V],
         usage_hint: VertexUsageHint,
     ) {
-        Device::update_vao_main_vertices::<V>(self, vao, vertices, usage_hint)
+        GlDevice::update_vao_main_vertices::<V>(self, vao, vertices, usage_hint)
     }
 
     fn update_vao_instances<V: Clone>(
@@ -5234,27 +5234,27 @@ impl GpuResources for Device {
         usage_hint: VertexUsageHint,
         repeat: Option<NonZeroUsize>,
     ) {
-        Device::update_vao_instances::<V>(self, vao, instances, usage_hint, repeat)
+        GlDevice::update_vao_instances::<V>(self, vao, instances, usage_hint, repeat)
     }
 
     fn update_vao_indices<I>(&mut self, vao: &VAO, indices: &[I], usage_hint: VertexUsageHint) {
-        Device::update_vao_indices::<I>(self, vao, indices, usage_hint)
+        GlDevice::update_vao_indices::<I>(self, vao, indices, usage_hint)
     }
 
     fn upload_texture<'a>(&mut self, pbo_pool: &'a mut UploadPBOPool) -> TextureUploader<'a> {
-        Device::upload_texture(self, pbo_pool)
+        GlDevice::upload_texture(self, pbo_pool)
     }
 
     fn upload_texture_immediate<T: Texel>(&mut self, texture: &Texture, pixels: &[T]) {
-        Device::upload_texture_immediate::<T>(self, texture, pixels)
+        GlDevice::upload_texture_immediate::<T>(self, texture, pixels)
     }
 
     fn map_pbo_for_readback<'a>(&'a mut self, pbo: &'a PBO) -> Option<BoundPBO<'a>> {
-        Device::map_pbo_for_readback(self, pbo)
+        GlDevice::map_pbo_for_readback(self, pbo)
     }
 
     fn attach_read_texture(&mut self, texture: &Texture) {
-        Device::attach_read_texture(self, texture)
+        GlDevice::attach_read_texture(self, texture)
     }
 
     fn required_upload_size_and_stride(
@@ -5262,54 +5262,54 @@ impl GpuResources for Device {
         size: DeviceIntSize,
         format: ImageFormat,
     ) -> (usize, usize) {
-        Device::required_upload_size_and_stride(self, size, format)
+        GlDevice::required_upload_size_and_stride(self, size, format)
     }
 }
 
-impl GpuPass for Device {
+impl GpuPass for GlDevice {
     fn bind_read_target(&mut self, target: ReadTarget) {
-        Device::bind_read_target(self, target)
+        GlDevice::bind_read_target(self, target)
     }
     fn reset_read_target(&mut self) {
-        Device::reset_read_target(self)
+        GlDevice::reset_read_target(self)
     }
     fn bind_draw_target(&mut self, target: DrawTarget) {
-        Device::bind_draw_target(self, target)
+        GlDevice::bind_draw_target(self, target)
     }
     fn reset_draw_target(&mut self) {
-        Device::reset_draw_target(self)
+        GlDevice::reset_draw_target(self)
     }
     fn bind_external_draw_target(&mut self, fbo_id: FBOId) {
-        Device::bind_external_draw_target(self, fbo_id)
+        GlDevice::bind_external_draw_target(self, fbo_id)
     }
 
     fn bind_program(&mut self, program: &Program) -> bool {
-        Device::bind_program(self, program)
+        GlDevice::bind_program(self, program)
     }
     fn set_uniforms(&self, program: &Program, transform: &Transform3D<f32>) {
-        Device::set_uniforms(self, program, transform)
+        GlDevice::set_uniforms(self, program, transform)
     }
     fn set_shader_texture_size(&self, program: &Program, texture_size: DeviceSize) {
-        Device::set_shader_texture_size(self, program, texture_size)
+        GlDevice::set_shader_texture_size(self, program, texture_size)
     }
 
     fn bind_vao(&mut self, vao: &VAO) {
-        Device::bind_vao(self, vao)
+        GlDevice::bind_vao(self, vao)
     }
     fn bind_custom_vao(&mut self, vao: &CustomVAO) {
-        Device::bind_custom_vao(self, vao)
+        GlDevice::bind_custom_vao(self, vao)
     }
     fn bind_texture<S>(&mut self, slot: S, texture: &Texture, swizzle: Swizzle)
     where
         S: Into<TextureSlot>,
     {
-        Device::bind_texture(self, slot, texture, swizzle)
+        GlDevice::bind_texture(self, slot, texture, swizzle)
     }
     fn bind_external_texture<S>(&mut self, slot: S, external_texture: &ExternalTexture)
     where
         S: Into<TextureSlot>,
     {
-        Device::bind_external_texture(self, slot, external_texture)
+        GlDevice::bind_external_texture(self, slot, external_texture)
     }
 
     fn clear_target(
@@ -5318,65 +5318,65 @@ impl GpuPass for Device {
         depth: Option<f32>,
         rect: Option<FramebufferIntRect>,
     ) {
-        Device::clear_target(self, color, depth, rect)
+        GlDevice::clear_target(self, color, depth, rect)
     }
 
     fn enable_depth(&self, depth_func: DepthFunction) {
-        Device::enable_depth(self, depth_func)
+        GlDevice::enable_depth(self, depth_func)
     }
     fn disable_depth(&self) {
-        Device::disable_depth(self)
+        GlDevice::disable_depth(self)
     }
     fn enable_depth_write(&self) {
-        Device::enable_depth_write(self)
+        GlDevice::enable_depth_write(self)
     }
     fn disable_depth_write(&self) {
-        Device::disable_depth_write(self)
+        GlDevice::disable_depth_write(self)
     }
     fn disable_stencil(&self) {
-        Device::disable_stencil(self)
+        GlDevice::disable_stencil(self)
     }
 
     fn set_scissor_rect(&self, rect: FramebufferIntRect) {
-        Device::set_scissor_rect(self, rect)
+        GlDevice::set_scissor_rect(self, rect)
     }
     fn enable_scissor(&self) {
-        Device::enable_scissor(self)
+        GlDevice::enable_scissor(self)
     }
     fn disable_scissor(&self) {
-        Device::disable_scissor(self)
+        GlDevice::disable_scissor(self)
     }
     fn enable_color_write(&self) {
-        Device::enable_color_write(self)
+        GlDevice::enable_color_write(self)
     }
     fn disable_color_write(&self) {
-        Device::disable_color_write(self)
+        GlDevice::disable_color_write(self)
     }
 
     fn set_blend(&mut self, enable: bool) {
-        Device::set_blend(self, enable)
+        GlDevice::set_blend(self, enable)
     }
     fn set_blend_mode(&mut self, mode: BlendMode) {
-        Device::set_blend_mode(self, mode)
+        GlDevice::set_blend_mode(self, mode)
     }
 
     fn draw_triangles_u16(&mut self, first_vertex: i32, index_count: i32) {
-        Device::draw_triangles_u16(self, first_vertex, index_count)
+        GlDevice::draw_triangles_u16(self, first_vertex, index_count)
     }
     fn draw_triangles_u32(&mut self, first_vertex: i32, index_count: i32) {
-        Device::draw_triangles_u32(self, first_vertex, index_count)
+        GlDevice::draw_triangles_u32(self, first_vertex, index_count)
     }
     fn draw_indexed_triangles(&mut self, index_count: i32) {
-        Device::draw_indexed_triangles(self, index_count)
+        GlDevice::draw_indexed_triangles(self, index_count)
     }
     fn draw_indexed_triangles_instanced_u16(&mut self, index_count: i32, instance_count: i32) {
-        Device::draw_indexed_triangles_instanced_u16(self, index_count, instance_count)
+        GlDevice::draw_indexed_triangles_instanced_u16(self, index_count, instance_count)
     }
     fn draw_nonindexed_points(&mut self, first_vertex: i32, vertex_count: i32) {
-        Device::draw_nonindexed_points(self, first_vertex, vertex_count)
+        GlDevice::draw_nonindexed_points(self, first_vertex, vertex_count)
     }
     fn draw_nonindexed_lines(&mut self, first_vertex: i32, vertex_count: i32) {
-        Device::draw_nonindexed_lines(self, first_vertex, vertex_count)
+        GlDevice::draw_nonindexed_lines(self, first_vertex, vertex_count)
     }
 
     fn blit_render_target(
@@ -5387,7 +5387,7 @@ impl GpuPass for Device {
         dest_rect: FramebufferIntRect,
         filter: TextureFilter,
     ) {
-        Device::blit_render_target(self, src_target, src_rect, dest_target, dest_rect, filter)
+        GlDevice::blit_render_target(self, src_target, src_rect, dest_target, dest_rect, filter)
     }
     fn blit_render_target_invert_y(
         &mut self,
@@ -5396,11 +5396,11 @@ impl GpuPass for Device {
         dest_target: DrawTarget,
         dest_rect: FramebufferIntRect,
     ) {
-        Device::blit_render_target_invert_y(self, src_target, src_rect, dest_target, dest_rect)
+        GlDevice::blit_render_target_invert_y(self, src_target, src_rect, dest_target, dest_rect)
     }
 
     fn read_pixels(&mut self, img_desc: &ImageDescriptor) -> Vec<u8> {
-        Device::read_pixels(self, img_desc)
+        GlDevice::read_pixels(self, img_desc)
     }
     fn read_pixels_into(
         &mut self,
@@ -5408,7 +5408,7 @@ impl GpuPass for Device {
         format: ImageFormat,
         output: &mut [u8],
     ) {
-        Device::read_pixels_into(self, rect, format, output)
+        GlDevice::read_pixels_into(self, rect, format, output)
     }
     fn read_pixels_into_pbo(
         &mut self,
@@ -5417,9 +5417,9 @@ impl GpuPass for Device {
         format: ImageFormat,
         pbo: &PBO,
     ) {
-        Device::read_pixels_into_pbo(self, read_target, rect, format, pbo)
+        GlDevice::read_pixels_into_pbo(self, read_target, rect, format, pbo)
     }
     fn get_tex_image_into(&mut self, texture: &Texture, format: ImageFormat, output: &mut [u8]) {
-        Device::get_tex_image_into(self, texture, format, output)
+        GlDevice::get_tex_image_into(self, texture, format, output)
     }
 }
