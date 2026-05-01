@@ -4,6 +4,8 @@
 
 mod gl;
 pub mod query_gl;
+pub mod traits;
 
 pub use self::gl::*;
 pub use self::query_gl as query;
+pub use self::traits::{GpuFrame, GpuPass, GpuResources, GpuShaders};
