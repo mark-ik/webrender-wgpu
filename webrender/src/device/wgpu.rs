@@ -68,6 +68,20 @@ impl WgpuDevice {
         }
     }
 
+    /// Direct access to the underlying `wgpu::Device`. Exposed so callers
+    /// (currently smoke tests; later the renderer's wgpu path) can build
+    /// pipelines, bind groups, and other wgpu-native objects without
+    /// going through the `GpuResources`/`GpuPass` traits, which can't
+    /// fully express wgpu's pipeline-oriented model.
+    pub fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
+
+    /// Direct access to the underlying `wgpu::Queue`.
+    pub fn queue(&self) -> &wgpu::Queue {
+        &self.queue
+    }
+
     /// Loads a SPIR-V blob (committed in `webrender/res/spirv/*.spv`) and
     /// creates a `wgpu::ShaderModule`. wgpu runs naga reflection internally
     /// to validate the module and (later) auto-derive its bind-group layout
