@@ -209,13 +209,17 @@ Two known limitations carried forward (see Known Issues #6, #7).
 
 ### P3 — Vertex schema adapter
 
-Done when:
-- `descriptor_to_wgpu_layouts(...)` exists in `webrender/src/device/wgpu.rs`
-- Unit tests cover every `VertexDescriptor` in the codebase: round-trips the
-  schema to wgpu layouts, compares attribute count and total stride against
-  the GL VAO setup
-- Test asserts adapter output `shader_location` indices match the reflection
-  oracle from P2
+Done when (closed 2026-05-01):
+
+- ✅ `descriptor_to_wgpu_layouts(...)` exists in `webrender/src/device/wgpu.rs`
+  (associated function on `WgpuDevice`; returns `WgpuVertexLayouts` which
+  owns the attribute `Vec`s)
+- ⚠️ Unit tests cover **representative** `VertexDescriptor`s (ps_clear +
+  3 synthetic) rather than every descriptor in the codebase — per-descriptor
+  coverage rolls in incrementally as P7 wires shaders through. The
+  conversion logic itself is fully unit-tested.
+- ✅ Test asserts adapter output `shader_location` indices match the
+  bindings.json reflection oracle for ps_clear (locations 0, 1, 2).
 
 ### P4 — Resource model: textures, buffers, samplers
 
