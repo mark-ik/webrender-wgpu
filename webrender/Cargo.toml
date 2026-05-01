@@ -9,7 +9,11 @@ build = "build.rs"
 edition = "2018"
 
 [features]
-default = ["static_freetype"]
+default = ["static_freetype", "gl_backend"]
+# Compiles the GL device backend (webrender/src/device/gl.rs).
+# Marker feature for P0d; gleam stays as a non-optional dep until P1 adds
+# wgpu_backend and renderer code gets cfg-gated for the cross-backend split.
+gl_backend = []
 profiler = ["tracy-rs/enable_profiler"]
 capture = ["api/serialize", "ron", "serde", "smallvec/serde", "etagere/serialization", "glyph_rasterizer/capture"]
 replay = ["api/deserialize", "ron", "serde", "smallvec/serde", "etagere/serialization", "glyph_rasterizer/replay"]
