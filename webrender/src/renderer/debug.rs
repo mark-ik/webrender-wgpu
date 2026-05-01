@@ -5,7 +5,7 @@
 use api::{ColorU, ImageFormat, ImageBufferKind};
 use api::units::*;
 use crate::debug_font_data;
-use crate::device::{Device, Program, Texture, TextureSlot, VertexDescriptor, ShaderError, VAO};
+use crate::device::{BlendMode, Device, Program, Texture, TextureSlot, VertexDescriptor, ShaderError, VAO};
 use crate::device::{TextureFilter, VertexAttribute, VertexAttributeKind, VertexUsageHint};
 use euclid::{Point2D, Rect, Size2D, Transform3D, default};
 use crate::internal_types::Swizzle;
@@ -314,7 +314,7 @@ impl DebugRenderer {
         if let Some(viewport_size) = viewport_size {
             device.disable_depth();
             device.set_blend(true);
-            device.set_blend_mode_premultiplied_alpha();
+            device.set_blend_mode(BlendMode::PremultipliedAlpha);
 
             let (bottom, top) = if surface_origin_is_top_left {
                 (0.0, viewport_size.height as f32 * scale)

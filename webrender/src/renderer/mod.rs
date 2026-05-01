@@ -59,7 +59,7 @@ use crate::composite::{CompositorConfig, NativeSurfaceOperationDetails, NativeSu
 #[cfg(feature = "debugger")]
 use api::debugger::{CompositorDebugInfo, DebuggerTextureContent};
 use crate::debug_colors;
-use crate::device::{DepthFunction, Device, DrawTarget, ExternalTexture, GpuFrameId, UploadPBOPool};
+use crate::device::{BlendMode as DeviceBlendMode, DepthFunction, Device, DrawTarget, ExternalTexture, GpuFrameId, UploadPBOPool};
 use crate::device::{ReadTarget, ShaderError, Texture, TextureFilter, TextureFlags, TextureSlot, Texel};
 use crate::device::query::{GpuSampler, GpuTimer};
 #[cfg(feature = "capture")]
@@ -2384,7 +2384,7 @@ impl Renderer {
 
             if !prim_instances_with_scissor.is_empty() {
                 self.set_blend(true, FramebufferKind::Other);
-                self.device.set_blend_mode_premultiplied_alpha();
+                self.device.set_blend_mode(DeviceBlendMode::PremultipliedAlpha);
                 self.device.enable_scissor();
 
                 let mut prev_pattern = None;
@@ -3029,40 +3029,40 @@ impl Renderer {
                     match batch.key.blend_mode {
                         _ if self.debug_flags.contains(DebugFlags::SHOW_OVERDRAW) &&
                             framebuffer_kind == FramebufferKind::Main => {
-                            self.device.set_blend_mode_show_overdraw();
+                            self.device.set_blend_mode(DeviceBlendMode::ShowOverdraw);
                         }
                         BlendMode::None => {
                             unreachable!("bug: opaque blend in alpha pass");
                         }
                         BlendMode::Alpha => {
-                            self.device.set_blend_mode_alpha();
+                            self.device.set_blend_mode(DeviceBlendMode::Alpha);
                         }
                         BlendMode::PremultipliedAlpha => {
-                            self.device.set_blend_mode_premultiplied_alpha();
+                            self.device.set_blend_mode(DeviceBlendMode::PremultipliedAlpha);
                         }
                         BlendMode::PremultipliedDestOut => {
-                            self.device.set_blend_mode_premultiplied_dest_out();
+                            self.device.set_blend_mode(DeviceBlendMode::PremultipliedDestOut);
                         }
                         BlendMode::SubpixelDualSource => {
-                            self.device.set_blend_mode_subpixel_dual_source();
+                            self.device.set_blend_mode(DeviceBlendMode::SubpixelDualSource);
                         }
                         BlendMode::Advanced(mode) => {
                             if self.enable_advanced_blend_barriers {
                                 self.device.gl().blend_barrier_khr();
                             }
-                            self.device.set_blend_mode_advanced(mode);
+                            self.device.set_blend_mode(DeviceBlendMode::Advanced(mode));
                         }
                         BlendMode::MultiplyDualSource => {
-                            self.device.set_blend_mode_multiply_dual_source();
+                            self.device.set_blend_mode(DeviceBlendMode::MultiplyDualSource);
                         }
                         BlendMode::Screen => {
-                            self.device.set_blend_mode_screen();
+                            self.device.set_blend_mode(DeviceBlendMode::Screen);
                         }
                         BlendMode::Exclusion => {
-                            self.device.set_blend_mode_exclusion();
+                            self.device.set_blend_mode(DeviceBlendMode::Exclusion);
                         }
                         BlendMode::PlusLighter => {
-                            self.device.set_blend_mode_plus_lighter();
+                            self.device.set_blend_mode(DeviceBlendMode::PlusLighter);
                         }
                     }
                     prev_blend_mode = batch.key.blend_mode;
@@ -4578,18 +4578,18 @@ impl Renderer {
     fn set_blend_mode_multiply(&mut self, framebuffer_kind: FramebufferKind) {
         if framebuffer_kind == FramebufferKind::Main &&
                 self.debug_flags.contains(DebugFlags::SHOW_OVERDRAW) {
-            self.device.set_blend_mode_show_overdraw();
+            self.device.set_blend_mode(DeviceBlendMode::ShowOverdraw);
         } else {
-            self.device.set_blend_mode_multiply();
+            self.device.set_blend_mode(DeviceBlendMode::Multiply);
         }
     }
 
     fn set_blend_mode_premultiplied_alpha(&mut self, framebuffer_kind: FramebufferKind) {
         if framebuffer_kind == FramebufferKind::Main &&
                 self.debug_flags.contains(DebugFlags::SHOW_OVERDRAW) {
-            self.device.set_blend_mode_show_overdraw();
+            self.device.set_blend_mode(DeviceBlendMode::ShowOverdraw);
         } else {
-            self.device.set_blend_mode_premultiplied_alpha();
+            self.device.set_blend_mode(DeviceBlendMode::PremultipliedAlpha);
         }
     }
 
