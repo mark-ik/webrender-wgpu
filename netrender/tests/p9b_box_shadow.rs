@@ -24,10 +24,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use netrender::{
-    BrushBlurPipeline, ClipRectanglePipeline, ColorLoad, EncodeCallback, FrameTarget, ImageKey,
-    NO_CLIP, NetrenderOptions, Renderer, RenderGraph, Scene, Task, TaskId, boot,
-    create_netrender_instance,
+    ColorLoad, FrameTarget, ImageKey, NO_CLIP, NetrenderOptions, Renderer, RenderGraph, Scene,
+    Task, TaskId, boot, create_netrender_instance,
 };
+
+mod common;
+use common::{blur_pass_callback, clip_rectangle_callback, make_bilinear_sampler};
 
 const W: u32 = 64;
 const H: u32 = 64;
@@ -40,142 +42,6 @@ fn make_renderer() -> Renderer {
         .expect("create_netrender_instance")
 }
 
-fn make_bilinear_sampler(device: &wgpu::Device) -> Arc<wgpu::Sampler> {
-    Arc::new(device.create_sampler(&wgpu::SamplerDescriptor {
-        label: Some("p9b bilinear clamp"),
-        address_mode_u: wgpu::AddressMode::ClampToEdge,
-        address_mode_v: wgpu::AddressMode::ClampToEdge,
-        address_mode_w: wgpu::AddressMode::ClampToEdge,
-        mag_filter: wgpu::FilterMode::Linear,
-        min_filter: wgpu::FilterMode::Linear,
-        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-        ..Default::default()
-    }))
-}
-
-fn clip_rectangle_callback(
-    pipe: ClipRectanglePipeline,
-    bounds: [f32; 4],
-    radius: f32,
-) -> EncodeCallback {
-    let mut bytes = [0u8; 32];
-    for (i, f) in bounds.iter().enumerate() {
-        bytes[i * 4..(i + 1) * 4].copy_from_slice(&f.to_ne_bytes());
-    }
-    for i in 4..8 {
-        bytes[i * 4..(i + 1) * 4].copy_from_slice(&radius.to_ne_bytes());
-    }
-
-    Box::new(move |device, encoder, _inputs, output| {
-        let params_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("clip_rectangle params"),
-            size: 32,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: true,
-        });
-        {
-            let mut view = params_buf.slice(..).get_mapped_range_mut();
-            view.copy_from_slice(&bytes);
-        }
-        params_buf.unmap();
-
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("clip_rectangle bind group"),
-            layout: &pipe.layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: params_buf.as_entire_binding(),
-            }],
-        });
-
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("clip_rectangle pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: output,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_pipeline(&pipe.pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
-        pass.draw(0..4, 0..1);
-    })
-}
-
-fn blur_pass_callback(
-    pipe: BrushBlurPipeline,
-    sampler: Arc<wgpu::Sampler>,
-    step_x: f32,
-    step_y: f32,
-) -> EncodeCallback {
-    let mut step_bytes = [0u8; 16];
-    step_bytes[0..4].copy_from_slice(&step_x.to_ne_bytes());
-    step_bytes[4..8].copy_from_slice(&step_y.to_ne_bytes());
-
-    Box::new(move |device, encoder, inputs, output| {
-        assert!(!inputs.is_empty(), "blur task: expected one input view");
-        let input_view = &inputs[0];
-
-        let params_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("blur params"),
-            size: 16,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: true,
-        });
-        {
-            let mut view = params_buf.slice(..).get_mapped_range_mut();
-            view.copy_from_slice(&step_bytes);
-        }
-        params_buf.unmap();
-
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("blur bind group"),
-            layout: &pipe.layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(input_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: params_buf.as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("blur pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: output,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_pipeline(&pipe.pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
-        pass.draw(0..4, 0..1);
-    })
-}
 
 fn pixel(bytes: &[u8], width: u32, x: u32, y: u32) -> [u8; 4] {
     let i = ((y * width + x) * 4) as usize;

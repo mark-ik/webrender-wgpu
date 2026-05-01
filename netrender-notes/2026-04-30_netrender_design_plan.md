@@ -1039,20 +1039,52 @@ Glyph atlas (Phase 5 pattern). Two text shaders:
   pipeline factory (per Phase 0.5's `REQUIRED_FEATURES` demote);
   fallback to grayscale path when the feature is missing.
 
-Glyph rasterization uses `wr_glyph_rasterizer` (lift from disk
-into workspace; outputs CPU bitmaps, wgpu-portable). Atlas
-churn / first-visibility uploads happen during `PreparedFrame`
-construction (axioms 13, 16); never at render time.
+**Glyph rasterization (decided 2026-05-01).** The original plan
+called for lifting `wr_glyph_rasterizer` from upstream webrender,
+which is platform-native (FreeType / DirectWrite / Core Text via
+Gecko). That brings in C dependencies and a Gecko-shaped surface
+that doesn't fit a wgpu-native crate. Pure-Rust alternatives in
+2026:
 
-**Shaping is upstream.** Text shaping (script analysis, font
-selection, ligature substitution, line breaking, fallback
-cascade) is the consumer's responsibility — Servo's embedding
-code, Graphshell's host crate, or a shared `cosmic-text`-style
-crate the consumer pulls in. netrender consumes shaped glyph
-runs (glyph IDs + positions + font handles) and rasterizes them
-into the atlas. This is where axioms 15 and 16 land for text:
-shaping is a subsystem concern, rasterization-and-paint is a
-renderer concern.
+- **swash::Scaler** (dfrg/swash, v0.2.x in 2025): high-quality
+  alpha + subpixel-RGB rasterization, atlas-friendly bitmap
+  output, hinting parity with FreeType. Used by cosmic-text and
+  glyphon (the wgpu text crate). Maintenance is slow but
+  releases are still landing. **Adopt for Phase 10a.**
+- **skrifa** (Google Fonts' read-fonts): font parsing + outline
+  scaling. Used by Linebender's Parley stack. Pull in for font
+  metrics; rasterization handed off to swash via the outlines
+  it produces.
+- **fontdue / ab_glyph**: lighter-weight pure-Rust rasterizers
+  but no hinting parity with FreeType. **Skip** — text quality
+  matters for browser-grade rendering.
+
+The migration risk on swash is real but not blocking — track
+the Linebender ecosystem for a skrifa-native rasterizer; if
+one ships, swap rasterizer behind a stable crate-internal
+interface.
+
+*Swash-in-webrender myth.* I researched whether swash had been
+attempted in upstream webrender (a recollection that came up
+during Phase 9 review). No primary-source evidence: webrender's
+rasterizer has always been platform-native, and "Firefox 67"
+(WebRender's stable rollout) is the only "67" event in that
+orbit. Recording here so the question doesn't resurface.
+
+**Shaping (Phase 10a posture).** Shaping stays a consumer
+concern (axiom 15 / 16): netrender consumes shaped glyph runs
+(glyph IDs + positions + font handles). The recommended
+consumer-side stack — for Servo's embedder, Graphshell, or a
+shared text crate — is **harfrust** (the official harfbuzz-org
+Rust port of HarfBuzz, v0.6.0 in April 2026; tracks upstream
+HarfBuzz, supersedes rustybuzz) for shaping, paired with
+**fontique** (Linebender) for font enumeration / fallback. This
+is also the shape Parley uses, so a future shared
+text-layout crate (Phase 11+) wires through the same parts.
+
+Atlas churn / first-visibility uploads happen during
+`PreparedFrame` construction (axioms 13, 16); never at render
+time.
 
 **Receipt**: text-run golden scene matches in both grayscale and
 (where supported) dual-source variants. Test inputs are shaped

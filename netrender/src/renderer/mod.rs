@@ -2,17 +2,35 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-//! Post-Phase-D wgpu renderer skeleton.
+//! `Renderer` shell — the public entry for `prepare()` + `render()`.
 //!
-//! Phase 4 adds depth sorting: opaques drawn front-to-back with depth
-//! write ON (early-Z benefit), alphas drawn back-to-front with depth
-//! write OFF and premultiplied-alpha blend. The depth texture lives in
-//! `PreparedFrame` so `render()` remains upload-free (axiom 13).
+//! Phase plan recap (each phase's invariants are still load-bearing):
 //!
-//! Phase 5 adds image primitives: textured rects via `brush_image`
-//! pipeline. The `Renderer` owns an `ImageCache` (keyed by `ImageKey`)
-//! and a nearest-clamp sampler; both are populated once and reused
-//! across frames.
+//! - **Phase 4** introduced depth sorting: opaques drawn front-to-back
+//!   with depth write ON (early-Z benefit), alphas drawn back-to-front
+//!   with depth write OFF and premultiplied-alpha blend. The depth
+//!   texture lives in `PreparedFrame` so `render()` stays upload-free
+//!   (axiom 13).
+//! - **Phase 5** added image primitives via `brush_image`. The
+//!   `Renderer` owns an `ImageCache` keyed by `ImageKey` and a
+//!   nearest-clamp sampler.
+//! - **Phase 6** added the render-task graph (separable Gaussian blur
+//!   landed as the first consumer) and an `insert_image_gpu` bridge
+//!   that lets graph outputs participate in the scene-compositing
+//!   path.
+//! - **Phase 7A/7B/7C** added the tile cache: invalidation algorithm,
+//!   per-tile rendering, and `prepare()` routing through the cache
+//!   when `NetrenderOptions::tile_cache_size = Some(_)`. Composite
+//!   draws are one `brush_image_alpha` per cached tile; pixel result
+//!   is equivalent to the direct path within ±2/255.
+//! - **Phase 8A-D** added analytic gradients (linear, radial, conic)
+//!   and unified them into one `brush_gradient` pipeline + N-stop ramp
+//!   in 8D.
+//! - **Phase 9A/9B/9C** added the rounded-rect clip-mask shader
+//!   `cs_clip_rectangle`. Mask integration uses the render-graph +
+//!   image-cache + `brush_image` chain (no per-primitive clip-mask
+//!   binding yet — that's Phase 11+). Box-shadow chains
+//!   `cs_clip_rectangle → brush_blur (H + V)`.
 
 pub(crate) mod init;
 
@@ -26,11 +44,9 @@ use crate::batch::{
     FrameResources, GradientPipelines, build_gradient_batch, build_image_batch, build_rect_batch,
     make_per_frame_buf_for_rect, make_transforms_buf, write_image_instance,
 };
-use crate::scene::GradientKind;
-use crate::tile_cache::{aabb_intersects, world_aabb};
 use crate::image_cache::ImageCache;
-use crate::scene::{ImageKey, Scene};
-use crate::tile_cache::{TileCache, TileCoord};
+use crate::scene::{GradientKind, ImageKey, Scene};
+use crate::tile_cache::{TileCache, TileCoord, aabb_intersects, world_aabb};
 
 pub struct Renderer {
     pub wgpu_device: WgpuDevice,

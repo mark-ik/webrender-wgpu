@@ -21,10 +21,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use netrender::{
-    ClipRectanglePipeline, ColorLoad, EncodeCallback, FrameTarget, ImageKey, NO_CLIP,
-    NetrenderOptions, Renderer, RenderGraph, Scene, Task, TaskId, boot,
-    create_netrender_instance,
+    ColorLoad, FrameTarget, ImageKey, NO_CLIP, NetrenderOptions, Renderer, RenderGraph, Scene,
+    Task, TaskId, boot, create_netrender_instance,
 };
+
+mod common;
+use common::clip_rectangle_callback;
 
 const W: u32 = 64;
 const H: u32 = 64;
@@ -37,68 +39,6 @@ fn make_renderer() -> Renderer {
     let handles = boot().expect("wgpu boot");
     create_netrender_instance(handles, NetrenderOptions::default())
         .expect("create_netrender_instance")
-}
-
-/// Build an encode callback that runs `cs_clip_rectangle` with the
-/// given bounds + corner radius. Pre-builds the uniform buffer and
-/// captures it; the bind group is created at encode time.
-fn clip_rectangle_callback(
-    pipe: ClipRectanglePipeline,
-    bounds: [f32; 4],
-    radius: f32,
-) -> EncodeCallback {
-    // ClipParams: bounds (vec4) + radii (vec4) = 32 bytes.
-    let mut bytes = [0u8; 32];
-    for (i, f) in bounds.iter().enumerate() {
-        bytes[i * 4..(i + 1) * 4].copy_from_slice(&f.to_ne_bytes());
-    }
-    // radii: replicate `radius` to all 4 channels (uniform corners).
-    for i in 4..8 {
-        bytes[i * 4..(i + 1) * 4].copy_from_slice(&radius.to_ne_bytes());
-    }
-
-    Box::new(move |device, encoder, _inputs, output| {
-        let params_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("clip_rectangle params"),
-            size: 32,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: true,
-        });
-        {
-            let mut view = params_buf.slice(..).get_mapped_range_mut();
-            view.copy_from_slice(&bytes);
-        }
-        params_buf.unmap();
-
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("clip_rectangle bind group"),
-            layout: &pipe.layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: params_buf.as_entire_binding(),
-            }],
-        });
-
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("clip_rectangle pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: output,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_pipeline(&pipe.pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
-        pass.draw(0..4, 0..1);
-    })
 }
 
 fn render_to_bytes(renderer: &Renderer, scene: &Scene) -> Vec<u8> {
