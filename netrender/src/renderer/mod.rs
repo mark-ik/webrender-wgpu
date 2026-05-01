@@ -27,6 +27,7 @@ use crate::batch::{
     make_per_frame_buf_for_rect, make_transforms_buf,
 };
 use crate::scene::GradientKind;
+use crate::tile_cache::{aabb_intersects, world_aabb};
 use crate::image_cache::ImageCache;
 use crate::scene::{ImageKey, Scene};
 use crate::tile_cache::{TileCache, TileCoord};
@@ -165,23 +166,25 @@ impl Renderer {
         // One shared transforms + per_frame upload for the whole frame.
         let frame_res = FrameResources::new(scene, device, queue);
 
-        // Build rect DrawIntents: [opaque_rects, alpha_rects]
-        let rect_draws = build_rect_batch(scene, device, queue, &opaque_pipe, &alpha_pipe, &frame_res);
+        // Direct path: no per-prim filter (every primitive contributes).
+        let rect_draws = build_rect_batch(
+            scene, device, queue, &opaque_pipe, &alpha_pipe, &frame_res, None,
+        );
 
-        // Build image DrawIntents: [opaque_images, alpha_images]
         let image_draws = {
             let cache = self.image_cache.lock().expect("image_cache lock");
             build_image_batch(
                 scene, device, queue,
                 &image_opaque_pipe, &image_alpha_pipe,
                 &cache, &self.nearest_sampler, &frame_res,
+                None,
             )
         };
 
         // Phase 8D: one unified gradient batch — push order preserved
         // across linear / radial / conic kinds.
         let gradient_draws =
-            build_gradient_batch(scene, device, queue, &gradient_pipes, &frame_res);
+            build_gradient_batch(scene, device, queue, &gradient_pipes, &frame_res, None);
 
         // Concat: rects → images → gradients. Each batch emits opaques
         // first then alphas; cross-batch correctness comes from the
@@ -469,11 +472,32 @@ impl Renderer {
                 per_frame,
             };
 
-            // Build draws using the existing batch builders. NDC clipping
-            // crops primitives outside the tile's world rect; per-tile
-            // primitive filtering is a 7C+ optimization.
-            let rect_draws =
-                build_rect_batch(scene, device, queue, &opaque_pipe, &alpha_pipe, &frame_res);
+            // Per-tile primitive filters: include only primitives whose
+            // world AABB intersects the tile rect. NDC clipping is the
+            // safety net for any false positive (a prim that's slightly
+            // larger than its AABB suggests still gets clipped); a
+            // false negative would manifest as missing pixels and
+            // would be caught by the pixel-equivalence receipt.
+            let rect_filter = |i: usize| {
+                let r = &scene.rects[i];
+                let aabb = world_aabb([r.x0, r.y0, r.x1, r.y1], r.transform_id, scene);
+                aabb_intersects(aabb, tile_world_rect)
+            };
+            let image_filter = |i: usize| {
+                let img = &scene.images[i];
+                let aabb = world_aabb([img.x0, img.y0, img.x1, img.y1], img.transform_id, scene);
+                aabb_intersects(aabb, tile_world_rect)
+            };
+            let gradient_filter = |i: usize| {
+                let g = &scene.gradients[i];
+                let aabb = world_aabb([g.x0, g.y0, g.x1, g.y1], g.transform_id, scene);
+                aabb_intersects(aabb, tile_world_rect)
+            };
+
+            let rect_draws = build_rect_batch(
+                scene, device, queue, &opaque_pipe, &alpha_pipe, &frame_res,
+                Some(&rect_filter),
+            );
             let image_draws = build_image_batch(
                 scene,
                 device,
@@ -483,9 +507,12 @@ impl Renderer {
                 &image_cache,
                 &self.nearest_sampler,
                 &frame_res,
+                Some(&image_filter),
             );
-            let gradient_draws =
-                build_gradient_batch(scene, device, queue, &gradient_pipes, &frame_res);
+            let gradient_draws = build_gradient_batch(
+                scene, device, queue, &gradient_pipes, &frame_res,
+                Some(&gradient_filter),
+            );
             let mut draws = rect_draws;
             draws.extend(image_draws);
             draws.extend(gradient_draws);

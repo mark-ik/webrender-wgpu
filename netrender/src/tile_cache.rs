@@ -30,7 +30,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
 use std::sync::Arc;
 
-use crate::scene::{Scene, SceneImage, SceneRect, Transform};
+use crate::scene::{Scene, SceneGradient, SceneImage, SceneRect, Transform};
 
 /// Integer (col, row) coordinate of a tile within the cache grid.
 /// Tile (cx, cy) covers world rect `(cx*T, cy*T, (cx+1)*T, (cy+1)*T)`.
@@ -189,6 +189,12 @@ fn hash_tile_deps(scene: &Scene, tile_rect: [f32; 4]) -> u64 {
             hash_image(&mut hasher, image);
         }
     }
+    for grad in &scene.gradients {
+        let aabb = world_aabb_gradient(grad, scene);
+        if aabb_intersects(aabb, tile_rect) {
+            hash_gradient(&mut hasher, grad);
+        }
+    }
 
     hasher.finish()
 }
@@ -225,33 +231,65 @@ fn hash_image(h: &mut DefaultHasher, i: &SceneImage) {
     }
 }
 
+fn hash_gradient(h: &mut DefaultHasher, g: &SceneGradient) {
+    h.write_u32(g.x0.to_bits());
+    h.write_u32(g.y0.to_bits());
+    h.write_u32(g.x1.to_bits());
+    h.write_u32(g.y1.to_bits());
+    h.write_u32(g.kind.as_u32());
+    for f in g.params {
+        h.write_u32(f.to_bits());
+    }
+    // Stops contribute their offset + color in painter order.
+    h.write_usize(g.stops.len());
+    for stop in &g.stops {
+        h.write_u32(stop.offset.to_bits());
+        for c in stop.color {
+            h.write_u32(c.to_bits());
+        }
+    }
+    h.write_u32(g.transform_id);
+    for c in g.clip_rect {
+        h.write_u32(c.to_bits());
+    }
+}
+
 // ── Geometry ───────────────────────────────────────────────────────────────
 
-fn world_aabb_rect(rect: &SceneRect, scene: &Scene) -> [f32; 4] {
-    let local = [rect.x0, rect.y0, rect.x1, rect.y1];
-    if rect.transform_id == 0 {
+/// World-space AABB of a primitive's `[x0, y0, x1, y1]` local rect
+/// after applying the 2-D affine portion of `transforms[transform_id]`.
+/// Identity transform (id 0) is a fast path that returns `local`
+/// unchanged.
+///
+/// Used by the tile cache's per-tile dependency hash and by the
+/// renderer's per-tile primitive filter (Phase 7B+). Conservative on
+/// rotated rects (the AABB is larger than the rotated rect's true
+/// bounds) — correct in both directions: over-marking dirty is safe,
+/// over-including in a tile is safe (NDC clipping crops the extras).
+pub(crate) fn world_aabb(local: [f32; 4], transform_id: u32, scene: &Scene) -> [f32; 4] {
+    if transform_id == 0 {
         local
     } else {
-        let t = &scene.transforms[rect.transform_id as usize];
+        let t = &scene.transforms[transform_id as usize];
         transformed_aabb(local, t)
     }
 }
 
+fn world_aabb_rect(rect: &SceneRect, scene: &Scene) -> [f32; 4] {
+    world_aabb([rect.x0, rect.y0, rect.x1, rect.y1], rect.transform_id, scene)
+}
+
 fn world_aabb_image(image: &SceneImage, scene: &Scene) -> [f32; 4] {
-    let local = [image.x0, image.y0, image.x1, image.y1];
-    if image.transform_id == 0 {
-        local
-    } else {
-        let t = &scene.transforms[image.transform_id as usize];
-        transformed_aabb(local, t)
-    }
+    world_aabb([image.x0, image.y0, image.x1, image.y1], image.transform_id, scene)
+}
+
+fn world_aabb_gradient(g: &SceneGradient, scene: &Scene) -> [f32; 4] {
+    world_aabb([g.x0, g.y0, g.x1, g.y1], g.transform_id, scene)
 }
 
 /// AABB of `[x0, y0, x1, y1]` after applying the 2-D affine portion of
 /// `t` to each corner. Conservative: rotated rects produce a larger AABB
-/// than the rotated rect's true bounds, so the hash may include
-/// primitives that wouldn't visually contribute. Correct (over-marking
-/// dirty is safe), just not minimal.
+/// than the rotated rect's true bounds.
 fn transformed_aabb(rect: [f32; 4], t: &Transform) -> [f32; 4] {
     let corners = [
         (rect[0], rect[1]),
@@ -281,6 +319,6 @@ fn transformed_aabb(rect: [f32; 4], t: &Transform) -> [f32; 4] {
 /// `[x0, x1) × [y0, y1)` regions share at least one pixel. Touching
 /// edges (a.x1 == b.x0) do NOT count as intersection — matches the
 /// half-open rasterization semantics of the brush pipelines.
-fn aabb_intersects(a: [f32; 4], b: [f32; 4]) -> bool {
+pub(crate) fn aabb_intersects(a: [f32; 4], b: [f32; 4]) -> bool {
     !(a[2] <= b[0] || a[0] >= b[2] || a[3] <= b[1] || a[1] >= b[3])
 }

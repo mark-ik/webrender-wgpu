@@ -49,6 +49,18 @@ impl FrameResources {
 
 // ── Rect batch ────────────────────────────────────────────────────────
 
+/// Optional per-prim filter passed to a batch builder. When `None`,
+/// all primitives in the relevant scene Vec are emitted. When
+/// `Some(f)`, only indices for which `f(i)` returns `true` are
+/// included — used by the per-tile rendering path to skip primitives
+/// whose AABB doesn't intersect the tile being rendered.
+///
+/// Crucially, the global `n_total` (= total primitive count across
+/// rects + images + gradients) and the resulting z values are
+/// independent of the filter, so the same primitive gets the same z
+/// in every tile it appears in.
+pub(crate) type PrimFilter<'a> = Option<&'a dyn Fn(usize) -> bool>;
+
 /// Build all [`DrawIntent`]s for solid-color rects in `scene`.
 /// Opaques first (front-to-back), then alphas (back-to-front).
 pub(crate) fn build_rect_batch(
@@ -58,6 +70,7 @@ pub(crate) fn build_rect_batch(
     opaque_pipe: &BrushRectSolidPipeline,
     alpha_pipe: &BrushRectSolidPipeline,
     frame_res: &FrameResources,
+    filter: PrimFilter<'_>,
 ) -> Vec<DrawIntent> {
     if scene.rects.is_empty() {
         return Vec::new();
@@ -70,12 +83,21 @@ pub(crate) fn build_rect_batch(
     let mut alpha_order: Vec<(usize, f32)> = Vec::new();
 
     for (i, r) in scene.rects.iter().enumerate() {
+        if let Some(f) = filter {
+            if !f(i) {
+                continue;
+            }
+        }
         let z = (n_total - i) as f32 / (n_total + 1) as f32;
         if r.color[3] >= 1.0 {
             opaque_order.push((i, z));
         } else {
             alpha_order.push((i, z));
         }
+    }
+
+    if opaque_order.is_empty() && alpha_order.is_empty() {
+        return Vec::new();
     }
 
     // Opaques: ascending z = front first → early-Z benefit.
@@ -152,6 +174,7 @@ pub(crate) fn build_image_batch(
     image_cache: &ImageCache,
     sampler: &wgpu::Sampler,
     frame_res: &FrameResources,
+    filter: PrimFilter<'_>,
 ) -> Vec<DrawIntent> {
     if scene.images.is_empty() {
         return Vec::new();
@@ -165,6 +188,11 @@ pub(crate) fn build_image_batch(
     let mut alpha_items: Vec<(usize, f32, ImageKey)> = Vec::new();
 
     for (j, img) in scene.images.iter().enumerate() {
+        if let Some(f) = filter {
+            if !f(j) {
+                continue;
+            }
+        }
         let global_idx = n_rects + j;
         let z = (n_total - global_idx) as f32 / (n_total + 1) as f32;
         if img.color[3] >= 1.0 {
@@ -172,6 +200,10 @@ pub(crate) fn build_image_batch(
         } else {
             alpha_items.push((j, z, img.key));
         }
+    }
+
+    if opaque_items.is_empty() && alpha_items.is_empty() {
+        return Vec::new();
     }
 
     // Opaques: sort front-to-back (ascending z).
@@ -335,6 +367,7 @@ pub(crate) fn build_gradient_batch(
     queue: &wgpu::Queue,
     pipes: &GradientPipelines,
     frame_res: &FrameResources,
+    filter: PrimFilter<'_>,
 ) -> Vec<DrawIntent> {
     if scene.gradients.is_empty() {
         return Vec::new();
@@ -344,11 +377,20 @@ pub(crate) fn build_gradient_batch(
     let n_images = scene.images.len();
     let n_total = n_rects + n_images + scene.gradients.len();
 
-    // Build the per-frame stops storage buffer. Stride 32: vec4 color
-    // (16) + vec4 offset_pad (16, .x = position).
+    // Build the per-frame stops storage buffer for the gradients that
+    // pass the filter. Stride 32: vec4 color (16) + vec4 offset_pad
+    // (16, .x = position). Filtered-out gradients still consume an
+    // entry in `stop_ranges` (count = 0) so painter-index lookup by
+    // global vec position stays valid.
     let mut stops_bytes: Vec<u8> = Vec::new();
     let mut stop_ranges: Vec<(u32, u32)> = Vec::with_capacity(scene.gradients.len());
-    for grad in &scene.gradients {
+    for (i, grad) in scene.gradients.iter().enumerate() {
+        if let Some(f) = filter {
+            if !f(i) {
+                stop_ranges.push((0, 0));
+                continue;
+            }
+        }
         let offset = (stops_bytes.len() / 32) as u32;
         let count = grad.stops.len() as u32;
         stop_ranges.push((offset, count));
@@ -373,9 +415,16 @@ pub(crate) fn build_gradient_batch(
 
     // Group consecutive same-(kind, alpha_class) entries to preserve
     // painter order across kinds while batching adjacent same-shape
-    // primitives into single draws.
+    // primitives into single draws. Filter-rejected entries don't
+    // contribute to any group; they leave a "gap" that breaks
+    // batch-coalescing across them, which is fine — correctness wins.
     let mut groups: Vec<(GradientKind, bool, Vec<usize>)> = Vec::new();
     for (i, grad) in scene.gradients.iter().enumerate() {
+        if let Some(f) = filter {
+            if !f(i) {
+                continue;
+            }
+        }
         let is_alpha = grad.stops.iter().any(|s| s.color[3] < 1.0);
         if let Some(last) = groups.last_mut() {
             if last.0 == grad.kind && last.1 == is_alpha {

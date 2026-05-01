@@ -166,6 +166,54 @@ fn p7_05_color_change_dirties_only_affected_tiles() {
     assert_eq!(dirty, vec![(0, 0)], "color change must dirty only the rect's tile");
 }
 
+/// Regression for the Phase 8A oversight: gradient primitives must
+/// participate in the per-tile dependency hash. Pre-fix, a gradient
+/// color change on an existing scene would return 0 dirty tiles
+/// (because the hash only looked at rects + images), and the tile
+/// cache would happily serve stale cached pixels.
+#[test]
+fn p7_07_gradient_change_dirties_only_its_tile() {
+    let mut tc = TileCache::new(64);
+
+    let mut s1 = Scene::new(256, 256);
+    // Gradient confined to tile (0, 0) — world rect (0..32, 0..32).
+    s1.push_linear_gradient(
+        0.0, 0.0, 32.0, 32.0,
+        [0.0, 0.0],
+        [32.0, 0.0],
+        [1.0, 0.0, 0.0, 1.0],
+        [0.0, 0.0, 1.0, 1.0],
+    );
+    let _ = tc.invalidate(&s1);
+
+    // Identical scene → 0 dirty.
+    let dirty_unchanged = tc.invalidate(&s1);
+    assert_eq!(
+        dirty_unchanged.len(),
+        0,
+        "identical gradient scene must dirty 0 tiles, got {}",
+        dirty_unchanged.len()
+    );
+
+    // Change one stop color. Pre-fix, this returned 0 (the bug);
+    // post-fix, only tile (0, 0) is dirty.
+    let mut s2 = Scene::new(256, 256);
+    s2.push_linear_gradient(
+        0.0, 0.0, 32.0, 32.0,
+        [0.0, 0.0],
+        [32.0, 0.0],
+        [0.0, 1.0, 0.0, 1.0], // green instead of red
+        [0.0, 0.0, 1.0, 1.0],
+    );
+    let dirty = tc.invalidate(&s2);
+    assert_eq!(
+        dirty,
+        vec![(0, 0)],
+        "gradient color change must dirty exactly tile (0, 0), got {:?}",
+        dirty
+    );
+}
+
 /// Adding a primitive only dirties tiles it touches; removing one
 /// dirties exactly the tiles it used to touch.
 #[test]
