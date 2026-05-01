@@ -191,16 +191,21 @@ from `super::gl`; the trait surface is fully implementation-agnostic.
 
 ### P2 — SPIRV loading + reflection oracle
 
-Done when:
-- `webrender_build` gains a `reflect_spirv` binary that emits
-  `webrender/res/spirv/bindings.json` (or Rust table) from the committed `.spv` files
-- The output is committed; CI step asserts it's regenerable byte-identical
-- `WgpuDevice` loads each `.spv` via `include_bytes!` (or runtime read) and
+Done when (closed 2026-05-01):
+
+- ✅ `webrender_build` gains a `reflect_spirv` binary that emits
+  `webrender/res/spirv/bindings.json` from the committed `.spv` files
+- ✅ The output is committed; oracle test asserts it's regenerable
+  byte-identical (`webrender_build/tests/spirv_bindings_oracle.rs`)
+- ✅ `WgpuDevice` loads `.spv` via `create_shader_module_from_spv`,
   creates `wgpu::ShaderModule` via `wgpu::ShaderSource::SpirV`
-- Smallest shader (`ps_clear`) creates a `RenderPipeline` with `layout: None`,
-  no draws yet
-- A test asserts: pipeline's auto-derived layout matches the golden for that
-  shader
+- ✅ Smallest shader (`ps_clear`) creates a `RenderPipeline` with
+  `layout: None` (`webrender/tests/wgpu_pipeline_smoke.rs`)
+- ✅ The smoke test confirms wgpu's internal naga successfully reflects
+  ps_clear's SPIR-V; transitively, the auto-derived layout matches the
+  golden because both sides invoke the same naga 26.0 crate
+
+Two known limitations carried forward (see Known Issues #6, #7).
 
 ### P3 — Vertex schema adapter
 
@@ -306,6 +311,34 @@ Done when:
    a non-optional dep that's ignored when gl_backend is off. Neither is
    meaningfully cleaner; defer the decision until the wgpu impl actually
    demonstrates value standalone (likely P6+).
+
+6. **Naga reflection coverage is partial: 22/125 SPIR-V stages
+   reflect cleanly.** The remaining 103 stages fall into two cohorts:
+
+   - 28 stages fail on `naga: UnsupportedCapability(SampledRect)` — these
+     are the `TEXTURE_RECT` shader variants. `GL_TEXTURE_RECTANGLE` is
+     fundamentally GL-only with no wgpu equivalent, so these stages are
+     correctly excluded from any wgpu use. No action needed; document
+     that the wgpu device skips `_TEXTURE_RECT` variants.
+   - 75 stages fail on `naga: InvalidId(N)` — naga's SPIR-V parser
+     rejecting constructs in our corpus. Inspecting the partial
+     `bindings.json` shows that some multi-sampler shaders also exhibit
+     all-bindings-at-0, suggesting glslang's `set_auto_bind_uniforms`
+     isn't distinguishing unused samplers in our `gen_spirv` invocation.
+     Investigate: try `set_auto_combined_image_sampler`, explicit
+     binding bases per sampler unit, or upgrading naga. Tracks under P7
+     (shader-by-shader expansion) — fix is needed before pipelines can
+     be built for affected shaders.
+
+7. **`set_auto_bind_uniforms` may not be assigning distinct bindings to
+   all sampler uniforms.** Suspected by inspection of `bindings.json` —
+   need to verify with `spirv-dis` against a shader like
+   `brush_blend_DEBUG_OVERDRAW.frag.spv`. If confirmed, the gen_spirv
+   fix likely belongs in `webrender_build/src/bin/gen_spirv.rs` (set
+   additional shaderc options or explicit binding hints). After fix,
+   regenerate the SPIRV corpus, re-run `reflect_spirv`, and re-commit
+   `bindings.json`. Coupled with #6 — fixing the binding distribution
+   may also address some `InvalidId` failures.
 
 ## Verification posture
 
