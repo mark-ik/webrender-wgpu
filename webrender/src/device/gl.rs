@@ -4864,6 +4864,7 @@ impl GpuResources for GlDevice {
     type Vao = VAO;
     type CustomVao = CustomVAO;
     type Pbo = PBO;
+    type Stream<'a> = Stream<'a>;
     type Vbo<T> = VBO<T>;
     type BoundPbo<'a> = BoundPBO<'a>;
     type TextureUploader<'a> = TextureUploader<'a>;
@@ -4956,7 +4957,7 @@ impl GpuResources for GlDevice {
         GlDevice::delete_vao(self, vao)
     }
 
-    fn create_custom_vao(&mut self, streams: &[Stream<'_>]) -> CustomVAO {
+    fn create_custom_vao<'a>(&mut self, streams: &[Stream<'a>]) -> CustomVAO {
         GlDevice::create_custom_vao(self, streams)
     }
 

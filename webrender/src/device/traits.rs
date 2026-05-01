@@ -50,7 +50,6 @@ use super::gl::{
     ExternalTexture,
     FBOId,
     ReadTarget,
-    Stream,
     UploadPBOPool,
 };
 
@@ -113,6 +112,10 @@ pub trait GpuResources: GpuFrame {
     type Vao;
     type CustomVao;
     type Pbo;
+    /// Custom-VAO stream descriptor (vbo + per-attribute layout).
+    /// GAT lifetime parameter is the borrow scope of the attribute slice
+    /// inside each `Stream`.
+    type Stream<'a>;
     /// Generic-element vertex buffer (GAT).
     type Vbo<T>;
     /// RAII handle for a CPU-mapped PBO; lifetime ties it to the bound state.
@@ -181,7 +184,7 @@ pub trait GpuResources: GpuFrame {
     ) -> Self::Vao;
     fn delete_vao(&mut self, vao: Self::Vao);
 
-    fn create_custom_vao(&mut self, streams: &[Stream<'_>]) -> Self::CustomVao;
+    fn create_custom_vao<'a>(&mut self, streams: &[Self::Stream<'a>]) -> Self::CustomVao;
     fn delete_custom_vao(&mut self, vao: Self::CustomVao);
 
     // --- VBO lifecycle (generic over element type) ---
