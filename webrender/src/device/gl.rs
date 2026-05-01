@@ -4867,6 +4867,8 @@ impl GpuResources for GlDevice {
     type Stream<'a> = Stream<'a>;
     type Vbo<T> = VBO<T>;
     type RenderTargetHandle = FBOId;
+    type ReadTarget = ReadTarget;
+    type DrawTarget = DrawTarget;
     type BoundPbo<'a> = BoundPBO<'a>;
     type TextureUploader<'a> = TextureUploader<'a>;
 

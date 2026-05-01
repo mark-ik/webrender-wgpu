@@ -46,9 +46,7 @@ use super::types::{
     VertexUsageHint,
 };
 use super::gl::{
-    DrawTarget,
     ExternalTexture,
-    ReadTarget,
     UploadPBOPool,
 };
 
@@ -120,6 +118,17 @@ pub trait GpuResources: GpuFrame {
     /// Opaque handle to a render target (GL: FBO id; wgpu: a textureview
     /// or surface frame, depending on backend usage).
     type RenderTargetHandle: Copy;
+    /// Backend-specific descriptor for a read source. Each backend defines
+    /// its own enum (GL: variants reference FBOId; wgpu: would reference
+    /// TextureView etc.). Renderer code names the concrete type via the
+    /// type alias path.
+    type ReadTarget;
+    /// Backend-specific descriptor for a draw destination. Variants in
+    /// the GL impl carry FBOId + raw texture id/target; the wgpu impl
+    /// would carry TextureView equivalents. Refactoring to a common
+    /// parameterized form was considered and rejected — the variants
+    /// want different handle shapes.
+    type DrawTarget;
     /// RAII handle for a CPU-mapped PBO; lifetime ties it to the bound state.
     type BoundPbo<'a>
     where
@@ -315,9 +324,9 @@ pub enum BlendMode {
 pub trait GpuPass: GpuShaders + GpuResources {
     // --- Render target binding ---
 
-    fn bind_read_target(&mut self, target: ReadTarget);
+    fn bind_read_target(&mut self, target: Self::ReadTarget);
     fn reset_read_target(&mut self);
-    fn bind_draw_target(&mut self, target: DrawTarget);
+    fn bind_draw_target(&mut self, target: Self::DrawTarget);
     fn reset_draw_target(&mut self);
     fn bind_external_draw_target(&mut self, fbo_id: Self::RenderTargetHandle);
 
@@ -387,17 +396,17 @@ pub trait GpuPass: GpuShaders + GpuResources {
 
     fn blit_render_target(
         &mut self,
-        src_target: ReadTarget,
+        src_target: Self::ReadTarget,
         src_rect: FramebufferIntRect,
-        dest_target: DrawTarget,
+        dest_target: Self::DrawTarget,
         dest_rect: FramebufferIntRect,
         filter: TextureFilter,
     );
     fn blit_render_target_invert_y(
         &mut self,
-        src_target: ReadTarget,
+        src_target: Self::ReadTarget,
         src_rect: FramebufferIntRect,
-        dest_target: DrawTarget,
+        dest_target: Self::DrawTarget,
         dest_rect: FramebufferIntRect,
     );
 
@@ -407,7 +416,7 @@ pub trait GpuPass: GpuShaders + GpuResources {
     fn read_pixels_into(&mut self, rect: FramebufferIntRect, format: ImageFormat, output: &mut [u8]);
     fn read_pixels_into_pbo(
         &mut self,
-        read_target: ReadTarget,
+        read_target: Self::ReadTarget,
         rect: DeviceIntRect,
         format: ImageFormat,
         pbo: &Self::Pbo,
