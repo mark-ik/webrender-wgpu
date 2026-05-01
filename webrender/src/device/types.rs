@@ -230,3 +230,72 @@ pub enum ShaderError {
     Compilation(String, String), // name, error message
     Link(String, String),        // name, error message
 }
+
+/// Device capability flags describing what the underlying GPU/driver
+/// supports. Field doc comments describe the semantics in GL terms (since
+/// the GL backend is the historical implementation), but the struct is
+/// backend-neutral — wgpu and any future backend populate the same flags
+/// based on their native API. Backends that don't expose a given concept
+/// set the flag to `false` (or `None`).
+#[derive(Clone)]
+pub struct Capabilities {
+    /// Whether multisampled render targets are supported.
+    pub supports_multisampling: bool,
+    /// Whether the function `glCopyImageSubData` is available.
+    pub supports_copy_image_sub_data: bool,
+    /// Whether the RGBAF32 textures can be bound to framebuffers.
+    pub supports_color_buffer_float: bool,
+    /// Whether the device supports persistently mapped buffers, via glBufferStorage.
+    pub supports_buffer_storage: bool,
+    /// Whether advanced blend equations are supported.
+    pub supports_advanced_blend_equation: bool,
+    /// Whether dual-source blending is supported.
+    pub supports_dual_source_blending: bool,
+    /// Whether KHR_debug is supported for getting debug messages from
+    /// the driver.
+    pub supports_khr_debug: bool,
+    /// Whether we can configure texture units to do swizzling on sampling.
+    pub supports_texture_swizzle: bool,
+    /// Whether the driver supports uploading to textures from a non-zero
+    /// offset within a PBO.
+    pub supports_nonzero_pbo_offsets: bool,
+    /// Whether the driver supports specifying the texture usage up front.
+    pub supports_texture_usage: bool,
+    /// Whether offscreen render targets can be partially updated.
+    pub supports_render_target_partial_update: bool,
+    /// Whether we can use SSBOs.
+    pub supports_shader_storage_object: bool,
+    /// Whether to enforce that texture uploads be batched regardless of what
+    /// the pref says.
+    pub requires_batched_texture_uploads: Option<bool>,
+    /// Whether we are able to use glClear to clear regions of an alpha render target.
+    /// If false, we must use a shader to clear instead.
+    pub supports_alpha_target_clears: bool,
+    /// Whether we must perform a full unscissored glClear on alpha targets
+    /// prior to rendering.
+    pub requires_alpha_target_full_clear: bool,
+    /// Whether clearing a render target (immediately after binding it) is faster using a scissor
+    /// rect to clear just the required area, or clearing the entire target without a scissor rect.
+    pub prefers_clear_scissor: bool,
+    /// Whether the driver can correctly invalidate render targets. This can be
+    /// a worthwhile optimization, but is buggy on some devices.
+    pub supports_render_target_invalidate: bool,
+    /// Whether the driver can reliably upload data to R8 format textures.
+    pub supports_r8_texture_upload: bool,
+    /// Whether the extension QCOM_tiled_rendering is supported.
+    pub supports_qcom_tiled_rendering: bool,
+    /// Whether clip-masking is supported natively by the GL implementation
+    /// rather than emulated in shaders.
+    pub uses_native_clip_mask: bool,
+    /// Whether anti-aliasing is supported natively by the GL implementation
+    /// rather than emulated in shaders.
+    pub uses_native_antialiasing: bool,
+    /// Whether the extension GL_OES_EGL_image_external_essl3 is supported. If true, external
+    /// textures can be used as normal. If false, external textures can only be rendered with
+    /// certain shaders, and must first be copied in to regular textures for others.
+    pub supports_image_external_essl3: bool,
+    /// Whether the VAO must be rebound after an attached VBO has been orphaned.
+    pub requires_vao_rebind_after_orphaning: bool,
+    /// The name of the renderer, as reported by the underlying API.
+    pub renderer_name: String,
+}

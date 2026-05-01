@@ -19,9 +19,9 @@ pub use self::query_gl as query;
 pub use self::wgpu::WgpuDevice;
 pub use self::traits::{BlendMode, GpuFrame, GpuPass, GpuResources, GpuShaders};
 pub use self::types::{
-    DepthFunction, GpuFrameId, ShaderError, StrideAlignment, Texel, TextureFilter,
-    TextureFormatPair, TextureSlot, UploadMethod, VertexAttribute, VertexAttributeKind,
-    VertexDescriptor, VertexUsageHint,
+    Capabilities, DepthFunction, GpuFrameId, ShaderError, StrideAlignment, Texel,
+    TextureFilter, TextureFormatPair, TextureSlot, UploadMethod, VertexAttribute,
+    VertexAttributeKind, VertexDescriptor, VertexUsageHint,
 };
 
 /// Alias retained so renderer code that still names `Device` resolves to

@@ -41,11 +41,11 @@ use std::os::raw::c_void;
 // a shared location. For P0 they stay where they are; the trait references
 // them through this import.
 use super::types::{
-    DepthFunction, GpuFrameId, ShaderError, StrideAlignment, Texel, TextureFilter,
-    TextureFormatPair, TextureSlot, UploadMethod, VertexDescriptor, VertexUsageHint,
+    Capabilities, DepthFunction, GpuFrameId, ShaderError, StrideAlignment, Texel,
+    TextureFilter, TextureFormatPair, TextureSlot, UploadMethod, VertexDescriptor,
+    VertexUsageHint,
 };
 use super::gl::{
-    Capabilities,
     DrawTarget,
     ExternalTexture,
     FBOId,
