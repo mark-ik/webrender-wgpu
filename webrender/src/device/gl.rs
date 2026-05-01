@@ -40,27 +40,10 @@ use webrender_build::shader::{
 };
 use malloc_size_of::MallocSizeOfOps;
 
-/// Sequence number for frames, as tracked by the device layer.
-#[derive(Debug, Copy, Clone, PartialEq, Ord, Eq, PartialOrd)]
-#[cfg_attr(feature = "capture", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
-pub struct GpuFrameId(usize);
-
-impl GpuFrameId {
-    pub fn new(value: usize) -> Self {
-        GpuFrameId(value)
-    }
-}
-
-impl Add<usize> for GpuFrameId {
-    type Output = GpuFrameId;
-
-    fn add(self, other: usize) -> GpuFrameId {
-        GpuFrameId(self.0 + other)
-    }
-}
-
-pub struct TextureSlot(pub usize);
+// GpuFrameId, TextureSlot, TextureFilter, VertexUsageHint moved to
+// device/types.rs (backend-neutral, accessible from both backends).
+// Re-exported here so existing internal references continue to resolve.
+pub use super::types::{GpuFrameId, TextureFilter, TextureSlot, VertexUsageHint};
 
 // In some places we need to temporarily bind a texture to any slot.
 const DEFAULT_TEXTURE: TextureSlot = TextureSlot(0);
@@ -70,16 +53,6 @@ pub enum DepthFunction {
     Always = gl::ALWAYS,
     Less = gl::LESS,
     LessEqual = gl::LEQUAL,
-}
-
-#[repr(u32)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(feature = "capture", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
-pub enum TextureFilter {
-    Nearest,
-    Linear,
-    Trilinear,
 }
 
 /// A structure defining a particular workflow of texture transfers.
@@ -1007,14 +980,13 @@ impl ProgramCache {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
-pub enum VertexUsageHint {
-    Static,
-    Dynamic,
-    Stream,
+// VertexUsageHint enum lives in device/types.rs (re-exported above);
+// only the GL-specific to_gl() helper stays here.
+trait VertexUsageHintGlExt {
+    fn to_gl(&self) -> gl::GLuint;
 }
 
-impl VertexUsageHint {
+impl VertexUsageHintGlExt for VertexUsageHint {
     fn to_gl(&self) -> gl::GLuint {
         match *self {
             VertexUsageHint::Static => gl::STATIC_DRAW,

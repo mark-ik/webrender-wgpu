@@ -40,27 +40,24 @@ use std::os::raw::c_void;
 // `StrideAlignment`, `TextureFormatPair`) should migrate out of `gl.rs` into
 // a shared location. For P0 they stay where they are; the trait references
 // them through this import.
+use super::types::{GpuFrameId, TextureFilter, TextureSlot, VertexUsageHint};
 use super::gl::{
     Capabilities,
     DepthFunction,
     DrawTarget,
     ExternalTexture,
     FBOId,
-    GpuFrameId,
     Program,
     ReadTarget,
     ShaderError,
     Stream,
     StrideAlignment,
     Texel,
-    TextureFilter,
     TextureFormatPair,
-    TextureSlot,
     UniformLocation,
     UploadMethod,
     UploadPBOPool,
     VertexDescriptor,
-    VertexUsageHint,
 };
 
 /// Frame lifecycle, capabilities, parameters, and global queries.

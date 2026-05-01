@@ -9,6 +9,7 @@ pub mod query_gl;
 #[cfg(feature = "wgpu_backend")]
 pub mod wgpu;
 pub mod traits;
+pub mod types;
 
 #[cfg(feature = "gl_backend")]
 pub use self::gl::*;
@@ -17,6 +18,7 @@ pub use self::query_gl as query;
 #[cfg(feature = "wgpu_backend")]
 pub use self::wgpu::WgpuDevice;
 pub use self::traits::{BlendMode, GpuFrame, GpuPass, GpuResources, GpuShaders};
+pub use self::types::{GpuFrameId, TextureFilter, TextureSlot, VertexUsageHint};
 
 /// Alias retained so renderer code that still names `Device` resolves to
 /// the (renamed) `GlDevice`. P0c rename: the GL backend's concrete type is
