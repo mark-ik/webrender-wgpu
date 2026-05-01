@@ -48,7 +48,6 @@ use super::types::{
 use super::gl::{
     DrawTarget,
     ExternalTexture,
-    FBOId,
     ReadTarget,
     UploadPBOPool,
 };
@@ -118,6 +117,9 @@ pub trait GpuResources: GpuFrame {
     type Stream<'a>;
     /// Generic-element vertex buffer (GAT).
     type Vbo<T>;
+    /// Opaque handle to a render target (GL: FBO id; wgpu: a textureview
+    /// or surface frame, depending on backend usage).
+    type RenderTargetHandle: Copy;
     /// RAII handle for a CPU-mapped PBO; lifetime ties it to the bound state.
     type BoundPbo<'a>
     where
@@ -164,9 +166,9 @@ pub trait GpuResources: GpuFrame {
 
     // --- FBO lifecycle ---
 
-    fn create_fbo(&mut self) -> FBOId;
-    fn create_fbo_for_external_texture(&mut self, texture_id: u32) -> FBOId;
-    fn delete_fbo(&mut self, fbo: FBOId);
+    fn create_fbo(&mut self) -> Self::RenderTargetHandle;
+    fn create_fbo_for_external_texture(&mut self, texture_id: u32) -> Self::RenderTargetHandle;
+    fn delete_fbo(&mut self, fbo: Self::RenderTargetHandle);
 
     // --- PBO lifecycle ---
 
@@ -317,7 +319,7 @@ pub trait GpuPass: GpuShaders + GpuResources {
     fn reset_read_target(&mut self);
     fn bind_draw_target(&mut self, target: DrawTarget);
     fn reset_draw_target(&mut self);
-    fn bind_external_draw_target(&mut self, fbo_id: FBOId);
+    fn bind_external_draw_target(&mut self, fbo_id: Self::RenderTargetHandle);
 
     // --- Program / uniform binding (per-pass operations on a bound program) ---
 
