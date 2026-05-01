@@ -2,13 +2,15 @@
 name = "netrender"
 version = "0.0.1"
 license = "MPL-2.0"
-description = "wgpu-native renderer skeleton (post-Phase-D rip-out of webrender)"
+description = "wgpu-native renderer shell (Phase 0.5 split per netrender-notes/2026-04-30_netrender_design_plan.md)"
 edition = "2018"
 
 [dependencies]
 log = "0.4"
 wgpu = "29"
-pollster = "0.4"
+netrender_device = { path = "../netrender_device" }
 
 [dev-dependencies]
 png = "0.17"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"

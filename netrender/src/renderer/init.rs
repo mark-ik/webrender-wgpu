@@ -5,28 +5,71 @@
 //! Renderer construction. The embedder owns the wgpu device and
 //! hands its handles in; we install a [`WgpuDevice`] over them.
 
-use std::collections::HashMap;
+use std::sync::Mutex;
 
-use crate::device::wgpu::adapter::WgpuDevice;
-use crate::device::wgpu::core::WgpuHandles;
+use netrender_device::{WgpuDevice, WgpuHandles};
+
+use crate::image_cache::ImageCache;
 use crate::renderer::{Renderer, RendererError};
+use crate::tile_cache::TileCache;
 
 #[derive(Default)]
-pub struct NetrenderOptions {}
+pub struct NetrenderOptions {
+    /// Phase 7C: enable picture caching. `Some(N)` constructs the renderer
+    /// with an `N`-pixel-square tile cache; `prepare()` will route through
+    /// it (invalidate, re-render dirty tiles, composite via
+    /// `brush_image_alpha`). `None` keeps the direct render path used
+    /// in Phases 1–6.
+    pub tile_cache_size: Option<u32>,
+}
 
 /// Construct a wgpu-only `Renderer`. The embedder owns the wgpu
-/// device (per pipeline-first migration plan §6 P0) and hands the
-/// instance/adapter/device/queue handles in here. The renderer will
-/// fail with `WgpuFeaturesMissing(missing)` if the embedder's
-/// adapter doesn't expose the features `WgpuDevice` requires.
+/// device and hands the instance/adapter/device/queue handles in
+/// here. The renderer fails with `WgpuFeaturesMissing(missing)` if
+/// the embedder's adapter doesn't expose the features `WgpuDevice`
+/// requires (Phase 0.5 demoted `REQUIRED_FEATURES` to empty, so this
+/// no longer fails on a baseline adapter; the return shape is
+/// preserved for later phases that re-introduce optional features).
 pub fn create_netrender_instance(
     handles: WgpuHandles,
-    _options: NetrenderOptions,
+    options: NetrenderOptions,
 ) -> Result<Renderer, RendererError> {
-    let wgpu_device = WgpuDevice::with_external(handles)
-        .map_err(RendererError::WgpuFeaturesMissing)?;
+    let wgpu_device =
+        WgpuDevice::with_external(handles).map_err(RendererError::WgpuFeaturesMissing)?;
+
+    let nearest_sampler =
+        wgpu_device.core.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("nearest clamp"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            ..Default::default()
+        });
+
+    let bilinear_sampler =
+        wgpu_device.core.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("bilinear clamp"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            ..Default::default()
+        });
+
+    let tile_cache = options
+        .tile_cache_size
+        .map(|size| Mutex::new(TileCache::new(size)));
+
     Ok(Renderer {
         wgpu_device,
-        wgpu_render_targets: HashMap::new(),
+        image_cache: Mutex::new(ImageCache::new()),
+        nearest_sampler,
+        bilinear_sampler,
+        tile_cache,
     })
 }

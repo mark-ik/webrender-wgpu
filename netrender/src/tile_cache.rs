@@ -1,0 +1,286 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+//! Phase 7A — picture-cache invalidation algorithm.
+//!
+//! This module implements the *algorithm* portion of Phase 7: hashing
+//! per-tile primitive dependencies, frame-stamping seen tiles, and
+//! reporting which tiles changed between two `invalidate(scene)` calls.
+//! Tile texture allocation + per-tile rendering land in Phase 7B; the
+//! `Tile` struct intentionally has no `texture` field yet.
+//!
+//! Algorithm:
+//!   1. Tick `current_frame`.
+//!   2. For each tile in the viewport grid:
+//!      a. Hash the per-prim state of every primitive whose world AABB
+//!         intersects the tile, in painter order.
+//!      b. Compare against the tile's `last_hash`. New or changed →
+//!         report as dirty and update the cached hash.
+//!      c. Mark the tile as seen this frame.
+//!   3. Evict tiles whose `last_seen_frame` is more than `RETAIN_FRAMES`
+//!      stale (Arc drop, wgpu reclaims memory in Phase 7B+).
+//!
+//! The hash uses `DefaultHasher` (SipHash-1-3) — fast, deterministic
+//! within a process, and good enough to make collisions astronomically
+//! unlikely for the kind of state that fits in a primitive struct.
+
+use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::Hasher;
+use std::sync::Arc;
+
+use crate::scene::{Scene, SceneImage, SceneRect, Transform};
+
+/// Integer (col, row) coordinate of a tile within the cache grid.
+/// Tile (cx, cy) covers world rect `(cx*T, cy*T, (cx+1)*T, (cy+1)*T)`.
+pub type TileCoord = (i32, i32);
+
+/// Number of frames a tile may go un-touched before eviction.
+const RETAIN_FRAMES: u64 = 4;
+
+/// Sentinel value for a freshly-inserted tile's `last_hash`. Collision
+/// with a real hash is harmless because new tiles are also detected via
+/// `last_seen_frame == 0`.
+const FRESH_HASH_SENTINEL: u64 = 0xDEAD_BEEF_DEAD_BEEF;
+
+/// One tile's bookkeeping. Phase 7A stores the world rect, the last
+/// computed dependency hash, and the frame stamp. Phase 7B adds an
+/// `Arc<wgpu::Texture>` for the cached render output.
+#[derive(Clone)]
+pub(crate) struct Tile {
+    /// World-space rect this tile covers. Read by 7B's per-tile
+    /// projection builder.
+    pub world_rect: [f32; 4],
+    pub last_hash: u64,
+    pub last_seen_frame: u64,
+    /// Cached render output. `None` until the tile is first rendered;
+    /// re-allocated on each dirty re-render (Arc drop releases the old
+    /// texture's GPU memory).
+    pub texture: Option<Arc<wgpu::Texture>>,
+}
+
+/// Picture-cache state. One instance per cached picture (Phase 7A ships
+/// with one per `Renderer`; multi-picture caching lands when a concrete
+/// consumer surfaces the need).
+pub struct TileCache {
+    tile_size: u32,
+    pub(crate) tiles: HashMap<TileCoord, Tile>,
+    current_frame: u64,
+    dirty_count_last_invalidate: usize,
+}
+
+impl TileCache {
+    /// Construct a new tile cache with the given square tile size in
+    /// device pixels. `tile_size` must be > 0.
+    pub fn new(tile_size: u32) -> Self {
+        assert!(tile_size > 0, "tile_size must be > 0");
+        Self {
+            tile_size,
+            tiles: HashMap::new(),
+            current_frame: 0,
+            dirty_count_last_invalidate: 0,
+        }
+    }
+
+    pub fn tile_size(&self) -> u32 {
+        self.tile_size
+    }
+
+    pub fn current_frame(&self) -> u64 {
+        self.current_frame
+    }
+
+    /// Number of tiles reported dirty by the most recent `invalidate`
+    /// call, or 0 if `invalidate` has never been called.
+    pub fn dirty_count_last_invalidate(&self) -> usize {
+        self.dirty_count_last_invalidate
+    }
+
+    /// Number of tiles currently cached (visited within `RETAIN_FRAMES`).
+    pub fn tile_count(&self) -> usize {
+        self.tiles.len()
+    }
+
+    /// World-space rect for the named tile, or `None` if the tile is
+    /// not in the cache.
+    pub fn tile_world_rect(&self, coord: TileCoord) -> Option<[f32; 4]> {
+        self.tiles.get(&coord).map(|t| t.world_rect)
+    }
+
+    /// Cached render texture for the named tile, or `None` if the tile
+    /// has never been rendered (or has been evicted).
+    pub fn tile_texture(&self, coord: TileCoord) -> Option<Arc<wgpu::Texture>> {
+        self.tiles.get(&coord).and_then(|t| t.texture.clone())
+    }
+
+    /// Tick the frame counter, recompute each tile's dependency hash
+    /// against `scene`, and return the list of tile coords whose
+    /// dependencies changed (= need re-rendering in Phase 7B).
+    ///
+    /// Tiles outside the new viewport grid are evicted after
+    /// `RETAIN_FRAMES` frames of absence.
+    pub fn invalidate(&mut self, scene: &Scene) -> Vec<TileCoord> {
+        self.current_frame += 1;
+        let frame = self.current_frame;
+        let tile_size = self.tile_size;
+
+        let n_cols = (scene.viewport_width + tile_size - 1) / tile_size;
+        let n_rows = (scene.viewport_height + tile_size - 1) / tile_size;
+
+        let mut dirty = Vec::new();
+
+        for row in 0..n_rows as i32 {
+            for col in 0..n_cols as i32 {
+                let coord = (col, row);
+                let world_rect = [
+                    (col * tile_size as i32) as f32,
+                    (row * tile_size as i32) as f32,
+                    ((col + 1) * tile_size as i32) as f32,
+                    ((row + 1) * tile_size as i32) as f32,
+                ];
+
+                let new_hash = hash_tile_deps(scene, world_rect);
+
+                let tile = self.tiles.entry(coord).or_insert(Tile {
+                    world_rect,
+                    last_hash: FRESH_HASH_SENTINEL,
+                    last_seen_frame: 0,
+                    texture: None,
+                });
+
+                let is_new = tile.last_seen_frame == 0;
+                let changed = tile.last_hash != new_hash;
+
+                if is_new || changed {
+                    tile.last_hash = new_hash;
+                    dirty.push(coord);
+                }
+                tile.last_seen_frame = frame;
+            }
+        }
+
+        // Retain heuristic: evict tiles not seen recently.
+        let cutoff = frame.saturating_sub(RETAIN_FRAMES);
+        self.tiles.retain(|_, t| t.last_seen_frame > cutoff);
+
+        self.dirty_count_last_invalidate = dirty.len();
+        dirty
+    }
+}
+
+// ── Hashing ────────────────────────────────────────────────────────────────
+
+/// Hash the dependency state of every primitive intersecting `tile_rect`,
+/// in painter order. Empty tiles get a deterministic empty-hasher value;
+/// two empty tiles hash identically, so they're never spuriously dirty.
+fn hash_tile_deps(scene: &Scene, tile_rect: [f32; 4]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+
+    for rect in &scene.rects {
+        let aabb = world_aabb_rect(rect, scene);
+        if aabb_intersects(aabb, tile_rect) {
+            hash_rect(&mut hasher, rect);
+        }
+    }
+    for image in &scene.images {
+        let aabb = world_aabb_image(image, scene);
+        if aabb_intersects(aabb, tile_rect) {
+            hash_image(&mut hasher, image);
+        }
+    }
+
+    hasher.finish()
+}
+
+fn hash_rect(h: &mut DefaultHasher, r: &SceneRect) {
+    h.write_u32(r.x0.to_bits());
+    h.write_u32(r.y0.to_bits());
+    h.write_u32(r.x1.to_bits());
+    h.write_u32(r.y1.to_bits());
+    for c in r.color {
+        h.write_u32(c.to_bits());
+    }
+    h.write_u32(r.transform_id);
+    for c in r.clip_rect {
+        h.write_u32(c.to_bits());
+    }
+}
+
+fn hash_image(h: &mut DefaultHasher, i: &SceneImage) {
+    h.write_u32(i.x0.to_bits());
+    h.write_u32(i.y0.to_bits());
+    h.write_u32(i.x1.to_bits());
+    h.write_u32(i.y1.to_bits());
+    for c in i.uv {
+        h.write_u32(c.to_bits());
+    }
+    for c in i.color {
+        h.write_u32(c.to_bits());
+    }
+    h.write_u64(i.key);
+    h.write_u32(i.transform_id);
+    for c in i.clip_rect {
+        h.write_u32(c.to_bits());
+    }
+}
+
+// ── Geometry ───────────────────────────────────────────────────────────────
+
+fn world_aabb_rect(rect: &SceneRect, scene: &Scene) -> [f32; 4] {
+    let local = [rect.x0, rect.y0, rect.x1, rect.y1];
+    if rect.transform_id == 0 {
+        local
+    } else {
+        let t = &scene.transforms[rect.transform_id as usize];
+        transformed_aabb(local, t)
+    }
+}
+
+fn world_aabb_image(image: &SceneImage, scene: &Scene) -> [f32; 4] {
+    let local = [image.x0, image.y0, image.x1, image.y1];
+    if image.transform_id == 0 {
+        local
+    } else {
+        let t = &scene.transforms[image.transform_id as usize];
+        transformed_aabb(local, t)
+    }
+}
+
+/// AABB of `[x0, y0, x1, y1]` after applying the 2-D affine portion of
+/// `t` to each corner. Conservative: rotated rects produce a larger AABB
+/// than the rotated rect's true bounds, so the hash may include
+/// primitives that wouldn't visually contribute. Correct (over-marking
+/// dirty is safe), just not minimal.
+fn transformed_aabb(rect: [f32; 4], t: &Transform) -> [f32; 4] {
+    let corners = [
+        (rect[0], rect[1]),
+        (rect[2], rect[1]),
+        (rect[0], rect[3]),
+        (rect[2], rect[3]),
+    ];
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for (x, y) in corners {
+        // Column-major mat4 × (x, y, 0, 1):
+        //   x' = m[0]*x + m[4]*y + m[12]
+        //   y' = m[1]*x + m[5]*y + m[13]
+        let tx = t.m[0] * x + t.m[4] * y + t.m[12];
+        let ty = t.m[1] * x + t.m[5] * y + t.m[13];
+        min_x = min_x.min(tx);
+        min_y = min_y.min(ty);
+        max_x = max_x.max(tx);
+        max_y = max_y.max(ty);
+    }
+    [min_x, min_y, max_x, max_y]
+}
+
+/// Half-open AABB intersection: `a` and `b` overlap iff their
+/// `[x0, x1) × [y0, y1)` regions share at least one pixel. Touching
+/// edges (a.x1 == b.x0) do NOT count as intersection — matches the
+/// half-open rasterization semantics of the brush pipelines.
+fn aabb_intersects(a: [f32; 4], b: [f32; 4]) -> bool {
+    !(a[2] <= b[0] || a[0] >= b[2] || a[3] <= b[1] || a[1] >= b[3])
+}

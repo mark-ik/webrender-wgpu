@@ -4,77 +4,635 @@
 
 //! Post-Phase-D wgpu renderer skeleton.
 //!
-//! Owns a [`WgpuDevice`](crate::device::wgpu::adapter::WgpuDevice)
-//! handed in by the embedder, plus a small per-`(width, height,
-//! format)` cache of `wgpu::Texture` render targets. There is no
-//! frame-builder yet — the API surface for ingesting display lists
-//! and producing draws will be re-authored on top of this.
+//! Phase 4 adds depth sorting: opaques drawn front-to-back with depth
+//! write ON (early-Z benefit), alphas drawn back-to-front with depth
+//! write OFF and premultiplied-alpha blend. The depth texture lives in
+//! `PreparedFrame` so `render()` remains upload-free (axiom 13).
+//!
+//! Phase 5 adds image primitives: textured rects via `brush_image`
+//! pipeline. The `Renderer` owns an `ImageCache` (keyed by `ImageKey`)
+//! and a nearest-clamp sampler; both are populated once and reused
+//! across frames.
 
 pub(crate) mod init;
 
-use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+use netrender_device::{
+    ColorAttachment, DepthAttachment, DrawIntent, RenderPassTarget, WgpuDevice,
+};
+
+use crate::batch::{
+    FrameResources, build_conic_gradient_batch, build_image_batch, build_linear_gradient_batch,
+    build_radial_gradient_batch, build_rect_batch, make_per_frame_buf_for_rect,
+    make_transforms_buf,
+};
+use crate::image_cache::ImageCache;
+use crate::scene::{ImageKey, Scene};
+use crate::tile_cache::{TileCache, TileCoord};
 
 pub struct Renderer {
-    pub wgpu_device: crate::device::wgpu::adapter::WgpuDevice,
-    /// Cache of wgpu render-target textures keyed by `(width, height,
-    /// format)`. Reused across frames; sized to match the surface
-    /// extents the embedder presents from. Entries accumulate
-    /// monotonically — small in practice (main framebuffer plus a
-    /// handful of off-screen extents).
-    wgpu_render_targets: HashMap<(u32, u32, wgpu::TextureFormat), wgpu::Texture>,
+    pub wgpu_device: WgpuDevice,
+    pub(crate) image_cache: Mutex<ImageCache>,
+    pub(crate) nearest_sampler: wgpu::Sampler,
+    /// Bilinear-clamp sampler for blur and filter tasks in the render graph.
+    pub bilinear_sampler: wgpu::Sampler,
+    /// Phase 7C: when present, `prepare()` routes through the tile cache
+    /// (renders dirty tiles, composites them via `brush_image_alpha`).
+    /// Configured at construction via `NetrenderOptions::tile_cache_size`.
+    pub(crate) tile_cache: Option<Mutex<TileCache>>,
+}
+
+/// Retained per-frame resources whose lifetime needs to span the frame.
+#[derive(Default)]
+pub struct ResourceRefs {}
+
+/// Prepare-phase output. Holds the sorted draw list and the depth
+/// texture created for this frame's pass. Both must outlive `render()`.
+pub struct PreparedFrame {
+    /// All draw intents: opaque rects (front-to-back), opaque images,
+    /// alpha rects (back-to-front), alpha images.
+    pub draws: Vec<DrawIntent>,
+    /// Depth texture for the main pass (Depth32Float, discard-on-store).
+    pub depth_tex: wgpu::Texture,
+    /// Default view into `depth_tex`; borrowed by `render()`.
+    pub depth_view: wgpu::TextureView,
+    pub retained: ResourceRefs,
+}
+
+/// Embedder-supplied target for one frame.
+pub struct FrameTarget<'a> {
+    pub view: &'a wgpu::TextureView,
+    pub format: wgpu::TextureFormat,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Per-frame load policy on the color attachment.
+pub enum ColorLoad {
+    Clear(wgpu::Color),
+    Load,
+}
+
+impl Default for ColorLoad {
+    fn default() -> Self {
+        Self::Clear(wgpu::Color::TRANSPARENT)
+    }
 }
 
 impl Renderer {
-    /// Read back a cached wgpu render-target's pixels as
-    /// tightly-packed RGBA8. For oracle / pixel-comparison tests;
-    /// production presents directly from the wgpu texture without a
-    /// CPU round-trip. Returns `None` if no target has been cached
-    /// for the given `(w, h, format)` triple, or if `format` isn't an
-    /// RGBA8 equivalent.
-    pub fn read_wgpu_render_target_rgba8(
-        &self,
-        width: u32,
-        height: u32,
-        format: wgpu::TextureFormat,
-    ) -> Option<Vec<u8>> {
-        let texture = self.wgpu_render_targets.get(&(width, height, format))?;
-        Some(self.wgpu_device.read_rgba8_texture(texture, width, height))
+    const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+    const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+    /// Phase 7B tile texture format: linear (no sRGB curve in the cache),
+    /// composited into the sRGB framebuffer in 7C. See the design plan's
+    /// "Defaults" subsection under Phase 7.
+    const TILE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+    /// Build a [`PreparedFrame`] from a [`Scene`].
+    ///
+    /// Uploads any new image sources to the GPU cache, builds pipelines
+    /// (cached by format key), sorts and uploads instance data. All GPU
+    /// writes happen here so [`Renderer::render`] stays upload-free (axiom 13).
+    ///
+    /// Draw order: opaque rects → opaque images → alpha rects → alpha images.
+    ///
+    /// Phase 7C: when this `Renderer` was constructed with
+    /// `NetrenderOptions::tile_cache_size = Some(_)`, `prepare()` routes
+    /// through the tile cache instead — dirty tiles render into per-tile
+    /// `Arc<wgpu::Texture>` cache entries, and the returned draw list is
+    /// one `brush_image_alpha` composite draw per tile. The framebuffer
+    /// pixel result is equivalent (within ±2/255 tolerance) to the
+    /// direct path; the win is that re-running `prepare()` on an
+    /// unchanged scene re-renders zero tiles.
+    pub fn prepare(&self, scene: &Scene) -> PreparedFrame {
+        if let Some(tc_mutex) = &self.tile_cache {
+            let mut tc = tc_mutex.lock().expect("tile_cache lock");
+            self.prepare_tiled(scene, &mut tc)
+        } else {
+            self.prepare_direct(scene)
+        }
     }
 
-    /// Return a cached wgpu render-target texture for the given
-    /// `(width, height, format)` triple, creating one on first
-    /// request. Usage bits: RENDER_ATTACHMENT (for the dispatch),
-    /// COPY_SRC (oracle readback), TEXTURE_BINDING (embedder
-    /// sample-on-present).
-    pub fn ensure_wgpu_render_target(
-        &mut self,
-        width: u32,
-        height: u32,
-        format: wgpu::TextureFormat,
-    ) -> &wgpu::Texture {
-        let key = (width, height, format);
+    /// Direct (no-tile-cache) prepare path. Pre-7C behavior.
+    fn prepare_direct(&self, scene: &Scene) -> PreparedFrame {
+        let opaque_pipe = self
+            .wgpu_device
+            .ensure_brush_rect_solid_opaque(Self::COLOR_FORMAT, Self::DEPTH_FORMAT);
+        let alpha_pipe = self
+            .wgpu_device
+            .ensure_brush_rect_solid_alpha(Self::COLOR_FORMAT, Self::DEPTH_FORMAT);
+        let image_opaque_pipe = self
+            .wgpu_device
+            .ensure_brush_image_opaque(Self::COLOR_FORMAT, Self::DEPTH_FORMAT);
+        let image_alpha_pipe = self
+            .wgpu_device
+            .ensure_brush_image_alpha(Self::COLOR_FORMAT, Self::DEPTH_FORMAT);
+        let linear_grad_opaque_pipe = self
+            .wgpu_device
+            .ensure_brush_linear_gradient_opaque(Self::COLOR_FORMAT, Self::DEPTH_FORMAT);
+        let linear_grad_alpha_pipe = self
+            .wgpu_device
+            .ensure_brush_linear_gradient_alpha(Self::COLOR_FORMAT, Self::DEPTH_FORMAT);
+        let radial_grad_opaque_pipe = self
+            .wgpu_device
+            .ensure_brush_radial_gradient_opaque(Self::COLOR_FORMAT, Self::DEPTH_FORMAT);
+        let radial_grad_alpha_pipe = self
+            .wgpu_device
+            .ensure_brush_radial_gradient_alpha(Self::COLOR_FORMAT, Self::DEPTH_FORMAT);
+        let conic_grad_opaque_pipe = self
+            .wgpu_device
+            .ensure_brush_conic_gradient_opaque(Self::COLOR_FORMAT, Self::DEPTH_FORMAT);
+        let conic_grad_alpha_pipe = self
+            .wgpu_device
+            .ensure_brush_conic_gradient_alpha(Self::COLOR_FORMAT, Self::DEPTH_FORMAT);
+
+        let depth_tex = self.wgpu_device.core.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("netrender depth"),
+            size: wgpu::Extent3d {
+                width: scene.viewport_width,
+                height: scene.viewport_height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: Self::DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let depth_view = depth_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Upload any new image sources to the GPU cache.
+        {
+            let mut cache = self.image_cache.lock().expect("image_cache lock");
+            for (key, data) in &scene.image_sources {
+                cache.get_or_upload(
+                    *key,
+                    data,
+                    &self.wgpu_device.core.device,
+                    &self.wgpu_device.core.queue,
+                );
+            }
+        }
+
         let device = &self.wgpu_device.core.device;
-        self.wgpu_render_targets
-            .entry(key)
-            .or_insert_with(|| {
-                device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("wgpu render target (cached)"),
-                    size: wgpu::Extent3d {
-                        width,
-                        height,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::COPY_SRC
-                        | wgpu::TextureUsages::TEXTURE_BINDING,
-                    view_formats: &[],
-                })
-            })
+        let queue = &self.wgpu_device.core.queue;
+
+        // One shared transforms + per_frame upload for the whole frame.
+        let frame_res = FrameResources::new(scene, device, queue);
+
+        // Build rect DrawIntents: [opaque_rects, alpha_rects]
+        let rect_draws = build_rect_batch(scene, device, queue, &opaque_pipe, &alpha_pipe, &frame_res);
+
+        // Build image DrawIntents: [opaque_images, alpha_images]
+        let image_draws = {
+            let cache = self.image_cache.lock().expect("image_cache lock");
+            build_image_batch(
+                scene, device, queue,
+                &image_opaque_pipe, &image_alpha_pipe,
+                &cache, &self.nearest_sampler, &frame_res,
+            )
+        };
+
+        // Build linear gradient DrawIntents: [opaque, alpha]
+        let linear_grad_draws = build_linear_gradient_batch(
+            scene, device, queue,
+            &linear_grad_opaque_pipe, &linear_grad_alpha_pipe,
+            &frame_res,
+        );
+
+        // Build radial gradient DrawIntents: [opaque, alpha]
+        let radial_grad_draws = build_radial_gradient_batch(
+            scene, device, queue,
+            &radial_grad_opaque_pipe, &radial_grad_alpha_pipe,
+            &frame_res,
+        );
+
+        // Build conic gradient DrawIntents: [opaque, alpha]
+        let conic_grad_draws = build_conic_gradient_batch(
+            scene, device, queue,
+            &conic_grad_opaque_pipe, &conic_grad_alpha_pipe,
+            &frame_res,
+        );
+
+        // Concat in painter order: rects → images → linear → radial → conic.
+        // Each batch emits opaques first then alphas; cross-batch
+        // correctness is handled by the unified z_depth assignment.
+        let draws = merge_draw_order(
+            rect_draws,
+            image_draws,
+            linear_grad_draws,
+            radial_grad_draws,
+            conic_grad_draws,
+        );
+
+        PreparedFrame {
+            draws,
+            depth_tex,
+            depth_view,
+            retained: ResourceRefs::default(),
+        }
     }
+
+    /// Tile-cache prepare path: invalidate + render dirty tiles, then
+    /// build one `brush_image_alpha` composite draw per cached tile.
+    fn prepare_tiled(&self, scene: &Scene, tc: &mut TileCache) -> PreparedFrame {
+        // Step 1: dirty tiles re-render into their cached textures.
+        let _dirty = self.render_dirty_tiles(scene, tc);
+
+        // Step 2: build composite draws — one brush_image_alpha per tile.
+        let composite_pipe = self
+            .wgpu_device
+            .ensure_brush_image_alpha(Self::COLOR_FORMAT, Self::DEPTH_FORMAT);
+
+        let device = &self.wgpu_device.core.device;
+        let queue = &self.wgpu_device.core.queue;
+
+        // Composite uses the FULL framebuffer projection (not tile-local) —
+        // each tile's rect is given in world coords, mapped through the
+        // viewport projection to the framebuffer.
+        let transforms_buf = make_transforms_buf(scene, device, queue);
+        let per_frame_buf = make_per_frame_buf_for_rect(
+            [0.0, 0.0, scene.viewport_width as f32, scene.viewport_height as f32],
+            device,
+            queue,
+        );
+
+        let mut composite_draws = Vec::with_capacity(tc.tiles.len());
+        for tile in tc.tiles.values() {
+            if let Some(draw) = self.build_tile_composite_draw(
+                tile,
+                &composite_pipe,
+                &transforms_buf,
+                &per_frame_buf,
+                device,
+                queue,
+            ) {
+                composite_draws.push(draw);
+            }
+        }
+
+        // Step 3: depth texture for the main pass (composite draws use
+        // brush_image_alpha which depth-tests but doesn't depth-write,
+        // so all tiles at z=0.5 pass against a 1.0-cleared buffer).
+        let depth_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("netrender depth (tiled)"),
+            size: wgpu::Extent3d {
+                width: scene.viewport_width,
+                height: scene.viewport_height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: Self::DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let depth_view = depth_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
+        PreparedFrame {
+            draws: composite_draws,
+            depth_tex,
+            depth_view,
+            retained: ResourceRefs::default(),
+        }
+    }
+
+    /// Build one `brush_image_alpha` draw that samples `tile.texture`
+    /// and places it at `tile.world_rect` in framebuffer coordinates.
+    /// Returns `None` if the tile has no cached texture (un-rendered tile).
+    fn build_tile_composite_draw(
+        &self,
+        tile: &crate::tile_cache::Tile,
+        pipe: &netrender_device::BrushImagePipeline,
+        transforms_buf: &wgpu::Buffer,
+        per_frame_buf: &wgpu::Buffer,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Option<DrawIntent> {
+        let texture = tile.texture.as_ref()?;
+
+        // Build one ImageInstance (matches the 80-byte stride in batch.rs).
+        // rect (16) + uv_rect (16) + color (16) + clip (16) + transform_id
+        // (4) + z_depth (4) + padding (8) = 80 bytes.
+        let mut bytes = Vec::with_capacity(80);
+        let [x0, y0, x1, y1] = tile.world_rect;
+        for f in [x0, y0, x1, y1] {
+            bytes.extend_from_slice(&f.to_ne_bytes());
+        }
+        for f in [0.0_f32, 0.0, 1.0, 1.0] {
+            bytes.extend_from_slice(&f.to_ne_bytes());
+        }
+        for f in [1.0_f32, 1.0, 1.0, 1.0] {
+            bytes.extend_from_slice(&f.to_ne_bytes());
+        }
+        for f in [f32::NEG_INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::INFINITY] {
+            bytes.extend_from_slice(&f.to_ne_bytes());
+        }
+        bytes.extend_from_slice(&0_u32.to_ne_bytes()); // transform_id = identity
+        bytes.extend_from_slice(&0.5_f32.to_ne_bytes()); // z_depth — tiles don't overlap
+        bytes.extend_from_slice(&[0_u8; 8]); // padding
+        debug_assert_eq!(bytes.len(), 80);
+
+        let instances_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("tile composite instance"),
+            size: bytes.len() as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&instances_buf, 0, &bytes);
+
+        let tex_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("tile composite bind group"),
+            layout: &pipe.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: instances_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: transforms_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: per_frame_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&tex_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&self.nearest_sampler),
+                },
+            ],
+        });
+
+        Some(DrawIntent {
+            pipeline: pipe.pipeline.clone(),
+            bind_group,
+            vertex_buffers: vec![],
+            vertex_range: 0..4,
+            instance_range: 0..1,
+            dynamic_offsets: Vec::new(),
+            push_constants: Vec::new(),
+        })
+    }
+
+    /// Borrow the tile cache (when `Renderer` was created with
+    /// `NetrenderOptions::tile_cache_size = Some(_)`). Useful for tests
+    /// that need to query `dirty_count_last_invalidate()` after a
+    /// `prepare()` call.
+    pub fn tile_cache(&self) -> Option<&Mutex<TileCache>> {
+        self.tile_cache.as_ref()
+    }
+
+    /// Insert a pre-existing GPU texture into the image cache, making it
+    /// available for compositing via [`Scene::push_image_full`] in the next
+    /// `prepare()` call. The typical use is injecting render-graph outputs
+    /// (blur, filter) as image primitives in the main scene pass.
+    pub fn insert_image_gpu(&self, key: ImageKey, texture: Arc<wgpu::Texture>) {
+        self.image_cache.lock().expect("image_cache lock").insert_gpu(key, texture);
+    }
+
+    /// Phase 7B: invalidate `tile_cache` against `scene` and render every
+    /// dirty tile into its cached `Arc<wgpu::Texture>`. Returns the dirty
+    /// tile coords (same list `TileCache::invalidate` returned).
+    ///
+    /// Each dirty tile gets a fresh `Rgba8Unorm` texture and is rendered
+    /// using the existing `brush_rect_solid` / `brush_image` pipelines
+    /// with a tile-local orthographic projection. All tiles share one
+    /// `Depth32Float` texture (cleared per pass) and one `transforms`
+    /// storage buffer; only the per-frame projection differs between
+    /// tiles. Phase 7C composites these textures into the framebuffer.
+    pub fn render_dirty_tiles(
+        &self,
+        scene: &Scene,
+        tile_cache: &mut TileCache,
+    ) -> Vec<TileCoord> {
+        let dirty = tile_cache.invalidate(scene);
+        if dirty.is_empty() {
+            return dirty;
+        }
+
+        let device = &self.wgpu_device.core.device;
+        let queue = &self.wgpu_device.core.queue;
+        let tile_size = tile_cache.tile_size();
+
+        // Pipelines (cached by (color_format, depth_format, alpha_blend))
+        let opaque_pipe = self
+            .wgpu_device
+            .ensure_brush_rect_solid_opaque(Self::TILE_FORMAT, Self::DEPTH_FORMAT);
+        let alpha_pipe = self
+            .wgpu_device
+            .ensure_brush_rect_solid_alpha(Self::TILE_FORMAT, Self::DEPTH_FORMAT);
+        let image_opaque_pipe = self
+            .wgpu_device
+            .ensure_brush_image_opaque(Self::TILE_FORMAT, Self::DEPTH_FORMAT);
+        let image_alpha_pipe = self
+            .wgpu_device
+            .ensure_brush_image_alpha(Self::TILE_FORMAT, Self::DEPTH_FORMAT);
+        let linear_grad_opaque_pipe = self
+            .wgpu_device
+            .ensure_brush_linear_gradient_opaque(Self::TILE_FORMAT, Self::DEPTH_FORMAT);
+        let linear_grad_alpha_pipe = self
+            .wgpu_device
+            .ensure_brush_linear_gradient_alpha(Self::TILE_FORMAT, Self::DEPTH_FORMAT);
+        let radial_grad_opaque_pipe = self
+            .wgpu_device
+            .ensure_brush_radial_gradient_opaque(Self::TILE_FORMAT, Self::DEPTH_FORMAT);
+        let radial_grad_alpha_pipe = self
+            .wgpu_device
+            .ensure_brush_radial_gradient_alpha(Self::TILE_FORMAT, Self::DEPTH_FORMAT);
+        let conic_grad_opaque_pipe = self
+            .wgpu_device
+            .ensure_brush_conic_gradient_opaque(Self::TILE_FORMAT, Self::DEPTH_FORMAT);
+        let conic_grad_alpha_pipe = self
+            .wgpu_device
+            .ensure_brush_conic_gradient_alpha(Self::TILE_FORMAT, Self::DEPTH_FORMAT);
+
+        // Upload any new image sources (matches prepare()'s contract).
+        {
+            let mut cache = self.image_cache.lock().expect("image_cache lock");
+            for (key, data) in &scene.image_sources {
+                cache.get_or_upload(*key, data, device, queue);
+            }
+        }
+
+        // One depth texture shared across all tile passes (cleared per pass).
+        let depth_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("tile depth (shared)"),
+            size: wgpu::Extent3d {
+                width: tile_size,
+                height: tile_size,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: Self::DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let depth_view = depth_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // One transforms buffer shared across all tiles (cloned into each
+        // tile's FrameResources — wgpu::Buffer is Arc-internal, cheap to clone).
+        let transforms_buf = make_transforms_buf(scene, device, queue);
+
+        let mut encoder = self.wgpu_device.create_encoder("tile cache pass");
+
+        // Hold the image-cache lock across all tile passes; build_image_batch
+        // reads it for each tile.
+        let image_cache = self.image_cache.lock().expect("image_cache lock");
+
+        for &coord in &dirty {
+            let tile_world_rect = tile_cache
+                .tiles
+                .get(&coord)
+                .expect("dirty tile present in cache")
+                .world_rect;
+
+            let per_frame = make_per_frame_buf_for_rect(tile_world_rect, device, queue);
+            let frame_res = FrameResources {
+                transforms: transforms_buf.clone(),
+                per_frame,
+            };
+
+            // Build draws using the existing batch builders. NDC clipping
+            // crops primitives outside the tile's world rect; per-tile
+            // primitive filtering is a 7C+ optimization.
+            let rect_draws =
+                build_rect_batch(scene, device, queue, &opaque_pipe, &alpha_pipe, &frame_res);
+            let image_draws = build_image_batch(
+                scene,
+                device,
+                queue,
+                &image_opaque_pipe,
+                &image_alpha_pipe,
+                &image_cache,
+                &self.nearest_sampler,
+                &frame_res,
+            );
+            let linear_grad_draws = build_linear_gradient_batch(
+                scene,
+                device,
+                queue,
+                &linear_grad_opaque_pipe,
+                &linear_grad_alpha_pipe,
+                &frame_res,
+            );
+            let radial_grad_draws = build_radial_gradient_batch(
+                scene,
+                device,
+                queue,
+                &radial_grad_opaque_pipe,
+                &radial_grad_alpha_pipe,
+                &frame_res,
+            );
+            let conic_grad_draws = build_conic_gradient_batch(
+                scene,
+                device,
+                queue,
+                &conic_grad_opaque_pipe,
+                &conic_grad_alpha_pipe,
+                &frame_res,
+            );
+            let mut draws = rect_draws;
+            draws.extend(image_draws);
+            draws.extend(linear_grad_draws);
+            draws.extend(radial_grad_draws);
+            draws.extend(conic_grad_draws);
+
+            let tile_tex = Arc::new(device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("tile color"),
+                size: wgpu::Extent3d {
+                    width: tile_size,
+                    height: tile_size,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: Self::TILE_FORMAT,
+                // RENDER_ATTACHMENT: we draw into it.
+                // TEXTURE_BINDING: 7C samples it via brush_image.
+                // COPY_SRC: tests / debugging can read it back.
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            }));
+            let tile_view = tile_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
+            let color = ColorAttachment::clear(&tile_view, wgpu::Color::TRANSPARENT);
+            let depth = DepthAttachment::clear(&depth_view, 1.0).discard();
+            self.wgpu_device.encode_pass(
+                &mut encoder,
+                RenderPassTarget {
+                    label: "tile pass",
+                    color,
+                    depth: Some(depth),
+                },
+                &draws,
+            );
+
+            tile_cache
+                .tiles
+                .get_mut(&coord)
+                .expect("dirty tile still present")
+                .texture = Some(tile_tex);
+        }
+
+        drop(image_cache);
+        self.wgpu_device.submit(encoder);
+
+        dirty
+    }
+
+    /// Render a [`PreparedFrame`] into the embedder-supplied
+    /// [`FrameTarget`]. One render pass; no uploads (axiom 13).
+    pub fn render(&self, prepared: &PreparedFrame, target: FrameTarget<'_>, load: ColorLoad) {
+        let color = match load {
+            ColorLoad::Clear(c) => ColorAttachment::clear(target.view, c),
+            ColorLoad::Load => ColorAttachment::load(target.view),
+        };
+        let depth = DepthAttachment::clear(&prepared.depth_view, 1.0).discard();
+
+        let mut encoder = self.wgpu_device.create_encoder("netrender frame");
+        self.wgpu_device.encode_pass(
+            &mut encoder,
+            RenderPassTarget {
+                label: "netrender main pass",
+                color,
+                depth: Some(depth),
+            },
+            &prepared.draws,
+        );
+        self.wgpu_device.submit(encoder);
+    }
+}
+
+/// Concatenate the per-family draw lists. Each batch emits opaques
+/// first then alphas; cross-batch correctness comes from the unified
+/// `n_total`-based z_depth so the front-most primitive (any family)
+/// wins the depth test. Family painter order: rects → images →
+/// linear → radial → conic.
+fn merge_draw_order(
+    mut rect_draws: Vec<DrawIntent>,
+    image_draws: Vec<DrawIntent>,
+    linear_grad_draws: Vec<DrawIntent>,
+    radial_grad_draws: Vec<DrawIntent>,
+    conic_grad_draws: Vec<DrawIntent>,
+) -> Vec<DrawIntent> {
+    rect_draws.extend(image_draws);
+    rect_draws.extend(linear_grad_draws);
+    rect_draws.extend(radial_grad_draws);
+    rect_draws.extend(conic_grad_draws);
+    rect_draws
 }
 
 #[derive(Debug)]
