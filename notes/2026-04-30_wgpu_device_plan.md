@@ -332,17 +332,29 @@ Done when:
      OpSampledImage / texture-sampling instruction parsing, not in the
      resource declarations themselves.
 
-   **Negative result tried (2026-05-01)**: setting
-   `opts.set_auto_combined_image_sampler(true)` in `gen_spirv.rs` had
-   zero effect on the SPIR-V output (byte-identical). When the GLSL
-   already uses combined `sampler2D` types, glslang's Vulkan target
-   produces combined-sampler SPIR-V regardless of this option — so the
-   option only matters for HLSL or for GLSL using separate
-   `texture2D`/`sampler` declarations. Real fix is elsewhere: try
-   upgrading naga (26.0 → newer), inspect actual SPIR-V via spirv-dis to
-   identify the missing ID, or use `Features::SPIRV_SHADER_PASSTHROUGH`
-   at runtime to bypass naga validation (loses auto-derive but the
-   oracle still serves as build-time verifier). Tracks under P7.
+   **Negative results recorded (2026-05-01 / 2026-05-02):**
+   - `opts.set_auto_combined_image_sampler(true)` in `gen_spirv.rs`: zero
+     effect on SPIR-V output (byte-identical). When the GLSL already uses
+     combined `sampler2D` types, glslang's Vulkan target produces
+     combined-sampler SPIR-V regardless. Option only matters for HLSL or
+     separate `texture2D`/`sampler` GLSL.
+   - **Naga version spike (26 → 27 → 29; 28 skipped due to Windows backend
+     bugs)**: zero change in reflection coverage. naga 26, 27, and 29 all
+     produce byte-identical reflection output and the EXACT same error
+     distribution (28 `SampledRect`, 75 `InvalidId(N)`). Definitively
+     ruled out: naga version-pinning is not the issue.
+
+   Remaining options to try (in order of cost):
+   - Inspect SPIR-V via `spirv-dis` (need to install spirv-tools first)
+     to identify what naga's parser is choking on. The pattern (shaders
+     that USE samplers fail; shaders that just DECLARE samplers work)
+     points to OpSampledImage / texture-call instruction handling.
+   - File a naga upstream issue with a minimal SPIR-V repro; possibly a
+     real bug in 26/27/29.
+   - Use `Features::EXPERIMENTAL_PASSTHROUGH_SHADERS` at runtime to
+     bypass naga validation entirely. Loses auto-derive (need
+     hand-authored bind group layouts), but the build-time oracle still
+     serves as verifier for the reflectable subset.
 
 7. **`set_auto_bind_uniforms` may not be assigning distinct bindings to
    all sampler uniforms.** Suspected by inspection of `bindings.json` —
