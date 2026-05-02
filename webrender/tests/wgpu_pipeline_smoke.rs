@@ -55,10 +55,11 @@ fn try_create_device() -> Option<WgpuDevice> {
     .ok()?;
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("wgpu_pipeline_smoke device"),
-        required_features: wgpu::Features::SPIRV_SHADER_PASSTHROUGH,
+        required_features: wgpu::Features::empty(),
         required_limits: wgpu::Limits::default(),
         memory_hints: wgpu::MemoryHints::default(),
         trace: wgpu::Trace::Off,
+        experimental_features: wgpu::ExperimentalFeatures::default(),
     }))
     .ok()?;
 

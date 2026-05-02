@@ -169,6 +169,7 @@ fn classify_global(module: &naga::Module, gv: &naga::GlobalVariable) -> String {
             naga::ImageClass::Sampled { .. } => "sampled_texture".to_string(),
             naga::ImageClass::Depth { .. } => "depth_texture".to_string(),
             naga::ImageClass::Storage { .. } => "storage_texture".to_string(),
+            naga::ImageClass::External => "external_texture".to_string(),
         },
         naga::TypeInner::Sampler { .. } => "sampler".to_string(),
         naga::TypeInner::Struct { .. } => match gv.space {
