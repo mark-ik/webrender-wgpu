@@ -1,9 +1,61 @@
 # Vello Tile Rasterizer Plan (2026-05-01)
 
-**Status**: Proposal. Sibling to
+**Status**: Active. Sibling to
 [2026-04-30_netrender_design_plan.md](2026-04-30_netrender_design_plan.md)
-(hereafter "the parent plan"). Does not supersede; amends Phases 8 / 9
-/ 10 / 11 / 12 if adopted.
+(hereafter "the parent plan"). Does not supersede; amends Phases 8 /
+9 / 10 / 11 / 12 if adopted.
+
+**Verification spike outcome (2026-05-01)**:
+
+- **§11.1 wgpu/vello compatibility**: cleared. vello main is bumped
+  to wgpu 29.0.1 (workspace `Cargo.toml` line 137). wgpu downgrade
+  not required.
+- **§11.2 alpha + color**: cleared with boundary work. `peniko::Color`
+  is **straight alpha** (vello premultiplies internally). Our scene
+  primitives are premultiplied → unpremultiply at the vello-scene
+  encoder. Gradient interpolation defaults to **sRGB-encoded**;
+  explicit `Gradient::with_interpolation_cs(LinearSrgb)` for linear
+  interp.
+- **§11.3 scene/encoder model**: VERIFIED. `Renderer::render_to_texture`
+  creates+submits its own `wgpu::CommandEncoder` per call; no
+  encoder sharing; no multi-region-of-one-target API. `low_level`
+  module is a dead end (`WgpuEngine::run_recording` is `pub(crate)`,
+  no roadmap to expose). Forking vello: **off the table** —
+  ongoing-rebase cost not justified for this project's scale.
+- **§11.4 external textures**: cleared with cost.
+  `Renderer::register_texture(&wgpu::Texture)` exists since 0.6;
+  copies into vello's atlas every frame (not zero-copy); `Arc`-shared
+  CPU blob avoids 2× memory.
+- **§11.5 target format**: VERIFIED. Vello's compute target is
+  hardcoded to `Rgba8Unorm`/`Bgra8Unorm`. **Rgba16Float is not
+  supported** by the public API. §6's "linear-RGB intermediate"
+  acceleration plan is gone; we stay on Rgba8Unorm sRGB-encoded.
+
+**vello_hybrid (sparse_strips) investigation (2026-05-01)**: not the
+answer. Workspace-internal `v0.0.7`, README says "not yet suitable
+for production." Does expose caller-supplied `CommandEncoder` (one
+ergonomic win) but no multi-region / multi-target / scissor / partial
+updates. Different rasterizer architecture (fragment/vertex-only,
+designed for compute-less GPUs). Mainline vello stays.
+
+**Architecture decision (2026-05-01)**: **Option C — Masonry
+pattern**. Per-tile `vello::Scene` cached CPU-side, composed via
+`Scene::append` (bytewise extends, validated cheap), one
+`render_to_texture` per frame, one submit. Loses (a) cross-frame
+GPU-work skipping at the WR-tile-cache level — vello re-runs the
+unioned encoding's compute every frame, can't be helped without
+forking; (b) per-tile `Arc<wgpu::Texture>` for native-compositor
+handoff (axiom 14) — Servo doesn't use this today; Firefox does on
+macOS/Windows/Android. If axiom 14 becomes load-bearing later,
+Option G (whole-frame vello + post-render tile slicing for native
+compositor) is the v1.5 fallback. Option F (fork) is permanently
+ruled out.
+
+The doc has been swept (2026-05-01) to align §2 / §3.3 / §3.5 / §6 /
+§11 / §12 / §13 / §14 with the spike outcomes. §10 still uses
+"TileRasterizer" terminology in its two-backends-trap argument —
+intentional, as historical reference to the pre-spike trait shape
+that section is critiquing.
 
 **Premise**: Replace netrender's per-primitive WGSL pipeline cadence
 with vello as the tile rasterizer. Webrender's display-list ingestion,
@@ -75,124 +127,109 @@ the tile fill stays.
 
 ### 2.1 Where it lands
 
+**Architecture revised post-§11 spike (2026-05-01).** The pre-spike
+draft of this section proposed a `TileRasterizer` trait with a
+shared `wgpu::CommandEncoder` parameter and per-tile dispatch. That
+shape is no longer viable: vello's `Renderer::render_to_texture`
+creates and submits its own encoder per call (verified — see Status
+block), and the `low_level::Recording` workaround requires forking
+`WgpuEngine` (ruled out). The architecture below is the Masonry
+pattern (verified working in `linebender/xilem/masonry_core/src/passes/paint.rs`):
+per-tile `vello::Scene` cached CPU-side, composed via `Scene::append`
+into one frame Scene, one `render_to_texture` per frame, one submit.
+
 In netrender as built, the seam is
 [`Renderer::render_dirty_tiles`](../netrender/src/renderer/mod.rs)
 (today a thin wrapper around the private
-`render_dirty_tiles_with_transforms`, which is where the actual
-per-tile work happens — both would call into `TileRasterizer`).
-Current contract:
+`render_dirty_tiles_with_transforms`). Under the vello path that
+function disappears; rasterization moves into a `VelloRasterizer`
+that owns a per-tile `vello::Scene` cache and a single
+`vello::Renderer`.
+
+### 2.2 The split
+
+`TileCache` keeps its current job — frame-stamp invalidation,
+dependency hashing, retain heuristic. Output: which `TileCoord`s
+need their content rebuilt this frame. The *rasterizer* owns
+everything from there forward, including its own per-tile cache.
 
 ```rust
-pub fn render_dirty_tiles(
-    &self,
-    scene: &Scene,
-    tile_cache: &mut TileCache,
-) -> Vec<TileCoord>;
-```
-
-For each dirty tile: take the tile's world rect, filter
-`scene.{rects, images, gradients}` to those whose AABB intersects
-the tile, allocate a fresh `Rgba8Unorm` texture, render the
-intersecting primitives through the brush pipelines under a
-tile-local orthographic projection, store the texture as
-`tile.texture`. Phase 7C composites those textures into the
-framebuffer via one `brush_image_alpha` draw per tile.
-
-The proposed `TileRasterizer` trait extracts the "render the
-intersecting primitives into the tile target" step. Picture
-cache, invalidation, AABB filter, allocation policy, and
-composite stay where they are.
-
-### 2.2 Trait shape
-
-```rust
-/// One tile's worth of primitives, post-AABB-filter, in painter
-/// order. References Scene-owned data so the rasterizer doesn't
-/// re-walk the full scene per tile.
-pub struct TileWork<'a> {
-    pub world_rect: WorldRect,
-    pub tile_size: u32,
-    pub format: wgpu::TextureFormat,
-    pub scene: &'a Scene,
-    pub rect_indices: &'a [usize],
-    pub image_indices: &'a [usize],
-    pub gradient_indices: &'a [usize],
-    pub image_cache: &'a ImageCache,
-    pub transforms_buf: &'a wgpu::Buffer,
-}
-
-pub trait TileRasterizer: Send {
-    /// Rasterize one tile's primitives into `target`. The encoder
-    /// is shared across all tiles in a frame; the implementation
-    /// records its work and returns. Output texture lifetime is
-    /// owned by the caller (the tile cache).
-    fn rasterize_tile(
+pub trait Rasterizer: Send {
+    /// Rebuild the cached representation for the given dirty tiles.
+    /// For VelloRasterizer this means: for each TileCoord, build a
+    /// fresh `vello::Scene` from `scene` filtered to that tile's
+    /// world rect, store it in the rasterizer's per-tile cache.
+    fn update_tiles(
         &mut self,
-        encoder: &mut wgpu::CommandEncoder,
-        work: &TileWork<'_>,
-        target: &wgpu::TextureView,
+        scene: &Scene,
+        dirty: &[TileCoord],
+        tile_cache: &TileCache, // for tile_world_rect lookup
     );
 
-    /// Per-frame setup hook. Called once before the first
-    /// `rasterize_tile` of a frame. Lets implementations stage
-    /// their per-frame buffers (for vello: encode the frame's
-    /// glyph runs into the resolver, prepare scene buffer pool).
-    fn begin_frame(&mut self, _device: &wgpu::Device) {}
-
-    /// Per-frame teardown / submission hook. Called once after
-    /// the last `rasterize_tile` of a frame, before the encoder
-    /// is submitted. Vello flushes its compute dispatches here.
-    fn end_frame(&mut self, _queue: &wgpu::Queue) {}
+    /// Compose all currently-cached tile representations into a
+    /// single frame and render to `target`. For VelloRasterizer
+    /// this is `Scene::append` of every cached tile-Scene into one
+    /// frame Scene, then `vello::Renderer::render_to_texture` once.
+    fn render_frame(
+        &mut self,
+        wgpu_device: &WgpuDevice,
+        target: &wgpu::TextureView,
+    );
 }
 ```
 
-`Renderer` holds a `Box<dyn TileRasterizer>`. Default constructor
-selects vello; tests can inject the batched implementation for
-parity scenes (see §10).
+`Renderer` holds a `Box<dyn Rasterizer>`. Production constructor
+selects `VelloRasterizer`. The test seam (§10) is a `TestRasterizer`
+that records calls without GPU work — useful for unit-testing
+filter/dispatch logic without booting wgpu.
 
 ### 2.3 Why this exact shape
 
-- **`encoder` parameter, not `device.create_command_encoder()` per
-  call**: vello's compute dispatches and webrender's render passes
-  must coexist on one queue with explicit barriers. One encoder
-  per frame, multiple tile calls into it, single submit at frame
-  end.
-- **`begin_frame` / `end_frame`**: vello's `Renderer::render_to_texture`
-  takes a whole `vello::Scene` per call — it isn't designed for
-  N independent tile renders sharing global state. The frame hooks
-  are where vello's scene-resolver state lives across the per-tile
-  encoding. (Whether vello's API even *allows* one resolver to
-  drive N targets in one frame is the first thing §11.1 verifies.)
-- **`scene: &Scene` plus filtered index slices**: the rasterizer
-  does not get a copy of the per-tile primitive list. Indices into
-  the scene-level Vecs preserve cache locality and let vello reuse
-  glyph encodings across tiles that share text runs.
-- **No `&mut self` on `Scene`**: the rasterizer cannot mutate scene
-  state. It can mutate its own (vello scene buffer pool, glyph
-  resolver cache).
+- **No shared `wgpu::CommandEncoder`.** Vello creates and submits
+  its own per call; we can't inject one. Confirmed in
+  `vello/src/wgpu_engine.rs:380-757` — `WgpuEngine::run_recording`
+  builds a fresh `CommandEncoder` and calls `queue.submit()` itself.
+  The trait can't pretend otherwise.
+- **One submit per frame, not one per tile.** Per-tile-per-submit
+  works architecturally but pays a fence/sync per tile. Composing
+  N tile-Scenes via `Scene::append` (which is `extend_from_slice`
+  on bytewise-encoded streams; verified cheap in
+  `vello_encoding/src/encoding.rs:94-172`) into one frame Scene and
+  rendering once is what Masonry does for the same reasons.
+- **`TileCache` doesn't hold vello state.** No `vello::Scene` field
+  on `Tile`. The rasterizer owns its cache; tile_cache stays
+  rasterizer-agnostic. Means we can drop the entire `tile.texture:
+  Option<Arc<wgpu::Texture>>` field along with the per-tile texture
+  lifetime juggling — the rasterizer's per-tile-Scene cache replaces
+  it.
+- **Filter-by-AABB happens inside `update_tiles`.** The rasterizer
+  walks the dirty list, asks `tile_cache` for each coord's
+  `world_rect`, filters scene primitives by AABB, and builds the
+  vello scene. `TileCache` exposes `tile_world_rect(coord) -> [f32;
+  4]`; nothing else of `TileCache` need leak.
+- **No `transforms_buf`, no `&ImageCache` in the trait.** Vello
+  doesn't take a wgpu::Buffer for transforms (it reads
+  `kurbo::Affine` directly from the scene). Image lookup goes
+  through `peniko::Image` constructed from CPU `Blob<u8>` (Arc-shared
+  with our image cache — see §3.5). The pre-spike coupling smells
+  evaporate because the batched backend they were for is gone.
 
-**Two coupling smells worth flagging in this trait shape**:
+### 2.4 Cost shape vs. the pre-spike draft
 
-- `transforms_buf: &'a wgpu::Buffer` is *only* meaningful to the
-  batched backend — that's where it ends up bound at slot 1 of the
-  brush bind groups. Vello reads `scene.transforms[id]` as
-  `kurbo::Affine` and never touches a wgpu::Buffer for transforms.
-  Including it in `TileWork` couples the trait to the implementation
-  it's supposed to abstract over. Cleaner: drop it; let the batched
-  backend (if retained as `TestRasterizer` per §10) build its own
-  buffer per-frame, or hold a buffer cache keyed on a scene fingerprint.
-- `image_cache: &'a ImageCache` exposes netrender's cache type
-  through the trait surface. ImageCache is `pub(crate)` today, and
-  vello will want a different lookup shape (peniko::Image, not
-  Arc<wgpu::Texture>). The right shape is probably an
-  `ImageResolver` trait passed in (or an enum of accepted resolver
-  outputs) rather than the full `&ImageCache` reference. Decide at
-  §11.4 once we know what vello accepts.
+| Property | Pre-spike (per-tile encoder) | Post-spike (Option C) |
+| --- | --- | --- |
+| Submits per frame | N (one per dirty tile) | 1 |
+| Encoder ownership | Shared via trait param | Vello-internal |
+| Per-tile texture | `Arc<wgpu::Texture>` per tile | None — composed scene |
+| Native compositor handoff (axiom 14) | Trivial (per-tile texture) | Lost; v1.5 fallback in §recommendation |
+| Cross-frame GPU-work skipping | Possible (re-render only dirty tile textures) | No — vello recomputes the unioned encoding's GPU dispatches every frame |
+| CPU-side scene rebuild | Per dirty tile only | Per dirty tile only (clean tiles' Scenes reused) |
 
-These don't kill the trait shape — both fields can become Optional
-or move to a `BatchedRasterizer`-specific construction call — but
-the as-drafted struct embeds the brushed-backend's internals where
-they shouldn't be.
+The two real losses (native compositor handoff, cross-frame GPU
+work skipping) trade against forking `WgpuEngine`. We chose the
+losses; Servo doesn't use axiom-14 today, and vello's GPU cost on
+unchanged content is reportedly tractable on Linebender's UI
+benchmarks.
 
 ## 3. Vello-scene encoding for current primitives
 
@@ -251,9 +288,26 @@ vscene.fill(Fill::NonZero, aff, &g, None, &shape);
 N-stop is native — Phase 8D's per-instance `stops_offset` /
 `stops_count` storage-buffer plumbing disappears.
 
-`peniko::Gradient` supports color-space selection (linear vs.
-sRGB interpolation). This is where the long-tail color-correctness
-question gets answered for free.
+**Color-space caveat (verified §11.2).** `peniko::Gradient`
+defaults to **sRGB-encoded interpolation**
+(`gradient.rs:21 DEFAULT_GRADIENT_COLOR_SPACE = ColorSpaceTag::Srgb`).
+Phase 8 receipts blended in straight-RGB component space; matching
+that requires explicit `Gradient::with_interpolation_cs(LinearSrgb)`
+on every gradient (or `with_interpolation_cs(Oklab)` for perceptual
+midtones). The encoder picks per-gradient based on what the parent
+plan's color contract chooses. For now: linear-sRGB to keep stop
+math identical to Phase 8 batched. Alpha-interpolation defaults to
+`Premultiplied` (the only mode vello currently supports).
+
+**Alpha boundary (verified §11.2).** `peniko::Color` is straight
+alpha; vello premultiplies internally (`vello_encoding/src/draw.rs:79`
+calls `convert::<Srgb>().premultiply()`). Our `SceneGradient.stops`
+hold premultiplied colors. The encoder MUST unpremultiply before
+constructing `peniko::Color`:
+`Color::from_rgba_f32(r/a, g/a, b/a, a)` for `a > 0`, with the
+`a == 0` case passing zeros straight through. (Same boundary
+conversion applies in §3.1 for solid rect colors and §3.2 for image
+tints.)
 
 ### 3.4 Clip rectangles
 
@@ -280,28 +334,50 @@ the sentinel — emitting a layer per primitive for the no-clip
 majority would dwarf any other rasterization cost. Detect via a
 cheap `clip_rect[0].is_finite()` check at encode time.
 
-### 3.5 Image cache integration
+### 3.5 Image cache integration (verified §11.4)
 
-The current `ImageCache` stores `Arc<wgpu::Texture>` by `ImageKey`.
-Vello's image brush takes a `peniko::Image` constructed from
-`ImageData::new(blob, format, width, height)` where `blob` is
-CPU-side bytes. Two integration paths:
+Two paths, both viable, picked per-image based on lifetime shape:
 
-- **Path A — re-decode for vello.** ImageCache keeps both a CPU-side
-  `Arc<[u8]>` (blob) and a GPU `Arc<wgpu::Texture>`. Vello consumes
-  the blob; webrender-batched fallback (if retained, see §10)
-  consumes the texture. Memory cost: 2x for cached images. Decode
-  cost: zero (blob is the post-decode bytes).
-- **Path B — vello samples GPU textures directly.** Vello supports
-  `peniko::Image` backed by an external `wgpu::Texture` since
-  vello 0.3+ via `vello::wgpu_engine::ExternalImage` (or whatever
-  the post-renaming API is — verify in §11.1). This is the right
-  path; Path A is a fallback if external-texture import doesn't
-  fit netrender's lifetime model.
+- **Path A — `peniko::Image` backed by `Arc<Blob<u8>>`.** Vello
+  consumes a CPU-side blob via `peniko::ImageData::new(blob, format,
+  width, height)`. The blob is `linebender_resource_handle::Blob`,
+  which is internally `Arc`-shared. Our `ImageCache` can hold the
+  same `Blob` and hand it to peniko without 2× memory — vello
+  caches by `Blob.id()` so re-handing the same blob across frames
+  is one upload, not N. **This is the default path.**
+- **Path B — `Renderer::register_texture(&wgpu::Texture)`.** Added
+  in vello 0.6 (CHANGELOG #1161). Caller-provided wgpu texture must
+  be `Rgba8Unorm`, straight alpha, with `COPY_SRC` usage. **Caveat:
+  vello copies into its internal atlas every frame** — not zero-copy.
+  Useful for inputs that are themselves rendered targets (render-graph
+  outputs feeding into a vello scene, e.g., the Phase 6 blur result
+  → vello consumer pattern), where the source is already a wgpu
+  texture and CPU bytes don't exist.
 
-The image cache stays the lifetime authority. Vello holds borrowed
-views; the consumer holds the `Arc` until `PreparedFrame` submission
-completes (axiom 16, unchanged).
+The image cache stays the lifetime authority. For Path A, both
+netrender and vello hold `Arc<Blob>` clones; the underlying CPU
+allocation is shared. For Path B, the wgpu texture stays
+`Arc`-owned by netrender and vello samples per-frame; the consumer
+keeps the Arc alive until `PreparedFrame` submission completes
+(axiom 16, unchanged).
+
+**Image-tint multiplication.** `SceneImage.color` is a premultiplied
+RGBA tint that the brushed pipeline multiplies element-wise with
+the sampled texel. Peniko's `ImageBrushRef` doesn't have a
+multiplicative tint built in. Two encoding strategies:
+
+1. **Wrap the image draw in a `Mix::Multiply` blend layer.** Set
+   `push_layer(BlendMode::new(Mix::Multiply, Compose::SrcOver), ..., tint_rect)`,
+   draw the image, `pop_layer`. Heavy for the common case.
+2. **Pre-multiply the tint into a per-image `peniko::Image::with_alpha(a)`
+   variant.** Works for alpha-only tint (the common 7C tile-composite
+   case where tint is `[1, 1, 1, alpha]`). For RGB tints, fall
+   back to (1).
+
+For Phase 7C tile composites the alpha-only path covers it. Other
+RGB-tint cases (mask-as-tinted-image in 9A) need the Mix::Multiply
+path; flag in §11.4-followup as worth a code spike to confirm
+correctness.
 
 ## 4. Glyphs
 
@@ -390,42 +466,89 @@ target (drop shadow with offset, backdrop blur). The parent plan's
 
 ## 6. Color contract
 
-The parent plan defines two color regimes:
+**Major reframe post-§11 spike (2026-05-01).** The first draft of
+this section assumed adopting vello would immediately give us linear-
+light blending — i.e., the parent plan's Phase-7+ regime. **That's
+wrong for two independent reasons:**
 
-- Phase 1–6: surface `Rgba8UnormSrgb`, internal blend in sRGB-encoded
-  space ("wrong-but-consistent"), goldens lock in this output.
-- Phase 7+: linear `Rgba16Float` intermediate, linear blend math,
-  composite back to `Rgba8UnormSrgb` surface, goldens stay valid.
+1. **Vello's public API doesn't render to `Rgba16Float`.** The compute
+   fine-rasterizer's storage target is hardcoded to `Rgba8Unorm` /
+   `Bgra8Unorm` (`vello/src/wgpu_engine.rs:825-829`,
+   `render.rs:509`). No public path to a linear-light intermediate
+   without forking `WgpuEngine` (ruled out).
+2. **Vello blends in sRGB-encoded space, not linear.** This is the
+   Cairo / 2D-canvas tradition; vello's [`vision.md:116`](https://github.com/linebender/vello)
+   flags gamma-correct rendering as a *future* quality improvement,
+   not current behavior. `vello_shaders/shader/shared/blend.wgsl:145`
+   explicitly says "The colors are assumed to be in sRGB color
+   space," and `vello_encoding/src/draw.rs:79` writes
+   gamma-encoded bytes via `convert::<Srgb>().premultiply().to_rgba8()`.
+   Issue #151 (closed without merging linear-light support) is the
+   trail.
 
-Vello expects linear blend space. Adopting vello forces the Phase
-7+ regime *immediately* instead of in a later phase. Implications:
+So the linear-light "Phase 7+" regime *isn't reachable* via mainline
+vello in 2026. What IS reachable is a different and arguably-more-
+useful contract: **vello blends in sRGB-encoded space, the sample
+boundary recovers linear-light, downstream composition can work in
+linear if it wants, framebuffer encodes back to sRGB.**
 
-- Tile textures move to `Rgba16Float` (or a vello-default linear
-  format; verify in §11.1). The Phase 7 default `Rgba8Unorm` for
-  tile storage is replaced.
-- Phase 2-7 oracles captured under sRGB-encoded blend math will
-  *diverge* from vello output in scenes that exercise alpha
-  compositing. Pure-opaque scenes are unaffected. Of the five
-  Phase-0.5 oracles, `blank` is unaffected; the four others must
-  be re-captured against the vello pipeline as part of Phase 1'
-  (see §10).
-- The Phase 1 "wart" disappears: gradients and blends are
-  mathematically right from day one of the vello path.
-- Surface format stays `Rgba8UnormSrgb`. Final composite encodes
-  on store. External color contract (what the embedder sees) is
-  unchanged.
+### 6.1 The view-format chain (verified §11.5-followup spike)
 
-This is correctness-*mandatory* under vello, not optional. The
-parent plan let Phase 1–6 ship in the sRGB-encoded-blend regime
-deliberately; the regression to vello's linear regime is forced,
-not voluntary. The oracle re-capture is genuine cost (Phase 1'
-budgets a few days for it) and the four affected goldens'
-reference images change in ways that the *parent plan would have
-considered "incorrect" until Phase 7+*. Anyone reviewing
-diff-against-old-goldens during the migration will see what looks
-like regressions; they're not, they're the corrected math
-arriving early. Worth a one-pager in Phase 1' explaining the diff
-to the reader before they file a bug.
+Vello writes gamma-encoded sRGB values into an `Rgba8Unorm` storage
+texture. We sample that texture downstream through an
+`Rgba8UnormSrgb` view-format, which gets us hardware sRGB→linear
+decode at sample time — the **exact inverse** of vello's "treat
+sRGB-encoded bytes as if they were linear" internal pretense. So:
+
+- **Tile-Scene render target:** `Rgba8Unorm`, `view_formats:
+  &[Rgba8UnormSrgb]`, usage `STORAGE_BINDING | TEXTURE_BINDING |
+  COPY_SRC`. The `Rgba8UnormSrgb` view is created with explicit
+  `usage: TEXTURE_BINDING` (no STORAGE_BINDING) — required by per-
+  view usage rules added to WebGPU spec in late 2024 / Chrome 132.
+- **Storage view (vello writes here):** native `Rgba8Unorm`. Vello's
+  fine compute pass uses this.
+- **Sample view (downstream samples here):** `Rgba8UnormSrgb`.
+  Hardware decode on read; samples arrive in linear-light.
+- **Composite to framebuffer:** linear-light pixels blend cleanly;
+  framebuffer is `Rgba8UnormSrgb` so write encodes back to sRGB on
+  store.
+
+Cited references: `wgpu-types-29.0.1/src/texture/format.rs:1569` for
+`remove_srgb_suffix` validation; `vello/src/lib.rs:463` for
+target-format requirement; precedent in `vello#689` (Iced
+integration), `wgpu#3030` (closed via #3237), and bevy#15201 doing
+the same trick.
+
+**Vulkan asterisk.** `wgpu-hal` doesn't set
+`VK_IMAGE_CREATE_EXTENDED_USAGE_BIT` alongside `MUTABLE_FORMAT_BIT` +
+format-list ([wgpu#5379](https://github.com/gfx-rs/wgpu/issues/5379),
+open). Works on most Vulkan drivers but produces validation-layer
+warnings on radv / Lavapipe. Metal and DX12 are clean. If headless
+CI on Lavapipe is a hard target, plan a manual-decode shader
+fallback (~8 ALU ops per fragment).
+
+### 6.2 Implications
+
+- **Surface format stays `Rgba8UnormSrgb`.** External color contract
+  (what the embedder sees) is unchanged.
+- **Phase 8/9 receipts re-green with vello-encoded gradients.** Stop
+  values that were previously lerped in straight-RGB component space
+  now go through `Gradient::with_interpolation_cs(LinearSrgb)` to
+  match (or `Srgb` if matching vello's default sRGB-encoded
+  interp). Per-receipt decision; tolerance ±2/255 was already in
+  place.
+- **`Rgba16Float` linear intermediates: not on the table.** If a
+  future receipt absolutely requires HDR-precision linear, the path
+  is a separate non-vello compute pass that copies vello output
+  through a linear conversion — high cost, only do it if forced.
+- **Oracle re-capture cost is smaller than the pre-spike plan
+  estimated.** The earlier draft assumed all alpha-compositing
+  scenes diverge; in practice the divergence is bounded to the
+  delta between "straight-RGB component lerp" (parent plan Phase 8)
+  and "vello's `Srgb`-tag lerp through peniko's color crate", which
+  is small to zero on primary-color / extreme-alpha cases. Mid-tone
+  alpha-blend scenes will diverge — re-capture, document the diff,
+  move on.
 
 ## 7. Axiom amendments
 
@@ -530,96 +653,118 @@ The parent plan's batched WGSLs (`brush_rect_solid`, `brush_image`,
 vello takes over the corresponding tile-fill path. They land in
 git history; they don't live alongside vello in the binary.
 
-## 11. Verification before commit
+## 11. Verification record
 
-Before writing a single line of `VelloRasterizer`, the following
-must be confirmed. Each item produces a yes/no decision; any "no"
-that can't be designed around kills this plan.
+All five gates have been verified through research-spike cycles
+(2026-05-01). Originals stated "before writing a single line of
+`VelloRasterizer`"; what follows is what we now know.
 
-### 11.1 wgpu / vello version compatibility
+### 11.1 wgpu / vello version compatibility — **CLEARED**
 
-netrender currently pins `wgpu = "29"`. Vello tracks wgpu releases
-on its own cadence. Find the vello version that pairs with wgpu 29
-(or accept a wgpu downgrade — high cost, axiom-13 implications).
-Pin both in `Cargo.toml`.
+Vello main is on `wgpu = "29.0.1"` (`vello/Cargo.toml:137`); this
+is the wgpu-29 bump that "unblocked vello development" per the
+linebender team's recent activity. Released-tag 0.8.0 still
+targets wgpu 28; we'll consume vello via git ref to main until
+their next tagged release.
 
-Also list vello's required wgpu features (axiom 10 amendment, §7),
-and confirm Lavapipe / WARP / SwiftShader satisfy them on CI's
-software adapters. If software fallback breaks, Phase 0.5's
-headless-CI promise is in tension with this plan and one of the
-two has to give.
+`VELLO_BASELINE` wgpu features (the Phase-0.5 axiom-10 amendment):
+the precise list is not yet enumerated — the `boot()` call site
+will surface what's required when we add vello. wgpu's `Features::empty()`
+baseline is unlikely to suffice; expect compute-shader + atomics +
+storage-binding requirements at minimum. Lavapipe / WARP /
+SwiftShader are reported to satisfy vello on community usage but
+the §11.5-followup spike (Vulkan validation behavior, see §6.1)
+should answer this directly when it runs.
 
-**Output**: a Cargo.lock entry, a `VELLO_BASELINE` features list,
-and a CI smoke test that boots vello on the same software adapter
-the netrender suite uses.
+Software-adapter validation may produce noise on Vulkan due to
+[wgpu#5379](https://github.com/gfx-rs/wgpu/issues/5379) (open) —
+documented in §6.1; mitigation path identified.
 
-### 11.2 Premultiplied-alpha and color-space
+### 11.2 Premultiplied-alpha and color-space — **CLEARED with boundary work**
 
-netrender's brush WGSLs work in premultiplied space. Vello's
-`peniko::Color` and brush-input contract — does it ingest
-premultiplied or straight? If premultiplied, identity. If straight,
-encode unpremultiply at the boundary in `VelloRasterizer`.
+Verified: `peniko::Color` is straight alpha (not premultiplied);
+vello premultiplies internally
+(`vello_encoding/src/draw.rs:79`). Our scene's premultiplied colors
+need unpremultiply-at-boundary in the encoder. `peniko::Gradient`
+defaults to `ColorSpaceTag::Srgb` (sRGB-encoded interpolation);
+explicit `with_interpolation_cs(LinearSrgb)` to override, per
+§3.3 update.
 
-Same question for color stops in gradients (linear-RGB
-interpolation vs. sRGB). Verify peniko's default and pin it
-explicitly.
+### 11.3 Vello scene reuse / parallelism model — **CLEARED with architectural revision**
 
-**Output**: a one-tile parity test — render a half-alpha red rect
-through the batched path and through vello, compare. Document the
-delta (expected zero in premultiplied; small if not).
+Verified facts (research, no code spike needed):
 
-### 11.3 Vello scene reuse / parallelism model
+- One `vello::Scene` per `Renderer::render_to_texture` call. To
+  render N targets, call N times.
+- `render_to_texture` does NOT take a caller-supplied
+  `wgpu::CommandEncoder` — it creates and submits its own per
+  call (`wgpu_engine.rs:380-757`). No public path to encoder
+  sharing.
+- `low_level::Recording` is public but `WgpuEngine::run_recording`
+  is `pub(crate)` and there's no roadmap item to expose it. Forking
+  is the only path; ruled out for this project.
+- No multi-region-of-one-target API. `RenderParams { width, height,
+  base_color, antialiasing_method }` lacks viewport/scissor.
+- `Renderer` itself amortizes pipelines + Resolver across calls.
+  Reuse one `Renderer` per `(Device, surface_format)` pair.
+- Resolver caches glyph encodings + ramp LUT bytes + image atlas
+  slots across frames; does NOT cache scene-buffer packing,
+  ramp-atlas GPU upload, dispatch buffers, or compute dispatches.
 
-Does vello support N independent scene encodings sharing a glyph
-resolver / image cache, or is one `vello::Scene` the unit and we
-build N of them per frame? §2.3 assumes the latter. If vello has
-explicit support for multi-target-per-frame, §2.3's `begin_frame`
-/ `end_frame` simplifies.
+`vello_hybrid` (sparse_strips experimental crate) was investigated
+as an escape hatch: it does expose caller-supplied
+`CommandEncoder`, but lacks multi-region/multi-target/scissor
+APIs *and* is workspace-internal at v0.0.7 ("not yet suitable for
+production"). Not the answer.
 
-Related: can `vello::Renderer::render_to_texture` share an encoder
-with non-vello commands? If it requires its own encoder per call,
-§2.3's "one encoder per frame" needs revision.
+**Architectural decision: Option C (Masonry pattern).** Per-tile
+`vello::Scene` cached CPU-side; composed via `Scene::append`
+(verified cheap — `extend_from_slice` on bytewise streams in
+`vello_encoding/src/encoding.rs:94-172`); one
+`render_to_texture` per frame; one submit. See §2.
 
-**Bigger question lurking here**: can one `vello::Scene` render to
-N viewport regions of one larger target in a single dispatch, or
-to N independent targets sharing one resolver state? If yes, our
-"per-tile vello scene" architecture is wasteful — we'd build one
-whole-frame scene and ask vello to fill the dirty tiles.
-That collapses §2.3 substantially and avoids vello's
-internal-tiling overhead being applied to our 256² tiles. If no,
-the per-tile-scene shape stands but is performance-gated on
-vello's amortized per-scene cost. Worth verifying first because
-the answer reshapes the trait.
+### 11.4 External-texture import — **CLEARED with cost note**
 
-**Output**: a working spike that renders 4 separate tile textures
-in one frame, sharing whatever vello state can be shared. Measure
-overhead per tile. If multi-region-from-one-scene is supported,
-spike that path too and compare.
+`Renderer::register_texture(&wgpu::Texture)` exists in vello 0.6+
+(`lib.rs:562-590`). Accepts `Rgba8Unorm`, straight alpha, with
+`COPY_SRC` usage. **Caveat: copies into vello's atlas every
+frame** — not zero-copy. Path A (`Arc<Blob<u8>>`) is the default
+since blob ID dedup makes it effectively single-upload across
+frames; Path B (`register_texture`) is the right path when the
+input is itself a wgpu texture (render-graph output → vello
+input). See §3.5 update.
 
-### 11.4 External-texture import
+### 11.5 Render-target format — **CLEARED with reframe**
 
-§3.5 Path B assumes vello can sample wgpu textures owned by
-netrender's image cache. Verify the API exists (or what shape it
-takes — plain `wgpu::Texture` reference vs. peniko-side wrapper),
-and confirm lifetime semantics align with axiom 16.
+Verified: vello's compute target is hardcoded to `Rgba8Unorm` /
+`Bgra8Unorm`. **`Rgba16Float` is not supported** by the public
+API. The §6 color contract is reframed accordingly: stay on
+`Rgba8Unorm` storage with `Rgba8UnormSrgb` view-format trick for
+sample-time sRGB→linear decode. See §6.1 for the chain and the
+Vulkan validation asterisk.
 
-**Output**: image-rect parity test, vello path samples the same
-GPU texture the batched path samples. Same pixel output (within
-color-contract delta).
+The drop-shadow integration test (vello rasterizes → existing
+`brush_blur.wgsl` consumes) is now a Phase 6' receipt rather
+than a §11 gate; the format compatibility question is settled.
 
-### 11.5 Filter task interop
+### 11.6 Items still requiring runtime spike
 
-§5 asserts vello renders into a graph-allocated target and
-downstream filter tasks consume it. Verify the format vello
-prefers as render target is one filter tasks can sample.
-`Rgba16Float` is the likely answer; confirm.
+Two narrow questions need a real `cargo add vello` + 50-line test
+to resolve, but neither is plan-blocking:
 
-**Output**: drop-shadow integration test — vello rasterizes a
-rect, blur task (existing `brush_blur.wgsl`) consumes it, golden
-matches.
+1. Vulkan validation behavior on Lavapipe / radv with
+   `Rgba8Unorm` storage + `Rgba8UnormSrgb` view, given wgpu-hal
+   doesn't set `EXTENDED_USAGE_BIT`. May produce warnings; may
+   assert. Determines whether headless-CI on software-adapter
+   Vulkan works without a manual-decode fallback shader.
+2. Quantization round-trip exactness: writing `f32` to
+   `Rgba8Unorm` storage and reading via `Rgba8UnormSrgb` should
+   yield `srgb_decode(round(f * 255) / 255)` with no driver-
+   injected linearize step on the storage write. Code-spike
+   confirmation; expected to pass.
 
-If 11.1–11.5 all pass, the plan is implementable. If any fails in
-a way that requires substantial workarounds, revisit.
+Both fall out naturally in Phase 1' first-light — schedule there,
+not as separate work.
 
 ## 12. Phase mapping under this plan
 
@@ -655,10 +800,22 @@ plan's Phase X.
   task; everything else (graph topo-sort, transient pool, encode
   callbacks) stays. Drop-shadow receipt (parent's `p6_02`)
   re-greens through the vello path.
-- **Phase 7'**: picture caching. *Same scope* as parent Phase 7 —
-  already delivered, but `render_dirty_tiles` rewires through
-  `TileRasterizer`. Three-tile parity test against the existing
-  Phase 7C tile composite.
+- **Phase 7'**: picture caching, **shape changes substantially**.
+  Parent Phase 7's tile cache stored `Arc<wgpu::Texture>` per tile;
+  the rasterizer rendered each dirty tile to its own texture; the
+  composite drew one `brush_image_alpha` per tile. Under Option C
+  (Masonry pattern), the cached unit becomes `vello::Scene` per
+  tile; composition is `Scene::append` into one frame Scene; one
+  `render_to_texture` per frame, one submit, no per-tile textures.
+  `TileCache` keeps its invalidation algorithm (frame-stamp +
+  dependency hash + retain heuristic — Phase 7A's algorithmic core
+  carries forward). What's deleted: `Tile.texture: Option<Arc<wgpu::Texture>>`
+  field, `render_dirty_tiles` per-tile passes, the
+  `brush_image_alpha`-per-tile composite. What's added: a
+  `VelloRasterizer` owning `HashMap<TileCoord, vello::Scene>` and a
+  single `vello::Renderer`. Receipt: the Phase 7C pixel-equivalence
+  test re-greens through the new path. Note: cross-frame GPU-work
+  skipping is *not* preserved (per §11.3 / risk 8).
 - **Phase 8'**: gradients. Collapses to one slice: `SceneGradient`
   → `peniko::Gradient` (§3.3). Linear / radial / conic / N-stop
   all in one push. Estimate: ~1 week vs. parent Phase 8's
@@ -706,10 +863,13 @@ calendar lands those receipts.
    API across versions. Pinning a version costs us upstream fixes;
    floating costs us stability. Pin at adoption, treat upgrades as
    phase-equivalent work.
-3. **Mixing vello compute and webrender render passes on one
-   queue.** Synchronization is wgpu's job, but our barrier
-   placement and pass scoping (axiom 8) get more constrained. §11.3
-   spike must validate.
+3. **Mixing vello compute and netrender render passes on one
+   queue.** Verified §11.3: vello creates+submits its own encoder;
+   netrender's other passes (composite, render-task graph filters)
+   run as separate submissions. wgpu orders submissions in queue
+   order. The only wart is per-frame submission count (vello +
+   each downstream filter task = N+1 submissions), which is fine
+   on modern GPUs but worth profiling under load.
 4. **Loss of the "WGSL we authored is the source of truth"
    property.** Today every shader in the binary is in
    `netrender_device/src/shaders/`. Post-vello, vello's shaders
@@ -734,10 +894,33 @@ calendar lands those receipts.
    (and ICU4X transitively, once text lands) is a non-trivial
    addition to the binary. For a Servo-fork shipping at Firefox-
    scale, this matters; for a Graphshell-style desktop app it
-   doesn't. Order-of-magnitude check during §11.1 (just `cargo
+   doesn't. Order-of-magnitude check during Phase 1' (just `cargo
    bloat --release` on the spike binary) — if it's painful, the
    project leads can decide whether to accept it or defer the
    decision.
+
+8. **No cross-frame GPU-work skipping.** Verified §11.3: vello
+   re-runs the unioned encoding's coarse + fine compute passes
+   every frame, including for tiles whose contents didn't change.
+   The Resolver caches CPU-side glyph encodings, gradient ramp LUT
+   bytes, and image atlas slot allocations across frames; it does
+   NOT cache the GPU work. WebRender's tile cache invariant —
+   "clean tile = zero GPU work" — does not survive the pivot.
+   Mitigation: vello's per-frame compute cost is reportedly
+   tractable (Linebender benchmarks at UI scale); for browser-
+   content scrolling workloads at large viewports the regression
+   is real and would only be addressed by forking, which is ruled
+   out. Accept the cost; profile under realistic load; revisit
+   only if specific consumer profiles surface unacceptable
+   regression.
+
+9. **Forking vello is permanently off the table.** Restated for
+   emphasis: any future pressure to fork (axiom-14 native-
+   compositor handoff becoming load-bearing, multi-region
+   rendering becoming necessary, etc.) reopens this discussion at
+   the project-direction level rather than as a tactical patch.
+   The maintenance cost of carrying a fork against an active
+   pre-1.0 upstream is not absorbable at this project's scale.
 
 ## 14. The recommendation
 
@@ -749,51 +932,65 @@ of §1 is unchanged for what's *ahead* (Phase 10 / 11 / 12) but
 $0 for what's already shipped. Deciding now is deciding on the
 remaining ~6 months of parent-plan work, not the original ~13.
 
-That recalibration doesn't kill the recommendation, but it does
-weaken the urgency. Adopt the swap if:
+**Recommendation locked (2026-05-01).** All five §11 gates have
+been verified through research spikes; none surface a deal-breaker.
+The pivot is a go.
 
-1. **§11.1–11.5 verifications all pass** — single biggest gate.
-   Realistic spike cost: 1 week (not "a day or two each" as the
-   first draft optimistically claimed; vello-API research alone
-   absorbs 2–3 days before any code lands).
-2. The remaining-phase savings (Phase 10/11/12) outweigh the
-   pivot cost: Phase 1'–7' re-green and oracle re-capture (2–3
-   weeks), plus carrying any vello upstream churn.
-3. The consumer's content profile is path-heavy or text-heavy
-   enough that vello's design pays off. Pure-AABB-rect content
-   (the WebRender sweet spot) doesn't pull strongly toward the
-   pivot.
+Architectural shape: **Option C (Masonry pattern)** — per-tile
+`vello::Scene` cached CPU-side, composed via `Scene::append`, one
+`render_to_texture` per frame, one submit. See §2 for the full
+trait shape and §6 for the color contract.
 
-Steps if adopting:
+Two narrow runtime confirmations remain (§11.6) but neither is
+plan-blocking; they fall out of Phase 1' first-light naturally.
 
-1. Run §11.1–11.5 verifications. Single ~1-week spike, not
-   parallel mini-spikes — they share scaffolding.
-2. If all pass: pause Phase 10 work (we're at "decide between
-   Phase 10 and Phase 11 next" right now; this becomes
-   "Phase 1' next").
-3. Land §11's parity spike as the receipt for plan viability.
-4. Pivot Phase 1' → 7' rewire (2–3 weeks). The Phase 8 / 9 WGSL
-   delete lands as part of this — they're cleanly separable
-   surface, gone in a single refactor commit.
-5. Phase 8'–11' (collapsed scope) per §12.
-
-Stay-the-course alternative: continue parent plan with Phase 10
-or Phase 11 next. Defensible if §11 verifications surface a deal-
-breaker (vello's software-adapter story is fatal, premultiplied-
-alpha forces an unacceptable boundary cost, bundle-size cost is
-unacceptable for the consumer, etc.) — *or* if the consumer pull
-is solidly browser-content-shaped where webrender lowering
-competes well.
+**Stay-the-course alternative** (continue parent plan with Phase 10
+or 11) is *not* recommended. The remaining unrealized Phase 10/11/12
+work is ~6 months on the parent plan vs. ~3 months on the vello
+path; the gap absorbs the Phase 1'–7' re-green cost (~2–3 weeks)
+and net-saves time. The only serious counter-argument was "vello's
+software-adapter story might be fatal" — partially confirmed
+(Vulkan validation noise on Lavapipe via [wgpu#5379](https://github.com/gfx-rs/wgpu/issues/5379))
+but with a known fallback (manual sRGB decode in shader), so not
+fatal.
 
 **Hybrid alternative (not recommended)**: trait-and-two-backends.
-§10 covers why this is the trap to avoid.
+§10 covers why this is the trap to avoid. The repo's
+three-direction strategy — `spirv-shader-pipeline` branch,
+`idiomatic-wgpu-pipeline` branch (snapshot of pre-pivot main),
+`main` (vello) — preserves the batched-WGSL work as historical
+artifact without dragging it into v1's test/maintenance surface.
+
+### Concrete next steps
+
+1. **Plan amendment (this commit).** Sweep the doc to reflect §11
+   spike outcomes. Done in this pass.
+2. **`cargo add vello` on main.** Pin to a git ref against
+   linebender/vello main branch (wgpu-29 bumped). Bring in
+   `peniko`, `kurbo`, `skrifa` transitively.
+3. **Phase 1' first-light receipt.** Smallest possible vello
+   integration: render one rect through a `vello::Scene` to a
+   `Rgba8Unorm` target with `view_formats: &[Rgba8UnormSrgb]`,
+   composite to framebuffer, golden test. The runtime spike from
+   §11.6 falls out of this — if Vulkan validation asserts on
+   Lavapipe, we'll see it here.
+4. **Phase 1'–7' re-green.** Oracle re-capture, brush-WGSL delete
+   (preserved on idiomatic-wgpu-pipeline branch), tile cache
+   rewire to Option C. Estimated 2–3 weeks.
+5. **Phase 8'–11' on the collapsed-scope schedule per §12.**
 
 ## 15. Bottom line
 
 The parent plan and this plan agree on everything *above* the tile
 fill: display lists, spatial tree, picture cache, render-task graph,
-compositor handoff. The only question is what runs inside
+compositor handoff. The only question was what runs inside
 `render_dirty_tiles`. Vello answers more of the future plan than
-the WGSL-family cadence does, in less time, with stronger color
-correctness from day one. The verification gates in §11 are the
-honest "but only if" — pass them, then commit.
+the WGSL-family cadence does, in less time, with the color contract
+that 2D-canvas-tradition consumers actually want (sRGB-encoded blend
+through vello, linear at the sample boundary, sRGB on framebuffer
+write). The verification gates in §11 surfaced revisions to the
+draft architecture — encoder ownership, cross-frame skipping,
+Rgba16Float availability, register_texture cost — none fatal,
+all reflected in §2 / §3 / §6.
+
+The pivot is committed. Phase 1' is next.
