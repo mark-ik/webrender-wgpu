@@ -344,17 +344,45 @@ Done when:
      distribution (28 `SampledRect`, 75 `InvalidId(N)`). Definitively
      ruled out: naga version-pinning is not the issue.
 
-   Remaining options to try (in order of cost):
-   - Inspect SPIR-V via `spirv-dis` (need to install spirv-tools first)
-     to identify what naga's parser is choking on. The pattern (shaders
-     that USE samplers fail; shaders that just DECLARE samplers work)
-     points to OpSampledImage / texture-call instruction handling.
-   - File a naga upstream issue with a minimal SPIR-V repro; possibly a
-     real bug in 26/27/29.
-   - Use `Features::EXPERIMENTAL_PASSTHROUGH_SHADERS` at runtime to
-     bypass naga validation entirely. Loses auto-derive (need
-     hand-authored bind group layouts), but the build-time oracle still
-     serves as verifier for the reflectable subset.
+   **Root cause identified (2026-05-02 SPIR-V probe):**
+   `webrender_build/src/bin/probe_spv.rs` walks the SPIR-V bytes around
+   the failing IDs. For ps_quad_textured.frag, ID 153 is defined by
+   `OpLoad` of an `OpTypeSampledImage`-typed variable, then used directly
+   as the Sampled Image operand of `OpImageSampleImplicitLod`.
+
+   This is **Pattern B (combined samplers)** of two valid Vulkan SPIR-V
+   patterns for texture sampling:
+   - **Pattern A (separated):** `OpLoad image` + `OpLoad sampler` +
+     `OpSampledImage(image, sampler)` → used by `OpImageSample*`. Produced
+     by GLSL declarations like `uniform texture2D t; uniform sampler s;`.
+   - **Pattern B (combined):** `OpLoad sampledImage` → used directly by
+     `OpImageSample*`. Produced by GLSL `uniform sampler2D s;` (the
+     legacy GL idiom that glslang's Vulkan target preserves).
+
+   Naga's parser only supports Pattern A. Its `lookup_sampled_image`
+   map (in `naga/src/front/spv/image.rs`) is populated only by
+   `OpSampledImage`; `parse_image_sample` looks up the sample's source
+   ID in this map, returning `InvalidId` when it's not there because
+   the source was an `OpLoad` instead.
+
+   This is a **genuine naga limitation**, not a glslang or
+   webrender-shader bug. WebRender's GLSL using `sampler2D` is
+   conventional and produces conforming Vulkan SPIR-V.
+
+   **Three actionable paths (in priority order for upstream-scout
+   framing):**
+   - **File naga upstream issue with a minimal Pattern B repro.** This
+     is the right action for the ecosystem and what #37149 devs would
+     do. Expected outcome: naga gains support for `OpLoad` of
+     `OpTypeSampledImage` in a future release; we benefit transparently.
+   - **`spirv-opt` transform to convert Pattern B → Pattern A.** The
+     SPIR-V optimizer has passes that can decompose combined samplers
+     into separate image+sampler+OpSampledImage. Would let us regenerate
+     the corpus through gen_spirv → spirv-opt → committed `.spv` and
+     unblock immediately while waiting on naga upstream fix.
+   - **Use `Features::EXPERIMENTAL_PASSTHROUGH_SHADERS`** as last resort.
+     Bypasses naga; needs hand-authored bind group layouts. Reverts to
+     A1's option (c) which we explicitly architected against.
 
 7. **`set_auto_bind_uniforms` may not be assigning distinct bindings to
    all sampler uniforms.** Suspected by inspection of `bindings.json` —

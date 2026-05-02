@@ -30,3 +30,7 @@ required-features = ["shader-gen"]
 [[bin]]
 name = "reflect_spirv"
 required-features = ["shader-reflect"]
+
+[[bin]]
+name = "probe_spv"
+required-features = ["shader-reflect"]
