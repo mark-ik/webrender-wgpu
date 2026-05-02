@@ -2,13 +2,15 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Phases 2' / 5' — netrender Scene → vello::Scene translator.
+//! Phases 2' / 5' / 8' — netrender Scene → vello::Scene translator.
 //!
 //! Phase 2': rects with per-primitive transform and axis-aligned
 //! clip. Phase 5': image ingestion with per-image transform, clip,
-//! UV sub-region, and alpha tint. Gradients land in 8'. Output is
-//! suitable for `Renderer::render_to_texture`; receipts are at
-//! `tests/p2prime_vello_rects.rs` and `tests/p5prime_vello_image.rs`.
+//! UV sub-region, and alpha tint. Phase 8': linear / circular-radial
+//! / conic gradients with N-stop ramps. Output is suitable for
+//! `Renderer::render_to_texture`; receipts are at
+//! `tests/p2prime_vello_rects.rs`, `tests/p5prime_vello_image.rs`,
+//! and `tests/p8prime_vello_gradients.rs`.
 //!
 //! ## Image-tint scope (Phase 5a)
 //!
@@ -41,12 +43,15 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use vello::kurbo::{Affine, Rect};
+use vello::kurbo::{Affine, Point, Rect};
 use vello::peniko::{
-    self, Blob, Color, Fill, ImageAlphaType, ImageBrush, ImageData, ImageFormat,
+    self, Blob, Color, ColorStop, Fill, Gradient, ImageAlphaType, ImageBrush, ImageData,
+    ImageFormat,
 };
 
-use crate::scene::{ImageKey, NO_CLIP, Scene, SceneImage, SceneRect, Transform};
+use crate::scene::{
+    GradientKind, ImageKey, NO_CLIP, Scene, SceneGradient, SceneImage, SceneRect, Transform,
+};
 
 /// Translate a netrender [`Scene`] into a [`vello::Scene`] suitable
 /// for [`vello::Renderer::render_to_texture`].
@@ -63,6 +68,9 @@ pub fn scene_to_vello(scene: &Scene) -> vello::Scene {
 
     for rect in &scene.rects {
         emit_rect(&mut vscene, rect, &scene.transforms);
+    }
+    for gradient in &scene.gradients {
+        emit_gradient(&mut vscene, gradient, &scene.transforms);
     }
     for image in &scene.images {
         emit_image(&mut vscene, image, &scene.transforms, &images);
@@ -116,6 +124,95 @@ fn emit_rect(vscene: &mut vello::Scene, rect: &SceneRect, transforms: &[Transfor
         );
     }
     vscene.fill(Fill::NonZero, affine, color, None, &shape);
+    if needs_clip {
+        vscene.pop_layer();
+    }
+}
+
+fn emit_gradient(
+    vscene: &mut vello::Scene,
+    grad: &SceneGradient,
+    transforms: &[Transform],
+) {
+    let target = Rect::new(
+        grad.x0 as f64,
+        grad.y0 as f64,
+        grad.x1 as f64,
+        grad.y1 as f64,
+    );
+    let world = transform_to_affine(&transforms[grad.transform_id as usize]);
+
+    let stops: Vec<ColorStop> = grad
+        .stops
+        .iter()
+        .map(|s| ColorStop::from((s.offset, unpremultiply_color(s.color))))
+        .collect();
+
+    // Per Phase 1' p1prime_03: the GPU compute path ignores
+    // `interpolation_cs`, so leave it at default (Srgb) — matches the
+    // existing Phase 8 batched receipts which lerp in sRGB-encoded
+    // component space.
+    let (peniko_grad, brush_xform) = match grad.kind {
+        GradientKind::Linear => {
+            let [sx, sy, ex, ey] = grad.params;
+            let g = Gradient::new_linear(
+                Point::new(sx as f64, sy as f64),
+                Point::new(ex as f64, ey as f64),
+            )
+            .with_stops(stops.as_slice());
+            (g, None)
+        }
+        GradientKind::Radial => {
+            let [cx, cy, rx, ry] = grad.params;
+            let circular = (rx - ry).abs() < 1e-3;
+            if circular {
+                let g = Gradient::new_radial(Point::new(cx as f64, cy as f64), rx)
+                    .with_stops(stops.as_slice());
+                (g, None)
+            } else {
+                // Build a unit-circle radial at origin, then warp into
+                // the desired ellipse via the brush transform. Vello
+                // composes brush as `transform * brush_transform`, so
+                // brush_transform maps brush-space → device-space.
+                // We want brush-origin (0, 0) → (cx, cy) and brush-x
+                // unit (1, 0) → (cx + rx, cy):
+                //   brush_transform = translate(cx, cy) * scale(rx, ry).
+                let g = Gradient::new_radial(Point::ORIGIN, 1.0)
+                    .with_stops(stops.as_slice());
+                let bx = Affine::translate((cx as f64, cy as f64))
+                    * Affine::scale_non_uniform(rx as f64, ry as f64);
+                (g, Some(bx))
+            }
+        }
+        GradientKind::Conic => {
+            let [cx, cy, start_angle, _pad] = grad.params;
+            let g = Gradient::new_sweep(
+                Point::new(cx as f64, cy as f64),
+                start_angle,
+                start_angle + std::f32::consts::TAU,
+            )
+            .with_stops(stops.as_slice());
+            (g, None)
+        }
+    };
+
+    let needs_clip = grad.clip_rect != NO_CLIP;
+    if needs_clip {
+        let clip = Rect::new(
+            grad.clip_rect[0] as f64,
+            grad.clip_rect[1] as f64,
+            grad.clip_rect[2] as f64,
+            grad.clip_rect[3] as f64,
+        );
+        vscene.push_layer(
+            Fill::NonZero,
+            peniko::Mix::Normal,
+            1.0,
+            Affine::IDENTITY,
+            &clip,
+        );
+    }
+    vscene.fill(Fill::NonZero, world, &peniko_grad, brush_xform, &target);
     if needs_clip {
         vscene.pop_layer();
     }
