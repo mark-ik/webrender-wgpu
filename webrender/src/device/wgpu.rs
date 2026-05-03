@@ -379,9 +379,31 @@ pub struct WgpuTexture {
 
 pub struct WgpuVao;
 pub struct WgpuCustomVao;
-pub struct WgpuPbo;
+
+/// PBO (Pixel Buffer Object equivalent). In wgpu, this is just a generic
+/// `wgpu::Buffer` used for staged uploads and readback. `buffer` is `None`
+/// for default-constructed PBOs; `create_pbo_with_size` populates it.
+pub struct WgpuPbo {
+    pub buffer: Option<wgpu::Buffer>,
+    pub size: usize,
+}
+
 pub struct WgpuStream<'a>(PhantomData<&'a ()>);
-pub struct WgpuVbo<T>(PhantomData<T>);
+
+/// Vertex/index buffer (VBO equivalent). Generic over the element type T;
+/// the type parameter is enforced at the type-system level only.
+/// `buffer` is `None` until `allocate_vbo` runs.
+pub struct WgpuVbo<T> {
+    pub buffer: Option<wgpu::Buffer>,
+    pub count: usize,
+    _marker: PhantomData<T>,
+}
+
+impl<T> WgpuVbo<T> {
+    fn new() -> Self {
+        WgpuVbo { buffer: None, count: 0, _marker: PhantomData }
+    }
+}
 #[derive(Copy, Clone)]
 pub struct WgpuRenderTargetHandle;
 pub struct WgpuReadTarget;
@@ -629,9 +651,26 @@ impl GpuResources for WgpuDevice {
     fn create_fbo_for_external_texture(&mut self, _texture_id: u32) -> Self::RenderTargetHandle { unimplemented!() }
     fn delete_fbo(&mut self, _fbo: Self::RenderTargetHandle) { unimplemented!() }
 
-    fn create_pbo(&mut self) -> Self::Pbo { unimplemented!() }
-    fn create_pbo_with_size(&mut self, _size: usize) -> Self::Pbo { unimplemented!() }
-    fn delete_pbo(&mut self, _pbo: Self::Pbo) { unimplemented!() }
+    fn create_pbo(&mut self) -> Self::Pbo {
+        WgpuPbo { buffer: None, size: 0 }
+    }
+    fn create_pbo_with_size(&mut self, size: usize) -> Self::Pbo {
+        // wgpu enforces "MAP_* combines only with the opposite COPY_*".
+        // Sticking to readback orientation (texture/buffer -> CPU) which is
+        // what map_pbo_for_readback drives. Upload PBOs in wgpu are
+        // typically replaced by queue.write_buffer/write_texture, which
+        // don't need a buffer at all.
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("WgpuPbo"),
+            size: size as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        WgpuPbo { buffer: Some(buffer), size }
+    }
+    fn delete_pbo(&mut self, _pbo: Self::Pbo) {
+        // wgpu::Buffer is Drop-managed.
+    }
 
     fn create_vao(&mut self, _descriptor: &VertexDescriptor, _instance_divisor: u32) -> Self::Vao { unimplemented!() }
     fn create_vao_with_new_instances(
@@ -644,10 +683,50 @@ impl GpuResources for WgpuDevice {
     fn create_custom_vao<'a>(&mut self, _streams: &[Self::Stream<'a>]) -> Self::CustomVao { unimplemented!() }
     fn delete_custom_vao(&mut self, _vao: Self::CustomVao) { unimplemented!() }
 
-    fn create_vbo<T>(&mut self) -> Self::Vbo<T> { unimplemented!() }
-    fn delete_vbo<T>(&mut self, _vbo: Self::Vbo<T>) { unimplemented!() }
-    fn allocate_vbo<V>(&mut self, _vbo: &mut Self::Vbo<V>, _count: usize, _usage_hint: VertexUsageHint) { unimplemented!() }
-    fn fill_vbo<V>(&mut self, _vbo: &Self::Vbo<V>, _data: &[V], _offset: usize) { unimplemented!() }
+    fn create_vbo<T>(&mut self) -> Self::Vbo<T> {
+        WgpuVbo::new()
+    }
+    fn delete_vbo<T>(&mut self, _vbo: Self::Vbo<T>) {
+        // Drop releases the wgpu::Buffer.
+    }
+    fn allocate_vbo<V>(
+        &mut self,
+        vbo: &mut Self::Vbo<V>,
+        count: usize,
+        _usage_hint: VertexUsageHint,
+    ) {
+        // wgpu buffers are immutable in size — recreate when size changes.
+        // Usage is broad (VERTEX | INDEX | COPY_DST) so the same Vbo can
+        // serve as either vertex or index buffer; the renderer picks at
+        // draw time. Refining usage from `_usage_hint` is a future
+        // optimization (Static vs Dynamic might inform memory hints).
+        let size = (count * std::mem::size_of::<V>()) as u64;
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("WgpuVbo"),
+            size,
+            usage: wgpu::BufferUsages::VERTEX
+                | wgpu::BufferUsages::INDEX
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        vbo.buffer = Some(buffer);
+        vbo.count = count;
+    }
+    fn fill_vbo<V>(&mut self, vbo: &Self::Vbo<V>, data: &[V], offset: usize) {
+        let buf = vbo
+            .buffer
+            .as_ref()
+            .expect("fill_vbo before allocate_vbo");
+        let bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(
+                data.as_ptr() as *const u8,
+                data.len() * std::mem::size_of::<V>(),
+            )
+        };
+        let byte_offset = (offset * std::mem::size_of::<V>()) as u64;
+        self.queue.write_buffer(buf, byte_offset, bytes);
+    }
 
     fn update_vao_main_vertices<V>(
         &mut self,
