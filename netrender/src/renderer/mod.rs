@@ -652,6 +652,41 @@ impl Renderer {
     /// - If a vello render error occurs (returns the error wrapped
     ///   in a panic message; matches the existing `render()` API
     ///   shape, which doesn't return a Result).
+    /// Register a GPU-resident wgpu texture as an image source for
+    /// subsequent `render_vello` calls under the given `ImageKey`.
+    /// Mirrors `insert_image_gpu` for the vello path: render-graph
+    /// outputs (blur results, mask coverage textures, etc.) become
+    /// addressable from within a vello scene's `SceneImage`
+    /// primitives via this entry point.
+    ///
+    /// The texture is cloned (cheap — wgpu::Texture is internally
+    /// Arc-shared) and handed to `vello::Renderer::register_texture`.
+    /// Entries persist across `render_vello` calls until
+    /// `unregister_image_vello` is called or the renderer is
+    /// dropped. Overrides win over `scene.image_sources` entries
+    /// with the same `ImageKey`.
+    ///
+    /// # Panics
+    ///
+    /// If the renderer was constructed without `enable_vello = true`.
+    pub fn insert_image_vello(&self, key: ImageKey, texture: Arc<wgpu::Texture>) {
+        let rast_mutex = self
+            .vello_rasterizer
+            .as_ref()
+            .expect("Renderer::insert_image_vello requires enable_vello = true");
+        let mut rast = rast_mutex.lock().expect("vello_rasterizer lock");
+        rast.register_texture(key, (*texture).clone());
+    }
+
+    /// Drop a previously-registered `insert_image_vello` entry.
+    /// No-op if `key` was never registered or `enable_vello` is
+    /// false.
+    pub fn unregister_image_vello(&self, key: ImageKey) {
+        let Some(rast_mutex) = self.vello_rasterizer.as_ref() else { return };
+        let mut rast = rast_mutex.lock().expect("vello_rasterizer lock");
+        rast.unregister_texture(key);
+    }
+
     /// Number of tiles whose vello::Scenes were rebuilt during the
     /// most recent `render_vello` call. `0` after a no-op frame
     /// (unchanged scene). Returns `None` if the renderer was

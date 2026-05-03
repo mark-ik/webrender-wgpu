@@ -64,7 +64,13 @@ pub struct VelloTileRasterizer {
     handles: WgpuHandles,
     vello_renderer: Renderer,
     tile_scenes: HashMap<TileCoord, vello::Scene>,
+    /// Per-frame image data built from `scene.image_sources` (Path A,
+    /// CPU bytes). Cleared and refreshed at every `render` call.
     image_data: HashMap<ImageKey, ImageData>,
+    /// Caller-registered GPU textures via `register_texture` (Path B).
+    /// Persists across frames; entries survive until the texture is
+    /// explicitly unregistered or the rasterizer is dropped.
+    image_overrides: HashMap<ImageKey, ImageData>,
     last_dirty_count: usize,
 }
 
@@ -87,8 +93,33 @@ impl VelloTileRasterizer {
             vello_renderer,
             tile_scenes: HashMap::new(),
             image_data: HashMap::new(),
+            image_overrides: HashMap::new(),
             last_dirty_count: 0,
         })
+    }
+
+    /// Register a GPU-resident wgpu texture as an image source for
+    /// subsequent `render` calls under the given `ImageKey`. The
+    /// texture is handed to vello via
+    /// `vello::Renderer::register_texture` (Path B from rasterizer
+    /// plan §3.5); vello copies into its internal atlas every frame
+    /// the image is referenced by a scene.
+    ///
+    /// Use this when an image source is a render-graph output (blur
+    /// result, mask coverage texture, etc.) that exists only on the
+    /// GPU and has no CPU-side `ImageData`. Overrides win over
+    /// `scene.image_sources` entries with the same `ImageKey`.
+    pub fn register_texture(&mut self, key: ImageKey, texture: wgpu::Texture) {
+        let image = self.vello_renderer.register_texture(texture);
+        self.image_overrides.insert(key, image);
+    }
+
+    /// Drop a previously-registered `register_texture` entry.
+    /// No-op if `key` was never registered.
+    pub fn unregister_texture(&mut self, key: ImageKey) {
+        if let Some(image) = self.image_overrides.remove(&key) {
+            self.vello_renderer.unregister_texture(image);
+        }
     }
 
     /// Number of tiles whose Scenes were rebuilt by the last
@@ -183,7 +214,14 @@ impl VelloTileRasterizer {
 
     fn build_tile_scene(&self, scene: &Scene, tile_rect: [f32; 4]) -> vello::Scene {
         let filtered = filter_scene_to_tile(scene, tile_rect);
-        scene_to_vello_with_overrides(&filtered, &self.image_data)
+        // Merge per-frame Path A blobs with caller-registered Path B
+        // textures. Path B wins on key collision (same precedence as
+        // `scene_to_vello_with_overrides` itself enforces).
+        let mut merged = self.image_data.clone();
+        for (key, image) in &self.image_overrides {
+            merged.insert(*key, image.clone());
+        }
+        scene_to_vello_with_overrides(&filtered, &merged)
     }
 
     fn compose_master(&self, tile_cache: &TileCache) -> vello::Scene {

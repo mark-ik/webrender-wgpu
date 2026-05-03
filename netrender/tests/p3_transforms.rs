@@ -2,31 +2,31 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Phase 3 golden harness — transforms + axis-aligned clip.
+//! Phase 3 golden harness — transforms + axis-aligned clip
+//! (vello-backed since the batched-path cleanup).
 //!
 //! Receipt: scene with one transform chain (translate + rotate + scale)
 //! + one axis-aligned clip rectangle pixel-matches reference.
 //!
-//! Each test: build Scene → Renderer::prepare → Renderer::render →
-//! readback → pixel-diff against oracle PNG.
+//! Each test: build Scene → Renderer::render_vello → readback →
+//! pixel-diff against oracle PNG.
 //!
 //! Golden capture: set env var `NETRENDER_REGEN=1` to write PNGs
 //! instead of comparing them. On the initial run (no oracle PNG),
 //! the PNG is written automatically.
 //!
-//! Also includes a Phase 2 regression test to verify that scenes built
-//! via `push_rect` (identity transform, no clip) produce identical
-//! output to their Phase 2 golden counterparts.
+//! Tolerance: 2/255 per channel. Axis-aligned opaque cases match
+//! the original (batched-path-captured) oracle byte-exactly. Rotated
+//! and scaled cases were re-captured against the vello path during
+//! the cleanup commit.
 
 use std::f32::consts::PI;
 use std::path::{Path, PathBuf};
 
-use netrender::{
-    ColorLoad, FrameTarget, NetrenderOptions, Scene, Transform, boot, create_netrender_instance,
-};
+use netrender::{NetrenderOptions, Scene, Transform, boot, create_netrender_instance};
 
 const DIM: u32 = 256;
-const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+const TILE_SIZE: u32 = 64;
 
 // ── PNG helpers (duplicated from p2; shared test-util is Phase 4) ──
 
@@ -73,27 +73,36 @@ fn run_scene_golden(name: &str, scene: Scene) {
 
     let handles = boot().expect("wgpu boot");
     let device = handles.device.clone();
-    let renderer = create_netrender_instance(handles, NetrenderOptions::default())
-        .expect("create_netrender_instance");
+    let renderer = create_netrender_instance(
+        handles,
+        NetrenderOptions { tile_cache_size: Some(TILE_SIZE), enable_vello: true },
+    )
+    .expect("create_netrender_instance");
 
+    // Vello renders to Rgba8Unorm storage with an Rgba8UnormSrgb
+    // view-format slot. Storage holds sRGB-encoded values; downstream
+    // sampling through the Rgba8UnormSrgb view would hardware-decode
+    // to linear. For oracle comparison we read back the raw bytes
+    // (which match what the old Rgba8UnormSrgb framebuffer wrote).
     let target_tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(name),
         size: wgpu::Extent3d { width: vw, height: vh, depth_or_array_layers: 1 },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: TARGET_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[wgpu::TextureFormat::Rgba8UnormSrgb],
     });
-    let target_view = target_tex.create_view(&wgpu::TextureViewDescriptor::default());
+    let target_view = target_tex.create_view(&wgpu::TextureViewDescriptor {
+        label: Some(name),
+        format: Some(wgpu::TextureFormat::Rgba8Unorm),
+        ..Default::default()
+    });
 
-    let prepared = renderer.prepare(&scene);
-    renderer.render(
-        &prepared,
-        FrameTarget { view: &target_view, format: TARGET_FORMAT, width: vw, height: vh },
-        ColorLoad::Clear(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }),
-    );
+    renderer.render_vello(&scene, &target_view);
 
     let actual = renderer.wgpu_device.read_rgba8_texture(&target_tex, vw, vh);
 
@@ -108,13 +117,24 @@ fn run_scene_golden(name: &str, scene: Scene) {
     assert_eq!((ow, oh), (vw, vh), "{name}: oracle size mismatch");
     assert_eq!(actual.len(), oracle.len(), "{name}: readback length mismatch");
 
-    let mut diffs = 0usize;
-    for (a, b) in actual.chunks_exact(4).zip(oracle.chunks_exact(4)) {
-        if a != b {
-            diffs += 1;
+    // Tolerance: ±2/255 per channel. Axis-aligned opaque cases hit
+    // byte-exact; rotation/scale will use the small tolerance to
+    // absorb AA-algorithm differences from the original capture.
+    const TOL: u8 = 2;
+    let mut over_tol = 0usize;
+    let mut max_diff: u8 = 0;
+    for (a, b) in actual.iter().zip(oracle.iter()) {
+        let d = (*a as i16 - *b as i16).unsigned_abs() as u8;
+        if d > TOL {
+            over_tol += 1;
         }
+        max_diff = max_diff.max(d);
     }
-    assert_eq!(diffs, 0, "{name}: {diffs} pixels differ from oracle");
+    assert_eq!(
+        over_tol, 0,
+        "{name}: {over_tol} channel values differ from oracle by >{TOL} (max diff = {max_diff}); \
+         re-run with NETRENDER_REGEN=1 to update oracle"
+    );
 }
 
 // ── Phase 2 regression — identity transform / no clip ─────────────
