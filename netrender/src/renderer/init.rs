@@ -15,9 +15,11 @@ use crate::renderer::{Renderer, RendererError};
 use crate::tile_cache::TileCache;
 
 /// Phase 10a.1 default atlas extent. 1024×1024 R8Unorm (1 MiB) is
-/// many orders of magnitude oversized for the single-glyph receipt;
-/// the size knob moves to `NetrenderOptions` at 10a.5 when the tile-
-/// cache integration surfaces a real-text scene.
+/// many orders of magnitude oversized for the single-glyph receipt
+/// and is also a comfortable default for a few hundred small-to-
+/// medium glyphs. Phase 10a.5 promotes the knob to
+/// [`NetrenderOptions::glyph_atlas_size`]; this constant remains the
+/// default when the option is `None`.
 const DEFAULT_GLYPH_ATLAS_SIZE: u32 = 1024;
 
 #[derive(Default)]
@@ -40,6 +42,14 @@ pub struct NetrenderOptions {
     /// receipt the wiring before 10b's RGB(A) atlas adds visible
     /// per-channel coverage.
     pub text_subpixel_aa: bool,
+    /// Phase 10a.5: glyph atlas dimensions (square, R8Unorm).
+    /// `None` keeps the previous hardcoded `1024 × 1024` default
+    /// (≈8000 13-px glyph slots). Consumers that ship many fonts
+    /// or large glyphs raise this; consumers that ship one tiny
+    /// font may lower it. Atlas vertical overflow panics today
+    /// (eviction is 10b); raising the size knob is the supported
+    /// pre-eviction workaround.
+    pub glyph_atlas_size: Option<u32>,
 }
 
 /// Construct a wgpu-only `Renderer`. The embedder owns the wgpu
@@ -84,11 +94,9 @@ pub fn create_netrender_instance(
         .tile_cache_size
         .map(|size| Mutex::new(TileCache::new(size)));
 
-    let glyph_atlas = Mutex::new(GlyphAtlas::new(
-        &wgpu_device.core.device,
-        DEFAULT_GLYPH_ATLAS_SIZE,
-        DEFAULT_GLYPH_ATLAS_SIZE,
-    ));
+    let atlas_size = options.glyph_atlas_size.unwrap_or(DEFAULT_GLYPH_ATLAS_SIZE);
+    let glyph_atlas =
+        Mutex::new(GlyphAtlas::new(&wgpu_device.core.device, atlas_size, atlas_size));
 
     Ok(Renderer {
         wgpu_device,

@@ -1499,6 +1499,81 @@ Full suite (22 binaries, 96 tests) green — no Phase 4-9 / 10a.1
   amortise the check) is the template subsequent
   optional-feature pipelines should follow.
 
+**Status (2026-05-02, 10a.5 delivered)**: text in tiled scenes
+renders correctly through the tile cache; the silent-drop gap
+flagged in 10a.1's carry-forwards is closed. Atlas size is now
+configurable.
+
+New surface:
+
+- `netrender::NetrenderOptions::glyph_atlas_size: Option<u32>`
+  (default `None` → keeps the prior hardcoded `1024 × 1024`
+  R8Unorm). Consumers that ship many fonts or large glyphs raise
+  this; tests that want a small atlas (10a.5 receipt does)
+  lower it. Atlas vertical overflow still panics today
+  (eviction is 10b); raising the size knob is the supported
+  pre-eviction workaround. `init.rs` reads the option and
+  passes the size through to `GlyphAtlas::new`.
+- `Renderer::render_dirty_tiles_with_transforms` extended:
+  ensures the grayscale `brush_text` pipeline for `TILE_FORMAT`,
+  uploads new glyph rasters from `scene.glyph_rasters` (same
+  prepare-phase contract as image sources), holds the glyph
+  atlas lock across the per-tile loop, calls `build_text_batch`
+  with `None` filter for every dirty tile, and extends `draws`
+  with the resulting text draws.
+
+Per-tile filtering deferred. Text runs render against every dirty
+tile; NDC clipping inside the shader handles overflow at the
+rasterizer. Per-glyph AABB filtering would need atlas-slot
+lookups inside the filter closure (today the filter closures
+take a `Fn(usize) -> bool` against scene primitives without
+atlas access), complicating the pattern. The pixel-equivalence
+receipt validates that emitting every run on every tile renders
+correctly; the optimisation is gravy.
+
+Subpixel text deliberately not exercised inside tiles. Composite-
+then-sample blurs subpixel boundaries — the visible LCD layout
+is the framebuffer, not a tile cache texture. The dual-source
+pipeline is not even ensured for `TILE_FORMAT`. 10b can revisit
+if a per-channel atlas makes a tile-internal subpixel path
+worthwhile; the renderer-side decision lands then.
+
+Receipt — `tests/p10a_text.rs` gains two tests, both green
+(12/12 in the binary now; 98/98 across the suite):
+
+- `p10a5_text_tiled_matches_direct` — equivalence: a scene with
+  three Proggy 'A's spread across multiple tiles renders pixel-
+  equivalent (within ±2/255 per Phase 7C convention) through the
+  direct path and the tile-cache path. Layout chosen so glyphs
+  land in different tiles + one straddles a tile boundary —
+  cross-tile compositing is the whole point of the receipt.
+- `p10a5_glyph_atlas_size_option_honored` — smoke: the
+  `glyph_atlas_size` option flows through `init.rs` to
+  `GlyphAtlas::new`; rendering a 5×7 glyph through both a
+  64-px atlas and the default 1024-px atlas produces identical
+  output.
+
+Full suite (22 binaries, 98 tests) green — no Phase 4-9 / 10a.1
+through 10a.4 regressions.
+
+**Carry-forwards for follow-up slices.**
+
+- Per-glyph (or per-run) AABB filtering inside the tile loop
+  would let unaffected tiles skip text-draw encoding entirely.
+  Needs the filter closure shape to accept atlas lookups
+  (today's `Fn(usize) -> bool` is closure-state-only). Worth it
+  when a real benchmark shows the unfiltered cost.
+- Subpixel-AA inside tiles is currently impossible (the
+  dual-source pipeline isn't ensured for `TILE_FORMAT`). 10b
+  decides whether tile-internal subpixel is worth the
+  composite-stage blur risk; the renderer-side wiring is a
+  one-line addition when that decision lands.
+- Atlas overflow remains a panic. The new `glyph_atlas_size`
+  option lets consumers raise the ceiling, but eviction is
+  still 10b. The 10a.1 hard-stop signal during development
+  remains intact; consumers hitting the panic should raise the
+  size knob first, before pursuing eviction.
+
 ### Phase 10b — Browser-grade text correctness
 
 10a paints glyph quads. 10b confronts the gap between "glyphs

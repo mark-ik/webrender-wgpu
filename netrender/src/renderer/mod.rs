@@ -501,12 +501,29 @@ impl Renderer {
             .ensure_brush_image_alpha(Self::TILE_FORMAT, Self::DEPTH_FORMAT);
         // Phase 8D: 6 cached gradient pipelines for the tile format.
         let gradient_pipes = self.ensure_gradient_pipelines(Self::TILE_FORMAT);
+        // Phase 10a.5: grayscale text in the tile path. Subpixel
+        // dual-source is intentionally not exercised inside tiles
+        // (composite-then-sample blurs subpixel boundaries; the
+        // visible LCD layout is the framebuffer, not a tile cache
+        // texture). 10b will revisit if the per-channel atlas
+        // makes a tile-internal subpixel path worthwhile.
+        let text_pipe = self
+            .wgpu_device
+            .ensure_brush_text(Self::TILE_FORMAT, Self::DEPTH_FORMAT);
 
         // Upload any new image sources (matches prepare()'s contract).
         {
             let mut cache = self.image_cache.lock().expect("image_cache lock");
             for (key, data) in &scene.image_sources {
                 cache.get_or_upload(*key, data, device, queue);
+            }
+        }
+        // Phase 10a.5: same prepare-phase contract for glyph rasters
+        // — upload any new ones to the atlas before per-tile rendering.
+        {
+            let mut atlas = self.glyph_atlas.lock().expect("glyph_atlas lock");
+            for (key, raster) in &scene.glyph_rasters {
+                atlas.get_or_upload(*key, raster, queue);
             }
         }
 
@@ -537,6 +554,9 @@ impl Renderer {
         // Hold the image-cache lock across all tile passes; build_image_batch
         // reads it for each tile.
         let image_cache = self.image_cache.lock().expect("image_cache lock");
+        // Same for the glyph atlas — `build_text_batch` reads slot
+        // metadata for every glyph in every text run, on every tile.
+        let glyph_atlas = self.glyph_atlas.lock().expect("glyph_atlas lock");
 
         for &coord in &dirty {
             let tile_world_rect = tile_cache
@@ -592,9 +612,21 @@ impl Renderer {
                 scene, device, queue, &gradient_pipes, &frame_res,
                 Some(&gradient_filter),
             );
+            // Phase 10a.5: text runs without per-tile filtering.
+            // NDC clipping inside the shader handles overflow at
+            // the rasterizer; per-glyph AABB filtering is a 10b
+            // optimization (would need atlas-slot lookups inside
+            // the filter closure, complicating the pattern). The
+            // pixel-equivalence receipt validates that emitting
+            // every run on every tile renders correctly.
+            let text_draws = build_text_batch(
+                scene, device, queue, &text_pipe, &glyph_atlas,
+                &self.nearest_sampler, &frame_res, None,
+            );
             let mut draws = rect_draws;
             draws.extend(image_draws);
             draws.extend(gradient_draws);
+            draws.extend(text_draws);
 
             let tile_tex = Arc::new(device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("tile color"),
@@ -637,6 +669,7 @@ impl Renderer {
         }
 
         drop(image_cache);
+        drop(glyph_atlas);
         self.wgpu_device.submit(encoder);
 
         dirty

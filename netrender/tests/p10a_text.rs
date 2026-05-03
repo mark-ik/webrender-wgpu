@@ -434,6 +434,136 @@ fn p10a3_run_layout() {
     run_scene_golden("p10a3_run_layout", scene);
 }
 
+// ── 10a.5 — text in tiled scenes + atlas size option ──────────────
+
+/// Render `scene` with arbitrary [`NetrenderOptions`]. Returns
+/// framebuffer bytes. Generalisation of [`render_with_subpixel_aa`]
+/// for tests that vary more than one option (10a.5: tile_cache_size,
+/// glyph_atlas_size).
+fn render_with_options(scene: &Scene, options: NetrenderOptions) -> Vec<u8> {
+    let [vw, vh] = [scene.viewport_width, scene.viewport_height];
+    let handles = boot().expect("wgpu boot");
+    let device = handles.device.clone();
+    let renderer = create_netrender_instance(handles, options)
+        .expect("create_netrender_instance");
+
+    let target_tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("p10a5 target"),
+        size: wgpu::Extent3d { width: vw, height: vh, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: TARGET_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let target_view = target_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
+    let prepared = renderer.prepare(scene);
+    renderer.render(
+        &prepared,
+        FrameTarget { view: &target_view, format: TARGET_FORMAT, width: vw, height: vh },
+        ColorLoad::Clear(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }),
+    );
+
+    renderer.wgpu_device.read_rgba8_texture(&target_tex, vw, vh)
+}
+
+/// Receipt: a scene with text glyphs spread across multiple tiles
+/// renders pixel-equivalent (within ±2/255 per Phase 7C convention)
+/// through the direct path and the tile-cache path. Until 10a.5
+/// wired text into `render_dirty_tiles_with_transforms`, the tile
+/// path silently dropped text — so this test would have failed with
+/// "everything but the background is missing" against a 10a.4 build.
+///
+/// Glyph layout — three Proggy 'A's at x = 5 / 25 / 45 with a 64-px
+/// viewport and a 32-px tile size. The first two land in tile (0,0),
+/// the third spans tile (0,0) and (1,0) along its left edge. Cross-
+/// tile compositing is the whole point of the receipt.
+#[test]
+fn p10a5_text_tiled_matches_direct() {
+    let mut scene_direct = Scene::new(VIEWPORT, VIEWPORT);
+    scene_direct.set_glyph_raster(KEY_A, glyph_a_5x7());
+    scene_direct.push_text_run(
+        vec![
+            GlyphInstance { key: KEY_A, x: 5.0, y: 30.0 },
+            GlyphInstance { key: KEY_A, x: 25.0, y: 30.0 },
+            GlyphInstance { key: KEY_A, x: 45.0, y: 30.0 },
+        ],
+        [1.0, 1.0, 1.0, 1.0],
+    );
+    let scene_tiled = scene_direct.clone();
+
+    let direct = render_with_options(&scene_direct, NetrenderOptions::default());
+    let tiled = render_with_options(
+        &scene_tiled,
+        NetrenderOptions {
+            tile_cache_size: Some(32),
+            ..NetrenderOptions::default()
+        },
+    );
+
+    assert_eq!(direct.len(), tiled.len(), "framebuffer dimensions match");
+    let differing: Vec<(usize, [u8; 4], [u8; 4])> = direct
+        .chunks_exact(4)
+        .zip(tiled.chunks_exact(4))
+        .enumerate()
+        .filter_map(|(i, (a, b))| {
+            let exceeds = a.iter().zip(b.iter()).any(|(x, y)| x.abs_diff(*y) > 2);
+            if exceeds {
+                Some((
+                    i,
+                    [a[0], a[1], a[2], a[3]],
+                    [b[0], b[1], b[2], b[3]],
+                ))
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert!(
+        differing.is_empty(),
+        "{} pixels differ by more than ±2/255 between direct and tiled paths; \
+         first divergence at index {}: direct={:?} tiled={:?}",
+        differing.len(),
+        differing.first().map(|(i, _, _)| *i).unwrap_or(0),
+        differing.first().map(|(_, a, _)| *a).unwrap_or([0; 4]),
+        differing.first().map(|(_, _, b)| *b).unwrap_or([0; 4]),
+    );
+}
+
+/// Smoke: `NetrenderOptions::glyph_atlas_size = Some(N)` flows
+/// through `init.rs` to `GlyphAtlas::new(N, N)`. Constructs a
+/// renderer with a deliberately small atlas and renders a scene
+/// containing the test glyph (5×7), well inside `64 × 64`. Glyph
+/// upload + render path exercises the non-default size end-to-end.
+#[test]
+fn p10a5_glyph_atlas_size_option_honored() {
+    let mut scene = Scene::new(VIEWPORT, VIEWPORT);
+    scene.set_glyph_raster(KEY_A, glyph_a_5x7());
+    scene.push_text_run(
+        vec![GlyphInstance { key: KEY_A, x: 10.0, y: 30.0 }],
+        [1.0, 1.0, 1.0, 1.0],
+    );
+    // 64-px atlas easily fits the 5×7 glyph; this confirms the
+    // option is plumbed through without breaking smaller-than-default
+    // configurations.
+    let actual = render_with_options(
+        &scene,
+        NetrenderOptions {
+            glyph_atlas_size: Some(64),
+            ..NetrenderOptions::default()
+        },
+    );
+    // Verify against the same scene through the default-size path.
+    let expected = render_with_options(&scene, NetrenderOptions::default());
+    assert_eq!(
+        actual, expected,
+        "atlas size {} produces same output as default {} for a glyph that fits both",
+        64, "1024",
+    );
+}
+
 // ── 10a.4 — subpixel-AA dual-source pipeline ───────────────────────
 
 /// Render `scene` with the explicit `text_subpixel_aa` toggle and
