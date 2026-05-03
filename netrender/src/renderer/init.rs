@@ -9,25 +9,22 @@ use std::sync::Mutex;
 
 use netrender_device::{WgpuDevice, WgpuHandles};
 
-use crate::image_cache::ImageCache;
 use crate::renderer::{Renderer, RendererError};
 use crate::tile_cache::TileCache;
 use crate::vello_tile_rasterizer::VelloTileRasterizer;
 
 #[derive(Default)]
 pub struct NetrenderOptions {
-    /// Phase 7C: enable picture caching. `Some(N)` constructs the renderer
-    /// with an `N`-pixel-square tile cache; `prepare()` will route through
-    /// it (invalidate, re-render dirty tiles, composite via
-    /// `brush_image_alpha`). `None` keeps the direct render path used
-    /// in Phases 1–6.
+    /// Construct the renderer with an `N`-pixel-square tile cache.
+    /// Required when `enable_vello = true`. `None` skips tile cache
+    /// construction and produces a renderer that can still be used
+    /// for direct render-graph access (e.g., running blur or clip
+    /// mask tasks via `WgpuDevice` pipeline factories) but cannot
+    /// drive `render_vello`.
     pub tile_cache_size: Option<u32>,
-    /// Phase 7' — when `true`, eagerly construct a `VelloTileRasterizer`
-    /// and route [`Renderer::render_vello`] through it. Requires
-    /// `tile_cache_size = Some(_)` (the vello rasterizer reuses the same
-    /// tile cache the batched path uses). Independent of the existing
-    /// `prepare()` / `render()` path — both pipelines coexist; callers
-    /// pick one per frame. Default: `false`.
+    /// Phase 7' — when `true`, eagerly construct a
+    /// [`VelloTileRasterizer`] and route [`Renderer::render_vello`]
+    /// through it. Requires `tile_cache_size = Some(_)`.
     pub enable_vello: bool,
 }
 
@@ -44,30 +41,6 @@ pub fn create_netrender_instance(
 ) -> Result<Renderer, RendererError> {
     let wgpu_device =
         WgpuDevice::with_external(handles).map_err(RendererError::WgpuFeaturesMissing)?;
-
-    let nearest_sampler =
-        wgpu_device.core.device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("nearest clamp"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            ..Default::default()
-        });
-
-    let bilinear_sampler =
-        wgpu_device.core.device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("bilinear clamp"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            ..Default::default()
-        });
 
     let tile_cache = options
         .tile_cache_size
@@ -87,9 +60,6 @@ pub fn create_netrender_instance(
 
     Ok(Renderer {
         wgpu_device,
-        image_cache: Mutex::new(ImageCache::new()),
-        nearest_sampler,
-        bilinear_sampler,
         tile_cache,
         vello_rasterizer,
     })

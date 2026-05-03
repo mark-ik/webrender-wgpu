@@ -23,7 +23,7 @@
 use std::f32::consts::PI;
 use std::path::{Path, PathBuf};
 
-use netrender::{NetrenderOptions, Scene, Transform, boot, create_netrender_instance};
+use netrender::{ColorLoad, NetrenderOptions, Scene, Transform, boot, create_netrender_instance};
 
 const DIM: u32 = 256;
 const TILE_SIZE: u32 = 64;
@@ -102,7 +102,7 @@ fn run_scene_golden(name: &str, scene: Scene) {
         ..Default::default()
     });
 
-    renderer.render_vello(&scene, &target_view);
+    renderer.render_vello(&scene, &target_view, ColorLoad::default());
 
     let actual = renderer.wgpu_device.read_rgba8_texture(&target_tex, vw, vh);
 

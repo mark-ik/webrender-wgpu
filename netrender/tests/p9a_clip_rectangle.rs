@@ -21,8 +21,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use netrender::{
-    ColorLoad, FrameTarget, ImageKey, NO_CLIP, NetrenderOptions, Renderer, RenderGraph, Scene,
-    Task, TaskId, boot, create_netrender_instance,
+    ColorLoad, ImageKey, NO_CLIP, NetrenderOptions, Renderer, RenderGraph, Scene, Task, TaskId,
+    boot, create_netrender_instance,
 };
 
 mod common;
@@ -37,8 +37,11 @@ const MASK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 fn make_renderer() -> Renderer {
     let handles = boot().expect("wgpu boot");
-    create_netrender_instance(handles, NetrenderOptions::default())
-        .expect("create_netrender_instance")
+    create_netrender_instance(
+        handles,
+        NetrenderOptions { tile_cache_size: Some(64), enable_vello: true },
+    )
+    .expect("create_netrender_instance")
 }
 
 fn render_to_bytes(renderer: &Renderer, scene: &Scene) -> Vec<u8> {
@@ -53,23 +56,19 @@ fn render_to_bytes(renderer: &Renderer, scene: &Scene) -> Vec<u8> {
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: TARGET_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[wgpu::TextureFormat::Rgba8UnormSrgb],
     });
-    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+    let view = target.create_view(&wgpu::TextureViewDescriptor {
+        label: Some("p9a target view"),
+        format: Some(wgpu::TextureFormat::Rgba8Unorm),
+        ..Default::default()
+    });
 
-    let prepared = renderer.prepare(scene);
-    renderer.render(
-        &prepared,
-        FrameTarget {
-            view: &view,
-            format: TARGET_FORMAT,
-            width: scene.viewport_width,
-            height: scene.viewport_height,
-        },
-        ColorLoad::Clear(wgpu::Color::BLACK),
-    );
+    renderer.render_vello(scene, &view, ColorLoad::Clear(wgpu::Color::BLACK));
     renderer
         .wgpu_device
         .read_rgba8_texture(&target, scene.viewport_width, scene.viewport_height)
@@ -217,7 +216,7 @@ fn p9a_02_mask_composes_as_red_rect() {
     let (mask_tex, _bytes) = render_clip_mask(&renderer, W, bounds, radius);
 
     const MASK_KEY: ImageKey = 0xCAFE_9A1F;
-    renderer.insert_image_gpu(MASK_KEY, mask_tex);
+    renderer.insert_image_vello(MASK_KEY, mask_tex);
 
     // Draw the mask as a red-tinted image. The tint alpha is set to
     // 0.999 (rather than 1.0) to route through the alpha-blend

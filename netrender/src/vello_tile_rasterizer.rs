@@ -153,6 +153,7 @@ impl VelloTileRasterizer {
         scene: &Scene,
         tile_cache: &mut TileCache,
         target_view: &wgpu::TextureView,
+        base_color: Color,
     ) -> Result<(), vello::Error> {
         self.refresh_image_data(scene);
 
@@ -181,7 +182,7 @@ impl VelloTileRasterizer {
             &master,
             target_view,
             &RenderParams {
-                base_color: Color::from_rgba8(0, 0, 0, 0),
+                base_color,
                 width: scene.viewport_width,
                 height: scene.viewport_height,
                 antialiasing_method: AaConfig::Area,

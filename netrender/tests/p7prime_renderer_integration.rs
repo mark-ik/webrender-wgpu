@@ -17,7 +17,7 @@
 
 use std::path::{Path, PathBuf};
 
-use netrender::{NetrenderOptions, Scene, boot, create_netrender_instance};
+use netrender::{ColorLoad, NetrenderOptions, Scene, boot, create_netrender_instance};
 
 const DIM: u32 = 256;
 const TILE_SIZE: u32 = 64;
@@ -107,7 +107,7 @@ fn render_through_renderer(scene: &Scene) -> Vec<u8> {
     .expect("create_netrender_instance");
 
     let (target, view) = make_target(&device);
-    renderer.render_vello(scene, &view);
+    renderer.render_vello(scene, &view, ColorLoad::default());
 
     renderer
         .wgpu_device
@@ -170,11 +170,11 @@ fn p7prime_renderer_two_frames_share_state() {
     scene.push_rect(0.0, 0.0, DIM as f32, DIM as f32, [0.0, 1.0, 0.0, 1.0]);
 
     let (tex_a, view_a) = make_target(&device);
-    renderer.render_vello(&scene, &view_a);
+    renderer.render_vello(&scene, &view_a, ColorLoad::default());
     let bytes_a = renderer.wgpu_device.read_rgba8_texture(&tex_a, DIM, DIM);
 
     let (tex_b, view_b) = make_target(&device);
-    renderer.render_vello(&scene, &view_b);
+    renderer.render_vello(&scene, &view_b, ColorLoad::default());
     let bytes_b = renderer.wgpu_device.read_rgba8_texture(&tex_b, DIM, DIM);
 
     assert_eq!(bytes_a, bytes_b, "second-frame output must match first");

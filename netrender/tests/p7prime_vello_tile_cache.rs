@@ -19,6 +19,9 @@ use netrender::{
     Scene, TileCache, boot,
     vello_tile_rasterizer::VelloTileRasterizer,
 };
+use vello::peniko::Color;
+
+const TRANSPARENT: Color = Color::new([0.0, 0.0, 0.0, 0.0]);
 
 const VIEWPORT: u32 = 128;
 const TILE_SIZE: u32 = 64;
@@ -81,7 +84,7 @@ fn p7prime_01_first_frame_all_tiles_dirty() {
 
     let (target, view) = make_target(&handles.device);
     rasterizer
-        .render(&scene, &mut tc, &view)
+        .render(&scene, &mut tc, &view, TRANSPARENT)
         .expect("render");
 
     assert_eq!(rasterizer.last_dirty_count(), 4, "first frame: all 4 tiles dirty");
@@ -110,11 +113,11 @@ fn p7prime_02_unchanged_scene_no_dirty() {
     scene.push_rect(0.0, 0.0, VIEWPORT as f32, VIEWPORT as f32, [0.0, 1.0, 0.0, 1.0]);
 
     let (target_a, view_a) = make_target(&handles.device);
-    rasterizer.render(&scene, &mut tc, &view_a).expect("render 1");
+    rasterizer.render(&scene, &mut tc, &view_a, TRANSPARENT).expect("render 1");
     assert_eq!(rasterizer.last_dirty_count(), 4);
 
     let (target_b, view_b) = make_target(&handles.device);
-    rasterizer.render(&scene, &mut tc, &view_b).expect("render 2");
+    rasterizer.render(&scene, &mut tc, &view_b, TRANSPARENT).expect("render 2");
     assert_eq!(rasterizer.last_dirty_count(), 0, "second frame: no tiles dirty");
 
     let wgpu_device = netrender_device::WgpuDevice::with_external(handles.clone())
@@ -145,7 +148,7 @@ fn p7prime_03_localized_change() {
 
     let scene_a = build_scene([1.0, 0.0, 0.0, 1.0]);  // red
     let (_t1, v1) = make_target(&handles.device);
-    rasterizer.render(&scene_a, &mut tc, &v1).expect("render 1");
+    rasterizer.render(&scene_a, &mut tc, &v1, TRANSPARENT).expect("render 1");
     assert_eq!(rasterizer.last_dirty_count(), 4);
 
     // Now change ONLY the top-left rect to magenta. The other three
@@ -153,7 +156,7 @@ fn p7prime_03_localized_change() {
     // marks only one tile dirty.
     let scene_b = build_scene([1.0, 0.0, 1.0, 1.0]);
     let (_t2, v2) = make_target(&handles.device);
-    rasterizer.render(&scene_b, &mut tc, &v2).expect("render 2");
+    rasterizer.render(&scene_b, &mut tc, &v2, TRANSPARENT).expect("render 2");
     assert_eq!(
         rasterizer.last_dirty_count(),
         1,
@@ -178,7 +181,7 @@ fn p7prime_04_spanning_primitive_no_double_render() {
     scene.push_rect(0.0, 0.0, VIEWPORT as f32, VIEWPORT as f32, [0.5, 0.0, 0.0, 0.5]);
 
     let (target, view) = make_target(&handles.device);
-    rasterizer.render(&scene, &mut tc, &view).expect("render");
+    rasterizer.render(&scene, &mut tc, &view, TRANSPARENT).expect("render");
 
     let wgpu_device = netrender_device::WgpuDevice::with_external(handles.clone())
         .expect("WgpuDevice::with_external");

@@ -8,12 +8,15 @@
 //! Phase 0.5 of the netrender design plan
 //! ([`netrender-notes/2026-04-30_netrender_design_plan.md`](../../netrender-notes/2026-04-30_netrender_design_plan.md))
 //! splits the wgpu device foundation into its own crate so the
-//! renderer-internal types (`PreparedFrame`, batches, render-task
-//! graph, picture cache) can't leak into consumers that only need the
-//! device + WGSL pipeline pattern. Today this crate's public surface
-//! is small: a [`Renderer`] shell + [`Compositor`] / [`NativeCompositor`]
-//! trait shapes (axiom 14 — the seam Phases 5–7 defer to). Display
-//! list ingestion lands at Phase 2.
+//! renderer-internal types (tile cache, render-task graph, picture
+//! cache, vello rasterizer) can't leak into consumers that only
+//! need the device + WGSL pipeline pattern.
+//!
+//! As of the batched-path retirement, the renderer is vello-only:
+//! `Renderer::render_vello` is the single rendering entry point.
+//! The render-task graph (Phase 6) still uses WGSL pipelines from
+//! `netrender_device` for blur / clip-mask tasks; their outputs feed
+//! into vello scenes via [`Renderer::insert_image_vello`].
 
 #![allow(
     clippy::unreadable_literal,
@@ -23,9 +26,7 @@
     mismatched_lifetime_syntaxes
 )]
 
-pub(crate) mod batch;
 mod compositor;
-pub(crate) mod image_cache;
 pub mod render_graph;
 mod renderer;
 pub mod scene;
@@ -37,9 +38,7 @@ pub mod vello_tile_rasterizer;
 pub use crate::compositor::{Compositor, NativeCompositor};
 pub use crate::render_graph::{EncodeCallback, RenderGraph, Task, TaskId};
 pub use crate::renderer::init::{NetrenderOptions, create_netrender_instance};
-pub use crate::renderer::{
-    ColorLoad, FrameTarget, PreparedFrame, Renderer, RendererError, ResourceRefs,
-};
+pub use crate::renderer::{ColorLoad, Renderer, RendererError};
 pub use crate::scene::{
     GradientKind, GradientStop, ImageData, ImageKey, NO_CLIP, Scene, SceneGradient, SceneImage,
     SceneRect, Transform,
@@ -48,12 +47,10 @@ pub use crate::tile_cache::{TileCache, TileCoord};
 pub use crate::space::{ROOT_SPATIAL_NODE, SpatialTransform, SpatialTree};
 
 // Re-export the device-foundation surface embedders need to construct
-// `WgpuHandles`, pass them through `create_netrender_instance`, and
-// build `DrawIntent`s for `PreparedFrame`.
+// `WgpuHandles` and run render-graph tasks (blur, clip mask) whose
+// outputs feed into vello scenes via `Renderer::insert_image_vello`.
 pub use netrender_device::{
-    BrushBlurPipeline, BrushGradientPipeline, BrushImagePipeline, BrushRectSolidPipeline,
-    BrushSolidPipeline, ClipRectanglePipeline, ColorAttachment, DepthAttachment, DrawIntent,
+    BrushBlurPipeline, ClipRectanglePipeline, ColorAttachment, DepthAttachment, DrawIntent,
     REQUIRED_FEATURES, RenderPassTarget, WgpuDevice, WgpuHandles, boot, build_brush_blur,
-    build_brush_gradient, build_brush_image, build_brush_rect_solid,
-    build_brush_solid_specialized, build_clip_rectangle,
+    build_clip_rectangle,
 };

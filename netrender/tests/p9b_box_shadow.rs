@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use netrender::{
-    ColorLoad, FrameTarget, ImageKey, NO_CLIP, NetrenderOptions, Renderer, RenderGraph, Scene,
+    ColorLoad, ImageKey, NO_CLIP, NetrenderOptions, Renderer, RenderGraph, Scene,
     Task, TaskId, boot, create_netrender_instance,
 };
 
@@ -38,8 +38,11 @@ const MASK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 fn make_renderer() -> Renderer {
     let handles = boot().expect("wgpu boot");
-    create_netrender_instance(handles, NetrenderOptions::default())
-        .expect("create_netrender_instance")
+    create_netrender_instance(
+        handles,
+        NetrenderOptions { tile_cache_size: Some(64), enable_vello: true },
+    )
+    .expect("create_netrender_instance")
 }
 
 
@@ -109,23 +112,19 @@ fn render_to_bytes(renderer: &Renderer, scene: &Scene) -> Vec<u8> {
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: TARGET_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[wgpu::TextureFormat::Rgba8UnormSrgb],
     });
-    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+    let view = target.create_view(&wgpu::TextureViewDescriptor {
+        label: Some("p9b target view"),
+        format: Some(wgpu::TextureFormat::Rgba8Unorm),
+        ..Default::default()
+    });
 
-    let prepared = renderer.prepare(scene);
-    renderer.render(
-        &prepared,
-        FrameTarget {
-            view: &view,
-            format: TARGET_FORMAT,
-            width: scene.viewport_width,
-            height: scene.viewport_height,
-        },
-        ColorLoad::Clear(wgpu::Color::BLACK),
-    );
+    renderer.render_vello(scene, &view, ColorLoad::Clear(wgpu::Color::BLACK));
     renderer
         .wgpu_device
         .read_rgba8_texture(&target, scene.viewport_width, scene.viewport_height)
@@ -190,7 +189,7 @@ fn p9b_02_drop_shadow_composite() {
     let (mask_tex, _bytes) = render_box_shadow_mask(&renderer, W, bounds, radius);
 
     const SHADOW_KEY: ImageKey = 0xCAFE_9B0F;
-    renderer.insert_image_gpu(SHADOW_KEY, mask_tex);
+    renderer.insert_image_vello(SHADOW_KEY, mask_tex);
 
     // Tint the blurred mask dark gray, full coverage. With premultiplied
     // src = mask * (0.3, 0.3, 0.3, 0.999) blended over black:
@@ -210,12 +209,16 @@ fn p9b_02_drop_shadow_composite() {
 
     let bytes = render_to_bytes(&renderer, &scene);
 
-    // Interior: dark gray (mask is 1 here, tint of (0.3, 0.3, 0.3)
-    // sRGB-encodes to ~149).
+    // Interior: dark gray. Vello blends in sRGB-encoded space (per
+    // §6.1), so a tint of (0.3, 0.3, 0.3) lands at storage ≈ 77.
+    // The pre-vello batched pipeline blended in linear space and
+    // produced ≈ 149 here. Both are valid receipts; the qualitative
+    // property tested is "darker than original (255) but well above
+    // black".
     let center = pixel(&bytes, W, 32, 32);
     assert!(
-        center[0] > 130 && center[0] < 165,
-        "shadow interior should be dark gray (~149), got {:?}",
+        center[0] > 60 && center[0] < 100,
+        "shadow interior should be dark gray (vello sRGB-encoded blend ~77), got {:?}",
         center
     );
 
@@ -225,8 +228,8 @@ fn p9b_02_drop_shadow_composite() {
     // (between near-black and the interior gray).
     let halo = pixel(&bytes, W, 14, 32);
     assert!(
-        halo[0] > 5 && halo[0] < 150,
-        "halo pixel should be a soft falloff value, got {:?}",
+        halo[0] >= 1 && halo[0] < 100,
+        "halo pixel should be a soft falloff value (between black and the ~77 interior), got {:?}",
         halo
     );
 

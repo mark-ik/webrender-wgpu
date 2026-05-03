@@ -17,8 +17,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use netrender::{
-    ColorLoad, FrameTarget, ImageKey, NO_CLIP, NetrenderOptions, RenderGraph, Scene, Task,
-    TaskId, boot, create_netrender_instance,
+    ColorLoad, ImageKey, NO_CLIP, NetrenderOptions, RenderGraph, Scene, Task, TaskId, boot,
+    create_netrender_instance,
 };
 
 mod common;
@@ -172,8 +172,11 @@ fn p6_02_drop_shadow() {
     let handles = boot().expect("wgpu boot");
     let device = handles.device.clone();
     let queue = handles.queue.clone();
-    let renderer = create_netrender_instance(handles, NetrenderOptions::default())
-        .expect("create_netrender_instance");
+    let renderer = create_netrender_instance(
+        handles,
+        NetrenderOptions { tile_cache_size: Some(64), enable_vello: true },
+    )
+    .expect("create_netrender_instance");
 
     // White square (16,16)-(48,48) on transparent background.
     let src_bytes: Vec<u8> = (0..DIM * DIM)
@@ -219,7 +222,7 @@ fn p6_02_drop_shadow() {
     let blur_v = Arc::new(outputs.remove(&BLUR_V).expect("BLUR_V output"));
 
     const SHADOW_KEY: ImageKey = 0xDEAD_6666;
-    renderer.insert_image_gpu(SHADOW_KEY, blur_v);
+    renderer.insert_image_vello(SHADOW_KEY, blur_v);
 
     // Composite: white fg rect + blurred shadow as dark overlay (offset +2,+2)
     // Shadow tint: premultiplied [0.1, 0.1, 0.1, 0.5]
@@ -234,24 +237,26 @@ fn p6_02_drop_shadow() {
         NO_CLIP,
     );
 
+    // Vello target: Rgba8Unorm storage with sRGB view-format slot.
     let target_tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("p6_02 target"),
         size: wgpu::Extent3d { width: DIM, height: DIM, depth_or_array_layers: 1 },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: TARGET_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[wgpu::TextureFormat::Rgba8UnormSrgb],
     });
-    let target_view = target_tex.create_view(&wgpu::TextureViewDescriptor::default());
+    let target_view = target_tex.create_view(&wgpu::TextureViewDescriptor {
+        label: Some("p6_02 target view"),
+        format: Some(wgpu::TextureFormat::Rgba8Unorm),
+        ..Default::default()
+    });
 
-    let prepared = renderer.prepare(&scene);
-    renderer.render(
-        &prepared,
-        FrameTarget { view: &target_view, format: TARGET_FORMAT, width: DIM, height: DIM },
-        ColorLoad::Clear(wgpu::Color::BLACK),
-    );
+    renderer.render_vello(&scene, &target_view, ColorLoad::Clear(wgpu::Color::BLACK));
 
     let actual = renderer.wgpu_device.read_rgba8_texture(&target_tex, DIM, DIM);
 
