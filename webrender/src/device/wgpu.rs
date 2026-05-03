@@ -331,17 +331,52 @@ mod vertex_adapter_tests {
 }
 
 // ============================================================================
-// Associated-type placeholders
+// Texture format mapping (P4)
+// ============================================================================
+
+/// Maps WebRender's `ImageFormat` to wgpu's `TextureFormat`. Used by
+/// `create_texture`. Some WebRender formats have multiple plausible wgpu
+/// equivalents (e.g. BGRA8 has both Unorm and UnormSrgb variants); we
+/// pick the linear variant by default — sRGB conversions are handled by
+/// pipeline state, not by the texture format alone.
+pub(crate) fn image_format_to_wgpu(fmt: ImageFormat) -> wgpu::TextureFormat {
+    use wgpu::TextureFormat as TF;
+    match fmt {
+        ImageFormat::R8 => TF::R8Unorm,
+        ImageFormat::R16 => TF::R16Unorm,
+        ImageFormat::BGRA8 => TF::Bgra8Unorm,
+        ImageFormat::RGBAF32 => TF::Rgba32Float,
+        ImageFormat::RG8 => TF::Rg8Unorm,
+        ImageFormat::RG16 => TF::Rg16Unorm,
+        ImageFormat::RGBAI32 => TF::Rgba32Sint,
+        ImageFormat::RGBA8 => TF::Rgba8Unorm,
+    }
+}
+
+// ============================================================================
+// Associated-type placeholders + real impls (P4 partial)
 // ============================================================================
 //
-// Marker structs for each trait associated type. Currently empty / phantom
-// only — gain real fields (wgpu::Texture, wgpu::Buffer, wgpu::RenderPipeline,
-// etc.) as the trait method impls land. Distinct types per associated type
-// preserve the type-system contract even with all stubs panicking.
+// Marker structs gain real fields as the trait method impls land. Distinct
+// types per associated type preserve the type-system contract.
 
 pub struct WgpuProgram;
 pub struct WgpuUniformLocation;
-pub struct WgpuTexture;
+
+/// A wgpu-backed texture. Holds the GPU resource + a default view +
+/// metadata mirroring what GL's `Texture` carries. The view is created
+/// alongside the texture so `bind_texture` doesn't have to lazily construct
+/// one per draw.
+pub struct WgpuTexture {
+    pub texture: wgpu::Texture,
+    pub view: wgpu::TextureView,
+    pub format: ImageFormat,
+    pub size: api::units::DeviceIntSize,
+    pub filter: TextureFilter,
+    pub target: ImageBufferKind,
+    pub is_render_target: bool,
+}
+
 pub struct WgpuVao;
 pub struct WgpuCustomVao;
 pub struct WgpuPbo;
@@ -444,15 +479,62 @@ impl GpuResources for WgpuDevice {
 
     fn create_texture(
         &mut self,
-        _target: ImageBufferKind,
-        _format: ImageFormat,
-        _width: i32,
-        _height: i32,
-        _filter: TextureFilter,
-        _render_target: Option<crate::internal_types::RenderTargetInfo>,
-    ) -> Self::Texture { unimplemented!() }
+        target: ImageBufferKind,
+        format: ImageFormat,
+        width: i32,
+        height: i32,
+        filter: TextureFilter,
+        render_target: Option<crate::internal_types::RenderTargetInfo>,
+    ) -> Self::Texture {
+        // Clamp to wgpu's max texture dimension (matches GL device behavior
+        // which clamps to its own max_texture_size).
+        let max_dim = self.device.limits().max_texture_dimension_2d as i32;
+        let w = width.min(max_dim).max(1) as u32;
+        let h = height.min(max_dim).max(1) as u32;
 
-    fn delete_texture(&mut self, _texture: Self::Texture) { unimplemented!() }
+        let is_render_target = render_target.is_some();
+        let mut usage = wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST;
+        if is_render_target {
+            usage |= wgpu::TextureUsages::RENDER_ATTACHMENT;
+        }
+
+        let wgpu_format = image_format_to_wgpu(format);
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("WgpuDevice::create_texture"),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            // ImageBufferKind::TextureExternal/BT709 also resolve to D2 in wgpu;
+            // external image interop happens via a separate path (binding a host
+            // wgpu::Texture/TextureView), not via create_texture.
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu_format,
+            usage,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("WgpuDevice::create_texture default view"),
+            ..Default::default()
+        });
+
+        WgpuTexture {
+            texture,
+            view,
+            format,
+            size: api::units::DeviceIntSize::new(w as i32, h as i32),
+            filter,
+            target,
+            is_render_target,
+        }
+    }
+
+    fn delete_texture(&mut self, _texture: Self::Texture) {
+        // wgpu::Texture is Drop-managed; just letting it fall out of scope
+        // releases the GPU resource. wgpu defers actual destruction until
+        // any in-flight command buffers using it complete.
+    }
 
     fn copy_entire_texture(&mut self, _dst: &mut Self::Texture, _src: &Self::Texture) { unimplemented!() }
 
