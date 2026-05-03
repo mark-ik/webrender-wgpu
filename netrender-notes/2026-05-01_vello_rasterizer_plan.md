@@ -461,6 +461,61 @@ data in a form skrifa can ingest (TTF/OTF blob). The consumer
 `vello::peniko::Font`. Same axiom-16 contract as images: external
 resources are local by the time they hit the renderer.
 
+### 4.4 Layout layer: parley is for the embedder, not netrender
+
+Netrender's text input is a stream of **positioned** glyph runs
+(`vello::Glyph { id, x, y }`) plus a font handle. It does not shape,
+line-break, do BiDi, perform font matching, or run fallback. Those
+are layout concerns and live one layer up in the stack.
+
+This boundary is intentional:
+
+- **Servo path.** Servo already has shaping (harfrust), font
+  matching (`gfx`), and inline / line layout. The netrender glyph-run
+  interface is the natural lowering target for what `gfx` already
+  produces today — no architectural change Servo-side beyond
+  swapping the eventual rasterization backend. Servo would not pull
+  parley.
+- **Embedders without an existing layout layer.** For self-contained
+  UIs (Graphshell-style overlays, isolated text widgets, demo apps),
+  [`parley`](https://github.com/linebender/parley) is the
+  Linebender-blessed companion to vello and the recommended layout
+  layer:
+  - Pure-Rust shaping via swash / harfrust.
+  - BiDi via ICU4X.
+  - Line breaking + paragraph layout.
+  - Font fallback through [`fontique`](https://github.com/linebender/parley/tree/main/fontique)
+    (system font enumeration on macOS / Windows / Linux, plus
+    embedded fallback chains).
+  - Output type `parley::Layout<Brush>` exposes positioned glyph
+    runs that feed `vello::Scene::draw_glyphs` near-directly — and
+    therefore feed netrender's glyph-run interface near-directly
+    too.
+
+**Maturity caveats (verify before locking in for shipping content):**
+
+- Pre-1.0 at time of writing; API breaks expected.
+- Fontique enumerates system fonts but does not match CSS-cascade
+  font selection rules end-to-end the way DirectWrite / CoreText do
+  through Servo's `gfx`. Locale-aware shaping (CJK / RTL / complex
+  scripts) inherits whatever harfrust + the bundled fallback fonts
+  supply; verify against the actual content the embedder ships.
+- No subpixel positioning quirks shared with Chromium / Firefox text
+  engines; matches vello's own subpixel policy, which is fine for
+  prototyping but won't pixel-match Blink / Gecko reference output.
+
+**Decision:** Do not bake parley into netrender. Document it as the
+recommended embedder companion when an embedder needs an off-the-
+shelf layout layer that pairs cleanly with vello.
+
+The `netrender_text` companion crate mentioned in §11.0 (the
+"netrender-text wrapper" sketch around font ingestion) is the
+natural home for a thin `parley::Layout<Brush>` →
+`netrender::GlyphRun` adapter for embedders that adopt parley.
+Servo, with its existing layout, ignores that adapter and lowers
+through its own path. Both paths converge on the same downstream
+glyph-run interface — the layering stays clean.
+
 ## 5. Filters and the render-task graph
 
 Phase 6 is delivered. Phase 12 (filter chains, nested isolation)
@@ -655,7 +710,11 @@ deferred `netrender_compositor`. Vello adoption adds:
 No new netrender crate split is required for this plan. A future
 `netrender_text` crate could wrap font ingestion + glyph runs if
 that surface grows enough to warrant separation; not a launch-time
-concern.
+concern. Per §4.4 it would also be the natural home for a
+`parley::Layout<Brush>` → `netrender::GlyphRun` adapter for
+embedders that adopt parley as their layout layer; Servo, with
+its existing `gfx` + harfrust + inline-layout stack, would skip
+that adapter entirely.
 
 ## 10. The "two backends" trap
 
@@ -901,9 +960,13 @@ plan's Phase X.
   ~1 month, because the rasterizer side is free.
 - **Phase 10'**: text. Per §4: skrifa-based glyph runs through
   `vello::Scene::draw_glyphs`. Drops `wr_glyph_rasterizer` lift
-  and the atlas. Estimate: ~1 month total (consumer-side font
-  ingestion plumbing is the bulk of this), vs. parent's combined
-  Phase 10a + 10b at ~2–3 months.
+  and the atlas. Layout (shaping, BiDi, line breaking, font
+  fallback) stays embedder-side per §4.4 — Servo lowers from its
+  existing `gfx` + harfrust + inline-layout stack; embedders
+  without one are pointed at parley as the recommended companion.
+  Estimate: ~1 month total (consumer-side font ingestion plumbing
+  is the bulk of this), vs. parent's combined Phase 10a + 10b at
+  ~2–3 months.
 - **Phase 11'**: borders / box shadows / line decorations. Strokes,
   filled paths, blurred fills — vello primitives. Estimate: ~3 weeks
   vs. parent Phase 11's ~2 months.
