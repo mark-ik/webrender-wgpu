@@ -32,6 +32,7 @@ pub mod scene;
 pub(crate) mod space;
 pub mod tile_cache;
 pub mod vello_rasterizer;
+pub mod vello_tile_rasterizer;
 
 pub use crate::compositor::{Compositor, NativeCompositor};
 pub use crate::render_graph::{EncodeCallback, RenderGraph, Task, TaskId};
