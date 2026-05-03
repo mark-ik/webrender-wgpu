@@ -54,7 +54,8 @@ pub use crate::space::{ROOT_SPATIAL_NODE, SpatialTransform, SpatialTree};
 pub use netrender_device::{
     BrushBlurPipeline, BrushGradientPipeline, BrushImagePipeline, BrushRectSolidPipeline,
     BrushSolidPipeline, BrushTextPipeline, ClipRectanglePipeline, ColorAttachment,
-    DepthAttachment, DrawIntent, REQUIRED_FEATURES, RenderPassTarget, WgpuDevice, WgpuHandles,
-    boot, build_brush_blur, build_brush_gradient, build_brush_image, build_brush_rect_solid,
-    build_brush_solid_specialized, build_brush_text, build_clip_rectangle,
+    DepthAttachment, DrawIntent, OPTIONAL_FEATURES, REQUIRED_FEATURES, RenderPassTarget,
+    WgpuDevice, WgpuHandles, boot, build_brush_blur, build_brush_gradient, build_brush_image,
+    build_brush_rect_solid, build_brush_solid_specialized, build_brush_text,
+    build_brush_text_dual_source, build_clip_rectangle,
 };

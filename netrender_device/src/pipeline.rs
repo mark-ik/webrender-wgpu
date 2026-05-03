@@ -274,6 +274,103 @@ pub fn build_brush_text(
     BrushTextPipeline { pipeline, layout }
 }
 
+/// Phase 10a.4 subpixel-AA text pipeline. Same `BrushTextPipeline`
+/// shape as the grayscale path (5-binding layout, alpha-blended
+/// output to a depth-tested target); differs in the WGSL (two
+/// `@location(0)` outputs) and the blend state (`OneMinusSrc1` on
+/// color, `OneMinusSrc1Alpha` on alpha — the per-channel "alpha"
+/// is the second output).
+///
+/// Returns `None` when `device.features()` lacks
+/// `Features::DUAL_SOURCE_BLENDING`. Caller (consumer or the
+/// `WgpuDevice` cache) is expected to fall back to
+/// `build_brush_text` when this returns `None`.
+pub fn build_brush_text_dual_source(
+    device: &wgpu::Device,
+    target_format: wgpu::TextureFormat,
+    depth_format: Option<wgpu::TextureFormat>,
+) -> Option<BrushTextPipeline> {
+    if !device.features().contains(wgpu::Features::DUAL_SOURCE_BLENDING) {
+        return None;
+    }
+    let layout = crate::binding::ps_text_run_layout(device);
+
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("ps_text_run_dual_source"),
+        source: wgpu::ShaderSource::Wgsl(crate::shader::PS_TEXT_RUN_DUAL_SOURCE_WGSL.into()),
+    });
+
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("ps_text_run_dual_source pipeline layout"),
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
+    });
+
+    let depth_stencil = depth_format.map(|fmt| wgpu::DepthStencilState {
+        format: fmt,
+        depth_write_enabled: Some(false),
+        depth_compare: Some(wgpu::CompareFunction::Less),
+        stencil: wgpu::StencilState::default(),
+        bias: wgpu::DepthBiasState::default(),
+    });
+
+    // Dual-source blend: out.color (src) over the framebuffer with
+    // out.alpha (src1) supplying per-channel coverage. For
+    // grayscale-broadcast inputs (the 10a.4 receipt), this is
+    // bit-equivalent to PREMULTIPLIED_ALPHA_BLENDING; for
+    // per-channel inputs (10b subpixel rasterizer) each channel
+    // blends independently against its own coverage.
+    let blend = wgpu::BlendState {
+        color: wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::OneMinusSrc1,
+            operation: wgpu::BlendOperation::Add,
+        },
+        alpha: wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::OneMinusSrc1Alpha,
+            operation: wgpu::BlendOperation::Add,
+        },
+    };
+
+    let label = if depth_format.is_some() {
+        "ps_text_run_dual_source"
+    } else {
+        "ps_text_run_dual_source nodepth"
+    };
+
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &module,
+            entry_point: Some("vs_main"),
+            buffers: &[],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &module,
+            entry_point: Some("fs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: target_format,
+                blend: Some(blend),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            ..Default::default()
+        },
+        depth_stencil,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    });
+
+    Some(BrushTextPipeline { pipeline, layout })
+}
+
 /// Analytic gradient kind, selected at pipeline-compile time via the
 /// WGSL `override GRADIENT_KIND` constant. The numeric values match
 /// the constants the shader compares against; do not renumber.

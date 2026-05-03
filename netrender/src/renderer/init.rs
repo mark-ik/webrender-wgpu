@@ -28,6 +28,18 @@ pub struct NetrenderOptions {
     /// `brush_image_alpha`). `None` keeps the direct render path used
     /// in Phases 1–6.
     pub tile_cache_size: Option<u32>,
+    /// Phase 10a.4: opt in to the subpixel-AA dual-source text
+    /// pipeline. `prepare()` will use the dual-source pipeline when
+    /// the adapter exposes `Features::DUAL_SOURCE_BLENDING` (opted
+    /// into automatically by `core::boot`'s `OPTIONAL_FEATURES`),
+    /// falling back to the grayscale path when absent. Default
+    /// `false` — grayscale always — until 10b's transform-aware
+    /// subpixel policy lands and decides per-glyph automatically.
+    /// Today's R8 atlas means the dual-source pipeline is bit-
+    /// equivalent to grayscale; the flag exists so 10a.4 can
+    /// receipt the wiring before 10b's RGB(A) atlas adds visible
+    /// per-channel coverage.
+    pub text_subpixel_aa: bool,
 }
 
 /// Construct a wgpu-only `Renderer`. The embedder owns the wgpu
@@ -85,5 +97,6 @@ pub fn create_netrender_instance(
         nearest_sampler,
         bilinear_sampler,
         tile_cache,
+        text_subpixel_aa: options.text_subpixel_aa,
     })
 }

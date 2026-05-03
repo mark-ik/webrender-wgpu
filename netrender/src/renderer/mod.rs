@@ -64,6 +64,12 @@ pub struct Renderer {
     /// (renders dirty tiles, composites them via `brush_image_alpha`).
     /// Configured at construction via `NetrenderOptions::tile_cache_size`.
     pub(crate) tile_cache: Option<Mutex<TileCache>>,
+    /// Phase 10a.4: when true, `prepare_direct` asks for the dual-
+    /// source `ps_text_run` pipeline and falls back to grayscale only
+    /// when the device lacks `Features::DUAL_SOURCE_BLENDING`. Default
+    /// false (grayscale always) until 10b's per-glyph subpixel
+    /// policy lands.
+    pub(crate) text_subpixel_aa: bool,
 }
 
 /// Retained per-frame resources whose lifetime needs to span the frame.
@@ -153,9 +159,20 @@ impl Renderer {
         // Phase 8D: one gradient pipeline per (kind, alpha_class) — 6 total.
         let gradient_pipes = self.ensure_gradient_pipelines(Self::COLOR_FORMAT);
         // Phase 10a.1 grayscale text pipeline. Always alpha-blended.
-        let text_pipe = self
-            .wgpu_device
-            .ensure_brush_text(Self::COLOR_FORMAT, Self::DEPTH_FORMAT);
+        // Phase 10a.4: when text_subpixel_aa is opted in AND the
+        // device has Features::DUAL_SOURCE_BLENDING, the dual-source
+        // pipeline replaces grayscale. Otherwise grayscale.
+        let text_pipe = if self.text_subpixel_aa {
+            self.wgpu_device
+                .ensure_brush_text_dual_source(Self::COLOR_FORMAT, Self::DEPTH_FORMAT)
+                .unwrap_or_else(|| {
+                    self.wgpu_device
+                        .ensure_brush_text(Self::COLOR_FORMAT, Self::DEPTH_FORMAT)
+                })
+        } else {
+            self.wgpu_device
+                .ensure_brush_text(Self::COLOR_FORMAT, Self::DEPTH_FORMAT)
+        };
 
         let depth_tex = self.wgpu_device.core.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("netrender depth"),

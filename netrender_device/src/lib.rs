@@ -52,12 +52,13 @@ pub(crate) mod texture;
 mod tests;
 
 pub use crate::adapter::WgpuDevice;
-pub use crate::core::{BootError, REQUIRED_FEATURES, WgpuHandles, boot};
+pub use crate::core::{BootError, OPTIONAL_FEATURES, REQUIRED_FEATURES, WgpuHandles, boot};
 pub use crate::pass::{ColorAttachment, DepthAttachment, DrawIntent, RenderPassTarget};
 pub use crate::pipeline::{
     BrushBlurPipeline, BrushGradientPipeline, BrushImagePipeline, BrushRectSolidPipeline,
     BrushSolidPipeline, BrushTextPipeline, ClipRectanglePipeline, GradientKind,
     build_brush_blur, build_brush_gradient, build_brush_image, build_brush_rect_solid,
-    build_brush_solid_specialized, build_brush_text, build_clip_rectangle,
+    build_brush_solid_specialized, build_brush_text, build_brush_text_dual_source,
+    build_clip_rectangle,
 };
 pub use crate::texture::{TextureDesc, WgpuTexture};

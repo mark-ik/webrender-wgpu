@@ -1388,6 +1388,117 @@ counter is the simplest correct policy).
   already in an `Arc`), but tests with very large font fixtures
   could feel it. Acceptable for 10a.3.
 
+**Status (2026-05-02, 10a.4 delivered)**: subpixel-AA dual-source
+text pipeline lands behind a `NetrenderOptions.text_subpixel_aa`
+opt-in. Bit-equivalent to grayscale today (R8 atlas → broadcast .r);
+real per-channel coverage waits on the 10b RGB(A) atlas + swash
+`Format::Subpixel` path.
+
+New surface:
+
+- `netrender_device::OPTIONAL_FEATURES` — wgpu features the
+  renderer would *like* if the adapter supports them but doesn't
+  strictly require. Today: `DUAL_SOURCE_BLENDING`. `core::boot`
+  requests `REQUIRED_FEATURES | (OPTIONAL_FEATURES &
+  adapter.features())`, opting in opportunistically.
+  `with_external` does *not* expand the embedder's device
+  features — embedder owns its device — so pipeline factories
+  always check `device.features()` rather than
+  `adapter.features()` (the source of truth is the requested
+  feature set, regardless of which boot path created the device).
+- `netrender_device/src/shaders/ps_text_run_dual_source.wgsl` —
+  same instance + binding shape as `ps_text_run.wgsl`; differs
+  in two `@location(0) @blend_src(N)` outputs (color + per-
+  channel alpha) and the `enable dual_source_blending;` directive.
+  Today's R8 atlas: shader explicitly broadcasts `.r` to all
+  three channels (`R8Unorm` samples return `(r, 0, 0, 1)`, not
+  `(r, r, r, 1)` — the broadcast is the wiring receipt).
+- `netrender_device::build_brush_text_dual_source(device, color,
+  depth) -> Option<BrushTextPipeline>` — returns `None` when
+  `device.features()` lacks `DUAL_SOURCE_BLENDING`. Blend state
+  is `(One, OneMinusSrc1)` on color + `(One, OneMinusSrc1Alpha)`
+  on alpha — the standard subpixel dual-source equation. For
+  grayscale-broadcast inputs this is bit-equivalent to
+  `PREMULTIPLIED_ALPHA_BLENDING`.
+- `WgpuDevice::ensure_brush_text_dual_source(color, depth) ->
+  Option<BrushTextPipeline>` — caches both `Some(_)` and `None`
+  results so the consumer's per-frame fallback decision is one
+  map lookup, not a feature recheck.
+- `netrender::NetrenderOptions.text_subpixel_aa: bool` (default
+  `false`). When `true`, `prepare_direct` asks for the dual-
+  source pipeline and falls back to grayscale only when the
+  device lacks `DUAL_SOURCE_BLENDING`. Default false because
+  10a.4 lands the wiring without behavior change — until the
+  10b RGB(A) atlas + transform-aware policy lands, the dual-
+  source path is bit-equivalent and serves only as the "the
+  pipeline runs" receipt.
+- `Renderer::text_subpixel_aa: bool` field carrying the option
+  through to `prepare_direct`.
+
+Receipt — `tests/p10a_text.rs` gains two tests, both green
+(10/10 in the binary now):
+
+- `p10a4_dual_source_pipeline_built_when_supported` — sanity:
+  `ensure_brush_text_dual_source` returns `Some(_)` iff the
+  adapter exposes `Features::DUAL_SOURCE_BLENDING`; the cache
+  returns the same `Option` on repeat calls. Logs a skip note
+  on adapters without the feature so CI on Lavapipe / WARP
+  doesn't masquerade as "feature working."
+- `p10a4_grayscale_equivalence` — equivalence: render the same
+  scene with `text_subpixel_aa = false` and `= true`; assert
+  the framebuffers are byte-identical. With the R8 atlas's
+  `.r` broadcast, the dual-source path's blend math reduces to
+  the grayscale path's exactly; any drift would surface here
+  immediately.
+
+Sequenced findings during 10a.4:
+
+- WGSL `dual_source_blending` enable extension is mandatory —
+  using `@blend_src(N)` without it is a parse error. Added the
+  `enable dual_source_blending;` directive at the top of the
+  shader; cross-referenced the runtime `device.features()`
+  check on the consumer side so the directive matches the
+  factory's gate.
+- Both `@location(0)` outputs need explicit `@blend_src(N)`
+  annotations — the slot-`0` output cannot omit the implicit
+  `0` and let the slot-`1` output specify it explicitly. naga
+  errors with "Invalid `@blend_src` structure: must specify
+  two sources." Added `@blend_src(0)` to the color output.
+- `R8Unorm` sampled as `vec4<f32>` returns `(r, 0, 0, 1)` —
+  not `(r, r, r, 1)`. The first iteration of the shader
+  broadcast `(sample.r, sample.g, sample.b)` and got
+  `(coverage, 0, 0)`, breaking equivalence by 18 pixels on
+  the test scene. Fixed by explicitly broadcasting `sample.r`
+  to all three channels with a clarifying comment that a
+  future RGB(A) atlas (10b) will substitute a per-channel
+  sample here.
+
+Full suite (22 binaries, 96 tests) green — no Phase 4-9 / 10a.1
+/ 10a.2 / 10a.3 regressions.
+
+**Carry-forwards for follow-up slices.**
+
+- Today's R8 atlas means dual-source is bit-equivalent to
+  grayscale. The visible-output difference lands at 10b when
+  the RGB(A) subpixel atlas + `swash::Format::Subpixel`
+  rasterizer path arrives; the dual-source pipeline is
+  already prepared to consume per-channel coverage.
+- Auto-routing (subpixel for translate-only transforms,
+  grayscale for rotated / non-axis-aligned) is the 10b
+  per-glyph policy. 10a.4 keeps the option as a global
+  `bool` because the policy decision needs the transform-
+  decomposition primitives Phase 11 introduces; an early
+  global toggle is simpler to refactor away than to
+  retrofit per-glyph on top of.
+- `OPTIONAL_FEATURES` will accumulate as later phases add
+  pipelines that exploit `Features::TIMESTAMP_QUERY`,
+  `Features::PIPELINE_STATISTICS_QUERY`, etc. The pattern
+  established here (request opportunistically in `boot`;
+  pipeline factories check `device.features()` and return
+  `Option<_>`; `WgpuDevice` cache holds `Option<_>` to
+  amortise the check) is the template subsequent
+  optional-feature pipelines should follow.
+
 ### Phase 10b — Browser-grade text correctness
 
 10a paints glyph quads. 10b confronts the gap between "glyphs

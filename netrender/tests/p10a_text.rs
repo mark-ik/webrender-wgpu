@@ -434,6 +434,144 @@ fn p10a3_run_layout() {
     run_scene_golden("p10a3_run_layout", scene);
 }
 
+// ── 10a.4 — subpixel-AA dual-source pipeline ───────────────────────
+
+/// Render `scene` with the explicit `text_subpixel_aa` toggle and
+/// return the framebuffer bytes. Bypasses [`run_scene_golden`]
+/// because 10a.4's tests cross-compare two framebuffers rather than
+/// matching a single golden PNG.
+fn render_with_subpixel_aa(scene: &Scene, text_subpixel_aa: bool) -> Vec<u8> {
+    let [vw, vh] = [scene.viewport_width, scene.viewport_height];
+    let handles = boot().expect("wgpu boot");
+    let device = handles.device.clone();
+    let renderer = create_netrender_instance(
+        handles,
+        NetrenderOptions {
+            text_subpixel_aa,
+            ..NetrenderOptions::default()
+        },
+    )
+    .expect("create_netrender_instance");
+
+    let target_tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("p10a4 target"),
+        size: wgpu::Extent3d { width: vw, height: vh, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: TARGET_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let target_view = target_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
+    let prepared = renderer.prepare(scene);
+    renderer.render(
+        &prepared,
+        FrameTarget { view: &target_view, format: TARGET_FORMAT, width: vw, height: vh },
+        ColorLoad::Clear(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }),
+    );
+
+    renderer.wgpu_device.read_rgba8_texture(&target_tex, vw, vh)
+}
+
+/// Did the booted device pick up `Features::DUAL_SOURCE_BLENDING`?
+/// `core::boot` opportunistically requests every adapter-supported
+/// feature in `OPTIONAL_FEATURES`; the test queries the post-boot
+/// device to know which conditional path runs on this machine.
+fn dual_source_supported() -> bool {
+    let handles = boot().expect("wgpu boot");
+    handles.device.features().contains(wgpu::Features::DUAL_SOURCE_BLENDING)
+}
+
+/// Sanity: `WgpuDevice::ensure_brush_text_dual_source` returns
+/// `Some(_)` on adapters that expose `Features::DUAL_SOURCE_BLENDING`,
+/// and `None` on adapters that don't. The cache holds the negative
+/// result, so a second call returns the same `None` without
+/// rebuilding.
+#[test]
+fn p10a4_dual_source_pipeline_built_when_supported() {
+    let handles = boot().expect("wgpu boot");
+    let supported = handles.device.features().contains(wgpu::Features::DUAL_SOURCE_BLENDING);
+    let renderer =
+        create_netrender_instance(handles, NetrenderOptions::default())
+            .expect("create_netrender_instance");
+
+    let first = renderer.wgpu_device.ensure_brush_text_dual_source(
+        TARGET_FORMAT,
+        wgpu::TextureFormat::Depth32Float,
+    );
+    let second = renderer.wgpu_device.ensure_brush_text_dual_source(
+        TARGET_FORMAT,
+        wgpu::TextureFormat::Depth32Float,
+    );
+
+    assert_eq!(
+        first.is_some(),
+        supported,
+        "dual-source pipeline availability matches adapter feature: \
+         supported={supported}, first.is_some={}",
+        first.is_some(),
+    );
+    assert_eq!(
+        first.is_some(),
+        second.is_some(),
+        "cache returns the same Option on repeat calls",
+    );
+
+    if !supported {
+        println!(
+            "  note: this adapter does not expose DUAL_SOURCE_BLENDING; \
+             grayscale fallback is the only path exercised at runtime",
+        );
+    }
+}
+
+/// Equivalence: with the R8 atlas (10a.1) feeding both pipelines,
+/// the dual-source path's per-channel coverage broadcast collapses
+/// to the same blend equation as the grayscale path's
+/// `PREMULTIPLIED_ALPHA_BLENDING`. Output should be byte-identical.
+///
+/// On adapters lacking `DUAL_SOURCE_BLENDING`, the renderer falls
+/// back to grayscale silently (because the dual-source factory
+/// returns `None`), so the two renders are trivially equal — the
+/// test logs the skip but the equality assertion still holds.
+#[test]
+fn p10a4_grayscale_equivalence() {
+    let mut scene = Scene::new(VIEWPORT, VIEWPORT);
+    scene.set_glyph_raster(KEY_A, glyph_a_5x7());
+    scene.push_text_run(
+        vec![GlyphInstance { key: KEY_A, x: 10.0, y: 30.0 }],
+        [1.0, 1.0, 1.0, 1.0],
+    );
+
+    let grayscale = render_with_subpixel_aa(&scene, false);
+    let subpixel = render_with_subpixel_aa(&scene, true);
+
+    if !dual_source_supported() {
+        println!(
+            "  note: adapter lacks DUAL_SOURCE_BLENDING; both renders \
+             went through the grayscale path (trivial equality)",
+        );
+    }
+
+    assert_eq!(
+        grayscale.len(),
+        subpixel.len(),
+        "framebuffer dimensions match",
+    );
+    let differing = grayscale
+        .chunks_exact(4)
+        .zip(subpixel.chunks_exact(4))
+        .filter(|(a, b)| a != b)
+        .count();
+    assert_eq!(
+        differing, 0,
+        "grayscale-broadcast input must produce bit-identical output \
+         under both pipelines (differing pixels: {differing})",
+    );
+}
+
 /// `FontHandle` is `Clone`-cheap (Arc-backed): a clone shares the
 /// underlying bytes. Test that two clones rasterize identically.
 #[test]

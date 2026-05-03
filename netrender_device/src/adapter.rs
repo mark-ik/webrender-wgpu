@@ -21,7 +21,8 @@ use crate::pipeline::{
     BrushBlurPipeline, BrushGradientPipeline, BrushImagePipeline, BrushRectSolidPipeline,
     BrushSolidPipeline, BrushTextPipeline, ClipRectanglePipeline, GradientKind,
     build_brush_blur, build_brush_gradient, build_brush_image, build_brush_rect_solid,
-    build_brush_solid_specialized, build_brush_text, build_clip_rectangle,
+    build_brush_solid_specialized, build_brush_text, build_brush_text_dual_source,
+    build_clip_rectangle,
 };
 use crate::readback;
 use crate::texture::{TextureDesc, WgpuTexture};
@@ -55,6 +56,13 @@ pub struct WgpuDevice {
     // No alpha-blend dimension (text is always alpha-blend); subpixel
     // dual-source variant lands at 10a.4 with its own cache map.
     brush_text: Mutex<HashMap<(wgpu::TextureFormat, Option<wgpu::TextureFormat>), BrushTextPipeline>>,
+    // Cache key: (color_format, depth_format) — Phase 10a.4.
+    // The cached value is `Option<BrushTextPipeline>` because the
+    // factory returns `None` on adapters lacking
+    // `Features::DUAL_SOURCE_BLENDING`. Caching the negative result
+    // means the consumer's prepare-phase fallback decision is one
+    // map lookup, not a re-check of `device.features()` every frame.
+    brush_text_dual_source: Mutex<HashMap<(wgpu::TextureFormat, Option<wgpu::TextureFormat>), Option<BrushTextPipeline>>>,
 }
 
 impl WgpuDevice {
@@ -84,6 +92,7 @@ impl WgpuDevice {
             brush_gradient: Mutex::new(HashMap::new()),
             clip_rectangle: Mutex::new(HashMap::new()),
             brush_text: Mutex::new(HashMap::new()),
+            brush_text_dual_source: Mutex::new(HashMap::new()),
         })
     }
 
@@ -100,6 +109,7 @@ impl WgpuDevice {
             brush_gradient: Mutex::new(HashMap::new()),
             clip_rectangle: Mutex::new(HashMap::new()),
             brush_text: Mutex::new(HashMap::new()),
+            brush_text_dual_source: Mutex::new(HashMap::new()),
         })
     }
 
@@ -229,6 +239,28 @@ impl WgpuDevice {
         cache
             .entry((color_format, Some(depth_format)))
             .or_insert_with(|| build_brush_text(&self.core.device, color_format, Some(depth_format)))
+            .clone()
+    }
+
+    /// Phase 10a.4 dual-source `ps_text_run_dual_source` pipeline for
+    /// `(color_format, depth_format)`. Returns `None` when the device
+    /// lacks `Features::DUAL_SOURCE_BLENDING` (the result, including
+    /// `None`, is cached so the consumer's per-frame fallback decision
+    /// is one map lookup). Same blend tier as
+    /// [`Self::ensure_brush_text`] (alpha-blended; depth-test ON,
+    /// depth-write OFF) but the blend equation uses the second
+    /// fragment output as per-channel coverage.
+    pub fn ensure_brush_text_dual_source(
+        &self,
+        color_format: wgpu::TextureFormat,
+        depth_format: wgpu::TextureFormat,
+    ) -> Option<BrushTextPipeline> {
+        let mut cache = self.brush_text_dual_source.lock().expect("brush_text_dual_source lock");
+        cache
+            .entry((color_format, Some(depth_format)))
+            .or_insert_with(|| {
+                build_brush_text_dual_source(&self.core.device, color_format, Some(depth_format))
+            })
             .clone()
     }
 

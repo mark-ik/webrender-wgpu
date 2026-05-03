@@ -16,6 +16,21 @@
 /// `immediate_size: 0`, so it's pure carry-over and dropped here.
 pub const REQUIRED_FEATURES: wgpu::Features = wgpu::Features::empty();
 
+/// Features the renderer would *like* if the adapter supports them
+/// but doesn't strictly require. [`boot`] requests the intersection
+/// of this set with the adapter's reported features, opting in
+/// opportunistically — pipelines that depend on a feature in this
+/// set query `device.features()` at build time and fall back when
+/// the feature is absent. This is what makes 10a.4's subpixel-AA
+/// pipeline available on capable adapters without forcing baseline
+/// adapters to fail at boot.
+///
+/// `with_external` does *not* expand the embedder's device features
+/// — the embedder owns its device and chose what to enable. Pipeline
+/// factories check `device.features()` for any optional capability
+/// regardless of which path created the device.
+pub const OPTIONAL_FEATURES: wgpu::Features = wgpu::Features::DUAL_SOURCE_BLENDING;
+
 /// Bundle of wgpu primitives owned by the embedder and passed through
 /// `create_netrender_instance` to the renderer. All four wgpu 29 handle
 /// types are `Clone` (Arc-wrapped internally), so passing by value is
@@ -90,9 +105,14 @@ pub fn boot() -> Result<WgpuHandles, BootError> {
         return Err(BootError::MissingFeatures(missing));
     }
 
+    // Opportunistic: enable any optional feature the adapter
+    // supports. Pipeline factories that depend on these check
+    // `device.features()` at build time and fall back when absent.
+    let requested_features = REQUIRED_FEATURES | (OPTIONAL_FEATURES & adapter.features());
+
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("netrender device"),
-        required_features: REQUIRED_FEATURES,
+        required_features: requested_features,
         required_limits: wgpu::Limits {
             max_inter_stage_shader_variables: 28,
             ..Default::default()

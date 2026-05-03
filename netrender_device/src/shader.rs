@@ -40,3 +40,13 @@ pub(crate) const CS_CLIP_RECTANGLE_WGSL: &str =
 /// `PREMULTIPLIED_ALPHA_BLENDING`. Subpixel-AA dual-source variant
 /// lands at 10a.4.
 pub(crate) const PS_TEXT_RUN_WGSL: &str = include_str!("shaders/ps_text_run.wgsl");
+
+/// Phase 10a.4 subpixel-AA text shader. Same instance + binding
+/// shape as `ps_text_run.wgsl`; differs in the fragment outputs
+/// (two `@location(0)` attachments for dual-source blending) and
+/// in the consuming pipeline's blend state. Requires
+/// `Features::DUAL_SOURCE_BLENDING`; the pipeline factory checks
+/// at build time and the consumer falls back to grayscale when
+/// absent.
+pub(crate) const PS_TEXT_RUN_DUAL_SOURCE_WGSL: &str =
+    include_str!("shaders/ps_text_run_dual_source.wgsl");
