@@ -316,8 +316,18 @@ Done when:
    meaningfully cleaner; defer the decision until the wgpu impl actually
    demonstrates value standalone (likely P6+).
 
-6. **Naga reflection coverage is partial: 22/125 SPIR-V stages
-   reflect cleanly.** The remaining 103 stages fall into two cohorts:
+6. **RESOLVED 2026-05-02: Naga reflection coverage now 97/125 stages.**
+   Was 22/125. Resolution: integrated `spirv-opt
+   --split-combined-image-sampler` as a post-compile pass in
+   `gen_spirv.rs` (commit 41566cba0). Adds spirv-opt as a build
+   dependency at shader-regen time only (install via VulkanSDK).
+   Remaining 28 failures are all `SampledRect` (GL_TEXTURE_RECTANGLE
+   variants — no wgpu equivalent, correctly excluded). 1 additional
+   error is the known cs_svg_filter_node.frag issue (#1).
+
+   **Diagnostic history below preserved for reference.**
+
+   The original problem: 22/125 stages reflect cleanly:
 
    - 28 stages fail on `naga: UnsupportedCapability(SampledRect)` — these
      are the `TEXTURE_RECT` shader variants. `GL_TEXTURE_RECTANGLE` is
