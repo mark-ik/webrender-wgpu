@@ -22,6 +22,17 @@
 
 use crate::scene::GlyphRaster;
 
+/// Source priority used by [`RasterContext::rasterize`]. Outline first
+/// (most TTF / OTF fonts ship vector glyphs); monochrome bitmap
+/// strikes second (Proggy and other EBDT fonts); color bitmap strikes
+/// third (Phase 10b will introduce a parallel color-aware path —
+/// today the color bitmap is squashed into its alpha plane).
+const SOURCE_PRIORITY: [swash::scale::Source; 3] = [
+    swash::scale::Source::Outline,
+    swash::scale::Source::Bitmap(swash::scale::StrikeWith::BestFit),
+    swash::scale::Source::ColorBitmap(swash::scale::StrikeWith::BestFit),
+];
+
 /// Reusable rasterizer state. One per consumer thread; the `swash`
 /// internals cache scaled outlines and other shape data inside the
 /// scale context, so reusing one [`RasterContext`] across many
@@ -73,34 +84,32 @@ impl RasterContext {
             .hint(hint)
             .build();
 
-        // Try each source individually, accepting the first that
-        // produces a non-empty image. We can't pass the slice
-        // `[Outline, Bitmap, ColorBitmap]` to a single `Render`:
-        // some fonts (Proggy) have outline tables present but
-        // *empty* for every glyph, so `has_outlines()` returns true
-        // and `Source::Outline` succeeds with a 0×0 placement —
-        // short-circuiting the loop before `Source::Bitmap` is
-        // reached. Returning `None` for legitimately-empty glyphs
-        // (space, control characters) is the correct behavior for
-        // an atlas-population call: nothing to upload, consumer
+        // Per-source iteration is the policy, not a workaround for it:
+        // a `Render::new(&SOURCE_PRIORITY)` slice form short-circuits
+        // at the first source whose `has_X()` table-presence gate
+        // passes, but the gate doesn't check whether any glyph data
+        // actually lives in that table. Proggy has empty outline
+        // tables (gate passes) and a populated EBDT bitmap strike
+        // (which the slice form never reaches). Iterating per source
+        // and treating "succeeded with `(0, 0)` placement" as "this
+        // source has no data for this glyph" routes correctly on
+        // such fonts. Empty placement on every source is also the
+        // correct return for legitimately-empty glyphs (space,
+        // zero-width joiner, format-only chars) — the consumer
         // advances the pen via glyph metrics regardless.
-        let sources = [
-            swash::scale::Source::Outline,
-            swash::scale::Source::Bitmap(swash::scale::StrikeWith::BestFit),
-            swash::scale::Source::ColorBitmap(swash::scale::StrikeWith::BestFit),
-        ];
-        for source in &sources {
+        for source in &SOURCE_PRIORITY {
             let image = swash::scale::Render::new(std::slice::from_ref(source))
                 .format(zeno::Format::Alpha)
                 .render(&mut scaler, glyph_id);
             if let Some(image) = image {
                 if image.placement.width > 0 && image.placement.height > 0 {
-                    // swash's `placement.left` / `placement.top` follow
-                    // the FreeType convention: `left` = pen-relative x
-                    // of the bitmap's left edge; `top` = baseline-
-                    // relative y of the bitmap's top edge (positive =
-                    // up). These map straight into our
-                    // [`GlyphRaster::bearing_x`] / `bearing_y`.
+                    // swash's `placement.left` / `placement.top`
+                    // follow the FreeType convention: `left` =
+                    // pen-relative x of the bitmap's left edge;
+                    // `top` = baseline-relative y of the bitmap's
+                    // top edge (positive = up). These map straight
+                    // into our [`GlyphRaster::bearing_x`] /
+                    // `bearing_y`.
                     return Some(GlyphRaster {
                         width: image.placement.width,
                         height: image.placement.height,

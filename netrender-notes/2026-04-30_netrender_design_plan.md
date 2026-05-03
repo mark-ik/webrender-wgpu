@@ -1245,6 +1245,11 @@ regressions from the n_total expansion.
 - Glyph atlas size is hardcoded `DEFAULT_GLYPH_ATLAS_SIZE = 1024`
   in `init.rs`; promote to `NetrenderOptions` at 10a.5 alongside
   the tile-cache plumbing.
+- Atlas vertical overflow (`GlyphAtlas::allocate`) panics today;
+  the size knob and an eviction story land together at 10b. For
+  10a.5: confirm the panic remains a hard-stop signal during
+  development and is not silently degraded to a missing-glyph
+  return — quiet skipping would mask atlas-fragmentation bugs.
 
 **Status (2026-05-02, 10a.2 delivered)**: swash rasterization wired
 through a thin `RasterContext` wrapper. Hand-authored bitmap
