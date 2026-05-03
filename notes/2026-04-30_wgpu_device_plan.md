@@ -394,15 +394,20 @@ Done when:
      Bypasses naga; needs hand-authored bind group layouts. Reverts to
      A1's option (c) which we explicitly architected against.
 
-7. **`set_auto_bind_uniforms` may not be assigning distinct bindings to
-   all sampler uniforms.** Suspected by inspection of `bindings.json` —
-   need to verify with `spirv-dis` against a shader like
-   `brush_blend_DEBUG_OVERDRAW.frag.spv`. If confirmed, the gen_spirv
-   fix likely belongs in `webrender_build/src/bin/gen_spirv.rs` (set
-   additional shaderc options or explicit binding hints). After fix,
-   regenerate the SPIRV corpus, re-run `reflect_spirv`, and re-commit
-   `bindings.json`. Coupled with #6 — fixing the binding distribution
-   may also address some `InvalidId` failures.
+7. **RESOLVED 2026-05-02: distinct bindings now assigned per resource.**
+   Was: all SPIR-V `OpDecorate Binding` literals at 0. Confirmed via
+   spirv-dis. Investigation: shaderc's `set_auto_bind_uniforms(true)`
+   does not distribute bindings for combined-sampler GLSL — even with
+   per-resource-kind `set_binding_base()` calls added (verified
+   empirically — zero effect on output). Likely a shaderc/glslang quirk
+   specific to combined `sampler2D` declarations; the auto-bind only
+   works for separated `texture2D` + `sampler` GLSL. Resolution: pure
+   Rust SPIR-V byte-level transform (`assign_sequential_bindings` in
+   `gen_spirv.rs`, commit 0d9c79090) that walks `OpDecorate Binding`
+   instructions and reassigns each literal to a monotonically
+   increasing per-`DescriptorSet` counter. ~50 lines, no external deps,
+   runs after the `spirv-opt --split-combined-image-sampler` pass. This
+   unblocks actual texture binding at draw time.
 
 ## Verification posture
 
