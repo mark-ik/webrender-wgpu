@@ -82,13 +82,24 @@ fn main() {
             ] {
                 let filename = format!("{}.{}.spv", stem, ext);
                 match compile(&compiler, glsl, kind, shader_name) {
-                    Ok(spirv) => {
-                        let out_path = out_dir.join(&filename);
-                        fs::write(&out_path, &spirv)
-                            .unwrap_or_else(|e| panic!("write {}: {}", out_path.display(), e));
-                        println!("  ok  {} ({} bytes)", filename, spirv.len());
-                        ok += 1;
-                    }
+                    Ok(spirv) => match split_combined_samplers(&spirv) {
+                        Ok(split) => {
+                            let out_path = out_dir.join(&filename);
+                            fs::write(&out_path, &split).unwrap_or_else(|e| {
+                                panic!("write {}: {}", out_path.display(), e)
+                            });
+                            println!(
+                                "  ok  {} ({} bytes after split, was {})",
+                                filename, split.len(), spirv.len()
+                            );
+                            ok += 1;
+                        }
+                        Err(e) => {
+                            let msg = format!("FAIL {} -- spirv-opt: {}", filename, e);
+                            eprintln!("  {}", msg);
+                            errors.push(msg);
+                        }
+                    },
                     Err(e) => {
                         let msg = format!("FAIL {} -- {}", filename, e);
                         eprintln!("  {}", msg);
@@ -130,6 +141,49 @@ fn preprocess_for_vulkan(glsl: &str) -> String {
         "uniform mat4 uTransform;",
         "uniform WrLocals { mat4 uTransform; };",
     )
+}
+
+/// Runs `spirv-opt --split-combined-image-sampler` on the given SPIR-V bytes
+/// to convert glslang's combined-sampler output (Pattern B) into the
+/// separated form (Pattern A: `OpLoad image` + `OpLoad sampler` +
+/// `OpSampledImage`) that naga's SPIR-V frontend expects. Without this
+/// pass, naga's `parse_image_sample` fails with `InvalidId` on every
+/// shader that calls `texture(sampler2D_var, ...)`.
+///
+/// Requires `spirv-opt` on PATH (install via VulkanSDK or build
+/// SPIRV-Tools from source). Build-time-only requirement; the resulting
+/// `.spv` files are committed and consumers don't need spirv-opt.
+fn split_combined_samplers(spirv: &[u8]) -> Result<Vec<u8>, String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new("spirv-opt")
+        .args(["--split-combined-image-sampler", "-", "-o", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("spawn spirv-opt: {} (is it on PATH?)", e))?;
+
+    child
+        .stdin
+        .take()
+        .expect("stdin piped")
+        .write_all(spirv)
+        .map_err(|e| format!("write stdin: {}", e))?;
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("wait spirv-opt: {}", e))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "spirv-opt exit {:?}: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(output.stdout)
 }
 
 fn compile(
