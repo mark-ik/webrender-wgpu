@@ -31,11 +31,22 @@ pub(super) fn shader_stem(base: &str, features: &[&str]) -> String {
     }
 }
 
-/// Reads a committed `.spv` artifact for the given stem + stage.
-/// Path is `{webrender crate manifest dir}/res/spirv/{stem}.{stage}.spv`.
-/// Works for dev/test builds; production deployments should use
-/// `include_bytes!` via a build.rs-generated lookup table (TODO).
+// build.rs walks res/spirv/*.spv and emits this lookup module with each
+// blob baked in via include_bytes!. No runtime fs needed for the
+// committed corpus.
+mod spirv_blobs {
+    include!(concat!(env!("OUT_DIR"), "/spirv_blobs.rs"));
+}
+
+/// Returns the SPIR-V bytes for `(stem, stage)`. First tries the build.rs
+/// generated lookup table (committed corpus, baked in via include_bytes!);
+/// falls back to fs::read for shaders not in the corpus (e.g. test
+/// fixtures generated separately). Returns `Err(NotFound)` if neither
+/// source has the artifact.
 pub(super) fn load_committed_spv(stem: &str, stage: &str) -> Result<Vec<u8>, std::io::Error> {
+    if let Some(bytes) = spirv_blobs::lookup(stem, stage) {
+        return Ok(bytes.to_vec());
+    }
     let mut path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.push("res");
     path.push("spirv");
