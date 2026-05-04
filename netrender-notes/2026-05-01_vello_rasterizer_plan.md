@@ -1133,10 +1133,24 @@ plan's Phase X.
   stays embedder-side per §4.4 (parley for embedders without an
   existing layout layer). Bigger lift; needs glyph-run plumbing
   in the netrender Scene API.
-- ⏳ **Phase 11'**: borders / box shadows / line decorations as
-  native vello primitives. Today box-shadow goes through the
-  brush_blur render-graph task (which still works). Phase 11'
-  replaces strokes + blurred fills with vello-native primitives.
+- ✅ **Phase 11'**: borders / box shadows / line decorations.
+  Three slices delivered:
+  - 11a' rect / rounded-rect strokes (`SceneStroke` +
+    `push_stroke_*` helpers, vello-native `Scene::stroke`).
+    Receipt: `p11prime_a_strokes`.
+  - 11b' arbitrary path fills + strokes (`SceneShape` with
+    `ScenePath` of `PathOp` enum, optional `fill_color` + optional
+    `stroke`). Receipt: `p11prime_b_paths`.
+  - 11c' box-shadow ergonomic helper
+    (`Renderer::build_box_shadow_mask`). Wraps the
+    `cs_clip_rectangle` mask + separable `brush_blur` render-graph
+    chain into a single call; caller composites the resulting
+    `ImageKey` via `push_image_full_rounded` with a tinted alpha.
+    Receipt: `p11prime_c_box_shadow`. The render-graph filter
+    callbacks (`clip_rectangle_callback`, `blur_pass_callback`,
+    `make_bilinear_sampler`) were promoted from
+    `tests/common/mod.rs` to the public `netrender::filter`
+    module to support this helper.
 - ⏳ **Phase 12'**: compositing correctness — filter chains, nested
   isolation, group opacity, backdrop filters. Vello does the
   in-picture parts; render-task graph does between-picture parts.

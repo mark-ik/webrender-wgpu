@@ -26,6 +26,7 @@
     mismatched_lifetime_syntaxes
 )]
 
+pub mod filter;
 pub mod render_graph;
 mod renderer;
 pub mod scene;

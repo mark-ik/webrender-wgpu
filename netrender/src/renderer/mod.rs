@@ -79,6 +79,85 @@ impl Renderer {
         self.tile_cache.as_ref()
     }
 
+    /// Phase 11c' — build a blurred rounded-rect coverage texture
+    /// suitable for use as a CSS-style box-shadow mask, register
+    /// it under `key`, and make it addressable from subsequent
+    /// `render_vello` calls.
+    ///
+    /// The caller composites by referencing `key` in a
+    /// [`Scene::push_image_full`] (or `_rounded`) call with a
+    /// chromatic tint matching the desired shadow color. The
+    /// shadow's "spread" is encoded via the size of `bounds`; its
+    /// "blur" is encoded via the blur step (typically `1 / DIM`
+    /// for a 5-tap effective radius); its "offset" is encoded by
+    /// where the user composites the mask.
+    ///
+    /// # Internals
+    ///
+    /// Runs a 3-task render graph:
+    ///   1. `cs_clip_rectangle` writes a coverage mask matching
+    ///      `bounds` + `corner_radius` into a fresh
+    ///      `Rgba8Unorm` `dim × dim` texture.
+    ///   2. Horizontal `brush_blur` pass with `step = (blur_step, 0)`.
+    ///   3. Vertical `brush_blur` pass with `step = (0, blur_step)`.
+    ///
+    /// The final texture is registered with the vello rasterizer
+    /// via `insert_image_vello`.
+    ///
+    /// # Panics
+    ///
+    /// If `enable_vello` was false at construction.
+    pub fn build_box_shadow_mask(
+        &self,
+        key: ImageKey,
+        dim: u32,
+        bounds: [f32; 4],
+        corner_radius: f32,
+        blur_step: f32,
+    ) {
+        use crate::filter::{blur_pass_callback, clip_rectangle_callback, make_bilinear_sampler};
+        use crate::render_graph::{RenderGraph, Task, TaskId};
+
+        let device = self.wgpu_device.core.device.clone();
+        let queue = self.wgpu_device.core.queue.clone();
+
+        let mask_format = wgpu::TextureFormat::Rgba8Unorm;
+        let clip_pipe = self.wgpu_device.ensure_clip_rectangle(mask_format, true);
+        let blur_pipe = self.wgpu_device.ensure_brush_blur(mask_format);
+        let sampler = make_bilinear_sampler(&device);
+
+        const MASK: TaskId = 1;
+        const BLUR_H: TaskId = 2;
+        const BLUR_V: TaskId = 3;
+
+        let mut graph = RenderGraph::new();
+        graph.push(Task {
+            id: MASK,
+            extent: wgpu::Extent3d { width: dim, height: dim, depth_or_array_layers: 1 },
+            format: mask_format,
+            inputs: vec![],
+            encode: clip_rectangle_callback(clip_pipe, bounds, corner_radius),
+        });
+        graph.push(Task {
+            id: BLUR_H,
+            extent: wgpu::Extent3d { width: dim, height: dim, depth_or_array_layers: 1 },
+            format: mask_format,
+            inputs: vec![MASK],
+            encode: blur_pass_callback(blur_pipe.clone(), Arc::clone(&sampler), blur_step, 0.0),
+        });
+        graph.push(Task {
+            id: BLUR_V,
+            extent: wgpu::Extent3d { width: dim, height: dim, depth_or_array_layers: 1 },
+            format: mask_format,
+            inputs: vec![BLUR_H],
+            encode: blur_pass_callback(blur_pipe, Arc::clone(&sampler), 0.0, blur_step),
+        });
+
+        let mut outputs = graph.execute(&device, &queue, std::collections::HashMap::new());
+        let blurred = outputs.remove(&BLUR_V).expect("BLUR_V output");
+        self.insert_image_vello(key, Arc::new(blurred));
+    }
+
     /// Register a GPU-resident wgpu texture as an image source for
     /// subsequent `render_vello` calls under the given `ImageKey`.
     /// Render-graph outputs (blur results, mask coverage textures,
