@@ -50,7 +50,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use vello::kurbo::{Affine, Point, Rect};
+use vello::kurbo::{Affine, Point, Rect, RoundedRect, RoundedRectRadii};
 use vello::peniko::{
     self, BlendMode, Blob, Color, ColorStop, Compose, Fill, Gradient, ImageAlphaType, ImageBrush,
     ImageData, ImageFormat, Mix,
@@ -144,23 +144,56 @@ fn emit_rect(vscene: &mut vello::Scene, rect: &SceneRect, transforms: &[Transfor
 
     let needs_clip = rect.clip_rect != NO_CLIP;
     if needs_clip {
-        let clip = Rect::new(
-            rect.clip_rect[0] as f64,
-            rect.clip_rect[1] as f64,
-            rect.clip_rect[2] as f64,
-            rect.clip_rect[3] as f64,
+        push_clip_layer(vscene, rect.clip_rect, rect.clip_corner_radii);
+    }
+    vscene.fill(Fill::NonZero, affine, color, None, &shape);
+    if needs_clip {
+        vscene.pop_layer();
+    }
+}
+
+/// Push a clip layer for the given clip rect + per-corner radii.
+/// Zero radii produce a sharp axis-aligned rect clip (legacy behavior);
+/// non-zero radii produce a `kurbo::RoundedRect` clip (Phase 9'). The
+/// caller is responsible for matching this with `vscene.pop_layer()`.
+fn push_clip_layer(vscene: &mut vello::Scene, clip_rect: [f32; 4], radii: [f32; 4]) {
+    let rect = Rect::new(
+        clip_rect[0] as f64,
+        clip_rect[1] as f64,
+        clip_rect[2] as f64,
+        clip_rect[3] as f64,
+    );
+    let any_radius = radii.iter().any(|&r| r > 0.0);
+    if any_radius {
+        // RoundedRectRadii::new takes (top_leading, top_trailing,
+        // bottom_trailing, bottom_leading) which under our Y-down screen
+        // coordinates maps to (top_left, top_right, bottom_right,
+        // bottom_left) — the same order our SceneRect.clip_corner_radii
+        // documents.
+        let rrect = RoundedRect::from_rect(
+            rect,
+            RoundedRectRadii::new(
+                radii[0] as f64,
+                radii[1] as f64,
+                radii[2] as f64,
+                radii[3] as f64,
+            ),
         );
         vscene.push_layer(
             Fill::NonZero,
             peniko::Mix::Normal,
             1.0,
             Affine::IDENTITY,
-            &clip,
+            &rrect,
         );
-    }
-    vscene.fill(Fill::NonZero, affine, color, None, &shape);
-    if needs_clip {
-        vscene.pop_layer();
+    } else {
+        vscene.push_layer(
+            Fill::NonZero,
+            peniko::Mix::Normal,
+            1.0,
+            Affine::IDENTITY,
+            &rect,
+        );
     }
 }
 
@@ -233,19 +266,7 @@ fn emit_gradient(
 
     let needs_clip = grad.clip_rect != NO_CLIP;
     if needs_clip {
-        let clip = Rect::new(
-            grad.clip_rect[0] as f64,
-            grad.clip_rect[1] as f64,
-            grad.clip_rect[2] as f64,
-            grad.clip_rect[3] as f64,
-        );
-        vscene.push_layer(
-            Fill::NonZero,
-            peniko::Mix::Normal,
-            1.0,
-            Affine::IDENTITY,
-            &clip,
-        );
+        push_clip_layer(vscene, grad.clip_rect, grad.clip_corner_radii);
     }
     vscene.fill(Fill::NonZero, world, &peniko_grad, brush_xform, &target);
     if needs_clip {
@@ -277,19 +298,7 @@ fn emit_image(
 
     let needs_clip = image.clip_rect != NO_CLIP;
     if needs_clip {
-        let clip = Rect::new(
-            image.clip_rect[0] as f64,
-            image.clip_rect[1] as f64,
-            image.clip_rect[2] as f64,
-            image.clip_rect[3] as f64,
-        );
-        vscene.push_layer(
-            Fill::NonZero,
-            Mix::Normal,
-            1.0,
-            Affine::IDENTITY,
-            &clip,
-        );
+        push_clip_layer(vscene, image.clip_rect, image.clip_corner_radii);
     }
 
     if let Some(chromatic_color) = chromatic {

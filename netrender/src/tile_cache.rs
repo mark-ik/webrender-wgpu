@@ -211,6 +211,9 @@ fn hash_rect(h: &mut DefaultHasher, r: &SceneRect) {
     for c in r.clip_rect {
         h.write_u32(c.to_bits());
     }
+    for c in r.clip_corner_radii {
+        h.write_u32(c.to_bits());
+    }
 }
 
 fn hash_image(h: &mut DefaultHasher, i: &SceneImage) {
@@ -227,6 +230,9 @@ fn hash_image(h: &mut DefaultHasher, i: &SceneImage) {
     h.write_u64(i.key);
     h.write_u32(i.transform_id);
     for c in i.clip_rect {
+        h.write_u32(c.to_bits());
+    }
+    for c in i.clip_corner_radii {
         h.write_u32(c.to_bits());
     }
 }
@@ -250,6 +256,9 @@ fn hash_gradient(h: &mut DefaultHasher, g: &SceneGradient) {
     }
     h.write_u32(g.transform_id);
     for c in g.clip_rect {
+        h.write_u32(c.to_bits());
+    }
+    for c in g.clip_corner_radii {
         h.write_u32(c.to_bits());
     }
 }

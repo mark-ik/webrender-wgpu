@@ -126,10 +126,21 @@ pub struct SceneRect {
     /// Axis-aligned clip rectangle in device pixels `[x0, y0, x1, y1]`.
     /// `[NEG_INFINITY, NEG_INFINITY, INFINITY, INFINITY]` disables clipping.
     pub clip_rect: [f32; 4],
+    /// Per-corner radii in device pixels: `[top_left, top_right,
+    /// bottom_right, bottom_left]`. All zeros = sharp axis-aligned
+    /// clip (default). Non-zero radii produce a rounded-rect clip;
+    /// the clip is generated via vello `push_layer` with a
+    /// `kurbo::RoundedRect` shape (Phase 9').
+    pub clip_corner_radii: [f32; 4],
 }
 
 pub const NO_CLIP: [f32; 4] =
     [f32::NEG_INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::INFINITY];
+
+/// Sharp / axis-aligned clip — all four corner radii at zero. Used as
+/// the default `clip_corner_radii` value in Scene helper methods that
+/// don't accept rounded-rect parameters.
+pub const SHARP_CLIP: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
 
 /// Opaque identifier for a cached GPU texture. Caller-assigned; any
 /// unique `u64` works (hash of path, monotonic counter, etc.).
@@ -200,6 +211,8 @@ pub struct SceneGradient {
     pub transform_id: u32,
     /// Device-space axis-aligned clip; `NO_CLIP` disables clipping.
     pub clip_rect: [f32; 4],
+    /// Per-corner clip radii (see `SceneRect::clip_corner_radii`).
+    pub clip_corner_radii: [f32; 4],
 }
 
 /// One textured rectangle. UV corners map the image onto the rect;
@@ -223,6 +236,8 @@ pub struct SceneImage {
     pub transform_id: u32,
     /// Device-space axis-aligned clip; `NO_CLIP` disables clipping.
     pub clip_rect: [f32; 4],
+    /// Per-corner clip radii (see `SceneRect::clip_corner_radii`).
+    pub clip_corner_radii: [f32; 4],
 }
 
 /// A flat list of primitives to be rendered into one frame.
@@ -285,6 +300,7 @@ impl Scene {
             color,
             transform_id: 0,
             clip_rect: NO_CLIP,
+            clip_corner_radii: SHARP_CLIP,
         });
     }
 
@@ -300,10 +316,12 @@ impl Scene {
             color,
             transform_id,
             clip_rect: NO_CLIP,
+            clip_corner_radii: SHARP_CLIP,
         });
     }
 
-    /// Append a rect with an explicit transform and a device-space clip.
+    /// Append a rect with an explicit transform and a device-space
+    /// axis-aligned clip.
     pub fn push_rect_clipped(
         &mut self,
         x0: f32, y0: f32, x1: f32, y1: f32,
@@ -316,6 +334,28 @@ impl Scene {
             color,
             transform_id,
             clip_rect,
+            clip_corner_radii: SHARP_CLIP,
+        });
+    }
+
+    /// Append a rect with a rounded-rect clip (Phase 9'). `clip_corner_radii`
+    /// is `[top_left, top_right, bottom_right, bottom_left]` in device
+    /// pixels. All-zero radii degenerate to the same result as
+    /// `push_rect_clipped` (a sharp axis-aligned clip).
+    pub fn push_rect_clipped_rounded(
+        &mut self,
+        x0: f32, y0: f32, x1: f32, y1: f32,
+        color: [f32; 4],
+        transform_id: u32,
+        clip_rect: [f32; 4],
+        clip_corner_radii: [f32; 4],
+    ) {
+        self.rects.push(SceneRect {
+            x0, y0, x1, y1,
+            color,
+            transform_id,
+            clip_rect,
+            clip_corner_radii,
         });
     }
 
@@ -345,6 +385,7 @@ impl Scene {
             key,
             transform_id: 0,
             clip_rect: NO_CLIP,
+            clip_corner_radii: SHARP_CLIP,
         });
     }
 
@@ -491,6 +532,31 @@ impl Scene {
             key,
             transform_id,
             clip_rect,
+            clip_corner_radii: SHARP_CLIP,
+        });
+    }
+
+    /// Append an image rect with full control + rounded-rect clip
+    /// (Phase 9'). See `push_rect_clipped_rounded` for the radii
+    /// convention.
+    pub fn push_image_full_rounded(
+        &mut self,
+        x0: f32, y0: f32, x1: f32, y1: f32,
+        uv: [f32; 4],
+        color: [f32; 4],
+        key: ImageKey,
+        transform_id: u32,
+        clip_rect: [f32; 4],
+        clip_corner_radii: [f32; 4],
+    ) {
+        self.images.push(SceneImage {
+            x0, y0, x1, y1,
+            uv,
+            color,
+            key,
+            transform_id,
+            clip_rect,
+            clip_corner_radii,
         });
     }
 }
@@ -526,5 +592,6 @@ fn two_stop_gradient(
         ],
         transform_id,
         clip_rect,
+        clip_corner_radii: SHARP_CLIP,
     }
 }
