@@ -10,8 +10,10 @@
 //! each method body needs.
 
 use api::{ImageBufferKind, ImageFormat};
+use api::units::{DeviceIntSize, FramebufferIntRect, FramebufferIntSize};
 use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 use super::super::types::{TextureFilter, VertexDescriptor};
 
@@ -123,7 +125,55 @@ impl<T> WgpuVbo<T> {
 pub struct WgpuRenderTargetHandle;
 
 pub struct WgpuReadTarget;
-pub struct WgpuDrawTarget;
+
+/// Draw destination for a render pass (Option II of the FBO design — the
+/// view flows through the enum directly rather than via
+/// `WgpuRenderTargetHandle` indirection).
+///
+/// Each variant carries `Arc<wgpu::TextureView>` so that constructing /
+/// passing a `WgpuDrawTarget` is cheap (just an Arc bump). The renderer
+/// is expected to construct these from a `WgpuTexture`'s view at the
+/// point where it'd otherwise call `bind_draw_target`.
+#[derive(Clone)]
+pub enum WgpuDrawTarget {
+    /// Target the device's default surface frame (when one exists).
+    Default {
+        rect: FramebufferIntRect,
+        total_size: FramebufferIntSize,
+    },
+    /// Target a renderable texture.
+    Texture {
+        view: Arc<wgpu::TextureView>,
+        dimensions: DeviceIntSize,
+        with_depth: bool,
+    },
+    /// Target an externally-supplied texture view (e.g. host-shared).
+    External {
+        view: Arc<wgpu::TextureView>,
+        size: FramebufferIntSize,
+    },
+}
+
+impl WgpuDrawTarget {
+    pub fn dimensions(&self) -> DeviceIntSize {
+        match self {
+            WgpuDrawTarget::Default { total_size, .. } => total_size.cast_unit(),
+            WgpuDrawTarget::Texture { dimensions, .. } => *dimensions,
+            WgpuDrawTarget::External { size, .. } => size.cast_unit(),
+        }
+    }
+
+    pub fn view(&self) -> &wgpu::TextureView {
+        match self {
+            WgpuDrawTarget::Texture { view, .. }
+            | WgpuDrawTarget::External { view, .. } => view,
+            WgpuDrawTarget::Default { .. } => {
+                panic!("WgpuDrawTarget::Default has no inline view; surface acquisition is P5+ work")
+            }
+        }
+    }
+}
+
 pub struct WgpuExternalTexture;
 pub struct WgpuUploadPboPool;
 

@@ -53,8 +53,8 @@ pub use vertex_layout::WgpuVertexLayouts;
 pub struct WgpuDevice {
     instance: Arc<wgpu::Instance>,
     adapter: Arc<wgpu::Adapter>,
-    device: Arc<wgpu::Device>,
-    queue: Arc<wgpu::Queue>,
+    pub(super) device: Arc<wgpu::Device>,
+    pub(super) queue: Arc<wgpu::Queue>,
     /// Optional surface for windowed targets. Headless renderers (offscreen
     /// reftests, capture replay) construct without one.
     surface: Option<wgpu::Surface<'static>>,
@@ -68,6 +68,26 @@ pub struct WgpuDevice {
     capabilities: Capabilities,
     /// Selected upload method (default Immediate; queue.write_texture).
     upload_method: UploadMethod,
+
+    // ---- P5 per-frame state ----
+    /// Active command encoder for the current frame; created in
+    /// `begin_frame`, submitted in `end_frame`.
+    pub(super) frame_encoder: Option<wgpu::CommandEncoder>,
+    /// Current draw target (set by `bind_draw_target`). Render passes are
+    /// opened against this view.
+    pub(super) current_target: Option<types::WgpuDrawTarget>,
+    /// Pending clear color applied as `LoadOp::Clear` on the next render
+    /// pass open; consumed (set to `None`) on first draw.
+    pub(super) pending_clear: Option<wgpu::Color>,
+    /// Currently bound pipeline (from `bind_program`).
+    pub(super) bound_pipeline: Option<wgpu::RenderPipeline>,
+    /// Uniform buffer of the currently bound program (for bind group
+    /// construction at draw time).
+    pub(super) bound_uniform_buffer: Option<wgpu::Buffer>,
+    /// Buffers from the currently bound VAO.
+    pub(super) bound_vertex_buffer: Option<wgpu::Buffer>,
+    pub(super) bound_instance_buffer: Option<wgpu::Buffer>,
+    pub(super) bound_index_buffer: Option<wgpu::Buffer>,
 }
 
 impl WgpuDevice {
@@ -92,6 +112,14 @@ impl WgpuDevice {
             frame_id: GpuFrameId::new(0),
             capabilities,
             upload_method: UploadMethod::Immediate,
+            frame_encoder: None,
+            current_target: None,
+            pending_clear: None,
+            bound_pipeline: None,
+            bound_uniform_buffer: None,
+            bound_vertex_buffer: None,
+            bound_instance_buffer: None,
+            bound_index_buffer: None,
         }
     }
 
@@ -180,13 +208,33 @@ fn derive_capabilities(adapter: &wgpu::Adapter, _device: &wgpu::Device) -> Capab
 impl GpuFrame for WgpuDevice {
     fn begin_frame(&mut self) -> GpuFrameId {
         self.frame_id = self.frame_id + 1;
+        // Open a fresh per-frame command encoder. All copies, render
+        // passes, and other GPU work for this frame land here; submitted
+        // in `end_frame`. Replaces the per-call encoder pattern in
+        // copy_texture_*/upload_texture_immediate (those still use
+        // self.queue.write_* directly which is fine — those don't need
+        // an encoder).
+        self.frame_encoder = Some(
+            self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("WgpuDevice frame encoder"),
+            }),
+        );
         self.frame_id
     }
 
     fn end_frame(&mut self) {
-        // No-op for now. Per-frame command encoder lifecycle (when we have
-        // one) ends here — submit any pending work, present the surface
-        // frame if we have one. P5 wires this up.
+        // Submit accumulated frame work. Clears bound state for the next
+        // frame.
+        if let Some(encoder) = self.frame_encoder.take() {
+            self.queue.submit([encoder.finish()]);
+        }
+        self.current_target = None;
+        self.pending_clear = None;
+        self.bound_pipeline = None;
+        self.bound_uniform_buffer = None;
+        self.bound_vertex_buffer = None;
+        self.bound_instance_buffer = None;
+        self.bound_index_buffer = None;
     }
 
     fn reset_state(&mut self) {
