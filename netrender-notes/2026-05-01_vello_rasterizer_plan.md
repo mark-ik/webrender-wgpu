@@ -1117,13 +1117,18 @@ plan's Phase X.
 - ✅ **Phase 8'**: gradients. `p8prime_vello_gradients` covers
   linear / circular-radial / elliptical-radial / conic with
   N-stop ramps.
-- ⏳ **Phase 9'**: path-shaped clips (arbitrary `kurbo::BezPath`
-  in `push_layer`). Currently the existing rounded-rect mask
-  tests (`p9a/b/c`) work via the render-graph clip_rectangle
-  pipeline + `insert_image_vello` — the mask becomes a tinted
-  image rather than a vello-native path clip. Phase 9' replaces
-  that indirection with native vello path clips. Smallest pending
-  phase.
+- 🚧 **Phase 9'**: path-shaped clips. **Rounded-rect clips
+  delivered** (2026-05-04): every Scene primitive carries
+  `clip_corner_radii: [f32; 4]` in addition to `clip_rect`;
+  non-zero radii produce a `kurbo::RoundedRect` clip via vello
+  `push_layer`. Receipt at `p9prime_rounded_clip` covers rect /
+  image / gradient. Existing render-graph mask path (p9a/b/c)
+  unchanged — both shapes coexist; the native-clip path drops a
+  render-graph hop for the common CSS border-radius case.
+  **Arbitrary BezPath clips deferred** to a later slice; not
+  blocking for graphshell-shaped UI (rounded-rect is the 95%
+  case). Lift if/when SVG `clipPath` or non-rectangular UI
+  shapes show up in real consumer scenes.
 - ⏳ **Phase 10'**: text via `Scene::draw_glyphs` + skrifa. Layout
   stays embedder-side per §4.4 (parley for embedders without an
   existing layout layer). Bigger lift; needs glyph-run plumbing
