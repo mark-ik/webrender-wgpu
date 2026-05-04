@@ -297,6 +297,19 @@ fn filter_scene_to_tile(scene: &Scene, tile_rect: [f32; 4]) -> Scene {
             filtered.images.push(image.clone());
         }
     }
+    for stroke in &scene.strokes {
+        // Inflate by half stroke width so strokes whose pen reaches
+        // a tile aren't filtered out when their path bounds don't.
+        let half = stroke.stroke_width * 0.5;
+        let aabb = world_aabb(
+            [stroke.x0 - half, stroke.y0 - half, stroke.x1 + half, stroke.y1 + half],
+            stroke.transform_id,
+            scene,
+        );
+        if aabb_intersects(aabb, tile_rect) {
+            filtered.strokes.push(stroke.clone());
+        }
+    }
 
     filtered
 }

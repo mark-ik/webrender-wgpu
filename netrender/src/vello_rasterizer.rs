@@ -50,14 +50,15 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use vello::kurbo::{Affine, Point, Rect, RoundedRect, RoundedRectRadii};
+use vello::kurbo::{Affine, Point, Rect, RoundedRect, RoundedRectRadii, Stroke};
 use vello::peniko::{
     self, BlendMode, Blob, Color, ColorStop, Compose, Fill, Gradient, ImageAlphaType, ImageBrush,
     ImageData, ImageFormat, Mix,
 };
 
 use crate::scene::{
-    GradientKind, ImageKey, NO_CLIP, Scene, SceneGradient, SceneImage, SceneRect, Transform,
+    GradientKind, ImageKey, NO_CLIP, Scene, SceneGradient, SceneImage, SceneRect, SceneStroke,
+    Transform,
 };
 
 /// Translate a netrender [`Scene`] into a [`vello::Scene`] suitable
@@ -95,6 +96,9 @@ pub fn scene_to_vello_with_overrides(
 
     for rect in &scene.rects {
         emit_rect(&mut vscene, rect, &scene.transforms);
+    }
+    for stroke in &scene.strokes {
+        emit_stroke(&mut vscene, stroke, &scene.transforms);
     }
     for gradient in &scene.gradients {
         emit_gradient(&mut vscene, gradient, &scene.transforms);
@@ -147,6 +151,43 @@ fn emit_rect(vscene: &mut vello::Scene, rect: &SceneRect, transforms: &[Transfor
         push_clip_layer(vscene, rect.clip_rect, rect.clip_corner_radii);
     }
     vscene.fill(Fill::NonZero, affine, color, None, &shape);
+    if needs_clip {
+        vscene.pop_layer();
+    }
+}
+
+fn emit_stroke(vscene: &mut vello::Scene, stroke: &SceneStroke, transforms: &[Transform]) {
+    let affine = transform_to_affine(&transforms[stroke.transform_id as usize]);
+    let rect = Rect::new(
+        stroke.x0 as f64,
+        stroke.y0 as f64,
+        stroke.x1 as f64,
+        stroke.y1 as f64,
+    );
+    let color = unpremultiply_color(stroke.color);
+    let style = Stroke::new(stroke.stroke_width as f64);
+
+    let needs_clip = stroke.clip_rect != NO_CLIP;
+    if needs_clip {
+        push_clip_layer(vscene, stroke.clip_rect, stroke.clip_corner_radii);
+    }
+
+    let any_radii = stroke.stroke_corner_radii.iter().any(|&r| r > 0.0);
+    if any_radii {
+        let rrect = RoundedRect::from_rect(
+            rect,
+            RoundedRectRadii::new(
+                stroke.stroke_corner_radii[0] as f64,
+                stroke.stroke_corner_radii[1] as f64,
+                stroke.stroke_corner_radii[2] as f64,
+                stroke.stroke_corner_radii[3] as f64,
+            ),
+        );
+        vscene.stroke(&style, affine, color, None, &rrect);
+    } else {
+        vscene.stroke(&style, affine, color, None, &rect);
+    }
+
     if needs_clip {
         vscene.pop_layer();
     }

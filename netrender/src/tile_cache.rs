@@ -30,7 +30,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
 use std::sync::Arc;
 
-use crate::scene::{Scene, SceneGradient, SceneImage, SceneRect, Transform};
+use crate::scene::{Scene, SceneGradient, SceneImage, SceneRect, SceneStroke, Transform};
 
 /// Integer (col, row) coordinate of a tile within the cache grid.
 /// Tile (cx, cy) covers world rect `(cx*T, cy*T, (cx+1)*T, (cy+1)*T)`.
@@ -195,6 +195,12 @@ fn hash_tile_deps(scene: &Scene, tile_rect: [f32; 4]) -> u64 {
             hash_gradient(&mut hasher, grad);
         }
     }
+    for stroke in &scene.strokes {
+        let aabb = world_aabb_stroke(stroke, scene);
+        if aabb_intersects(aabb, tile_rect) {
+            hash_stroke(&mut hasher, stroke);
+        }
+    }
 
     hasher.finish()
 }
@@ -233,6 +239,27 @@ fn hash_image(h: &mut DefaultHasher, i: &SceneImage) {
         h.write_u32(c.to_bits());
     }
     for c in i.clip_corner_radii {
+        h.write_u32(c.to_bits());
+    }
+}
+
+fn hash_stroke(h: &mut DefaultHasher, s: &SceneStroke) {
+    h.write_u32(s.x0.to_bits());
+    h.write_u32(s.y0.to_bits());
+    h.write_u32(s.x1.to_bits());
+    h.write_u32(s.y1.to_bits());
+    for c in s.color {
+        h.write_u32(c.to_bits());
+    }
+    h.write_u32(s.stroke_width.to_bits());
+    for c in s.stroke_corner_radii {
+        h.write_u32(c.to_bits());
+    }
+    h.write_u32(s.transform_id);
+    for c in s.clip_rect {
+        h.write_u32(c.to_bits());
+    }
+    for c in s.clip_corner_radii {
         h.write_u32(c.to_bits());
     }
 }
@@ -294,6 +321,16 @@ fn world_aabb_image(image: &SceneImage, scene: &Scene) -> [f32; 4] {
 
 fn world_aabb_gradient(g: &SceneGradient, scene: &Scene) -> [f32; 4] {
     world_aabb([g.x0, g.y0, g.x1, g.y1], g.transform_id, scene)
+}
+
+fn world_aabb_stroke(s: &SceneStroke, scene: &Scene) -> [f32; 4] {
+    // Stroke extends `width / 2` outward from the path bounds.
+    // Inflate the AABB by half the stroke width before transforming
+    // so the tile filter doesn't miss tiles the stroke pen reaches
+    // into.
+    let half = s.stroke_width * 0.5;
+    let inflated = [s.x0 - half, s.y0 - half, s.x1 + half, s.y1 + half];
+    world_aabb(inflated, s.transform_id, scene)
 }
 
 /// AABB of `[x0, y0, x1, y1]` after applying the 2-D affine portion of

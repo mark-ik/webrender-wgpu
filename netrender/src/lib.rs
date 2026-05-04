@@ -38,7 +38,7 @@ pub use crate::renderer::init::{NetrenderOptions, create_netrender_instance};
 pub use crate::renderer::{ColorLoad, Renderer, RendererError};
 pub use crate::scene::{
     GradientKind, GradientStop, ImageData, ImageKey, NO_CLIP, SHARP_CLIP, Scene, SceneGradient,
-    SceneImage, SceneRect, Transform,
+    SceneImage, SceneRect, SceneStroke, Transform,
 };
 pub use crate::tile_cache::{TileCache, TileCoord};
 

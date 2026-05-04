@@ -240,6 +240,41 @@ pub struct SceneImage {
     pub clip_corner_radii: [f32; 4],
 }
 
+/// Phase 11' stroked rect / rounded-rect primitive — for borders,
+/// edge outlines, and other line-decoration use cases. Strokes are
+/// centered on the path; the painted region extends `stroke_width / 2`
+/// inside and outside the path.
+///
+/// `x0/y0/x1/y1` define the path being stroked (the geometric center
+/// of the resulting line). `stroke_corner_radii` rounds the path
+/// itself (CSS `border-radius` behaviour). `clip_rect` /
+/// `clip_corner_radii` clip the stroke output the same way they do
+/// for fills — orthogonal to the path geometry.
+#[derive(Debug, Clone)]
+pub struct SceneStroke {
+    /// Local-space rect bounds of the stroked path.
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+    /// Premultiplied RGBA stroke color.
+    pub color: [f32; 4],
+    /// Stroke width in device pixels (path is the geometric center;
+    /// painted region extends ±width/2).
+    pub stroke_width: f32,
+    /// Per-corner radii of the stroked path itself, in device pixels:
+    /// `[top_left, top_right, bottom_right, bottom_left]`. All zeros
+    /// produce a sharp rectangular stroke; non-zero radii produce a
+    /// rounded-rect stroke (CSS `border-radius`).
+    pub stroke_corner_radii: [f32; 4],
+    /// Index into `Scene::transforms`; `0` = identity.
+    pub transform_id: u32,
+    /// Device-space axis-aligned clip; `NO_CLIP` disables clipping.
+    pub clip_rect: [f32; 4],
+    /// Per-corner clip radii (see `SceneRect::clip_corner_radii`).
+    pub clip_corner_radii: [f32; 4],
+}
+
 /// A flat list of primitives to be rendered into one frame.
 ///
 /// Phase 3 adds `transforms` (a palette of 4×4 matrices) and per-rect
@@ -264,6 +299,11 @@ pub struct Scene {
     /// gradient families into one list — push order is preserved
     /// across kinds, including within-frame interleaving.
     pub gradients: Vec<SceneGradient>,
+    /// Phase 11' stroked-rect / rounded-rect primitives — borders,
+    /// edge outlines, line decorations. Painter order: strokes paint
+    /// after rects but before gradients/images, matching natural
+    /// CSS render order (background → border → contents).
+    pub strokes: Vec<SceneStroke>,
     /// Transform palette. Index 0 is always identity.
     pub transforms: Vec<Transform>,
     /// CPU-side pixel data keyed by `ImageKey`. On first `prepare()`,
@@ -280,6 +320,7 @@ impl Scene {
             rects: Vec::new(),
             images: Vec::new(),
             gradients: Vec::new(),
+            strokes: Vec::new(),
             transforms: vec![Transform::IDENTITY], // index 0 = identity
             image_sources: HashMap::new(),
         }
@@ -533,6 +574,69 @@ impl Scene {
             transform_id,
             clip_rect,
             clip_corner_radii: SHARP_CLIP,
+        });
+    }
+
+    /// Phase 11': append a sharp axis-aligned stroked rect (border).
+    pub fn push_stroke(
+        &mut self,
+        x0: f32, y0: f32, x1: f32, y1: f32,
+        color: [f32; 4],
+        stroke_width: f32,
+    ) {
+        self.strokes.push(SceneStroke {
+            x0, y0, x1, y1,
+            color,
+            stroke_width,
+            stroke_corner_radii: SHARP_CLIP,
+            transform_id: 0,
+            clip_rect: NO_CLIP,
+            clip_corner_radii: SHARP_CLIP,
+        });
+    }
+
+    /// Phase 11': append a stroked rounded-rect (CSS border with
+    /// `border-radius`). `stroke_corner_radii` rounds the path
+    /// itself, in `[top_left, top_right, bottom_right, bottom_left]`
+    /// order. All-zero radii produce a sharp rectangular stroke.
+    pub fn push_stroke_rounded(
+        &mut self,
+        x0: f32, y0: f32, x1: f32, y1: f32,
+        color: [f32; 4],
+        stroke_width: f32,
+        stroke_corner_radii: [f32; 4],
+    ) {
+        self.strokes.push(SceneStroke {
+            x0, y0, x1, y1,
+            color,
+            stroke_width,
+            stroke_corner_radii,
+            transform_id: 0,
+            clip_rect: NO_CLIP,
+            clip_corner_radii: SHARP_CLIP,
+        });
+    }
+
+    /// Phase 11': append a stroked rect/rounded-rect with full
+    /// control over transform, clip, and clip corner radii.
+    pub fn push_stroke_full(
+        &mut self,
+        x0: f32, y0: f32, x1: f32, y1: f32,
+        color: [f32; 4],
+        stroke_width: f32,
+        stroke_corner_radii: [f32; 4],
+        transform_id: u32,
+        clip_rect: [f32; 4],
+        clip_corner_radii: [f32; 4],
+    ) {
+        self.strokes.push(SceneStroke {
+            x0, y0, x1, y1,
+            color,
+            stroke_width,
+            stroke_corner_radii,
+            transform_id,
+            clip_rect,
+            clip_corner_radii,
         });
     }
 
