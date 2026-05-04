@@ -27,7 +27,7 @@ use api::{ImageBufferKind, ImageFormat};
 use api::units::DeviceIntSize;
 use std::sync::Arc;
 use webrender::{
-    GpuFrame, GpuPass, GpuResources, GpuShaders, RenderTargetInfo, TextureFilter,
+    BlendMode, GpuFrame, GpuPass, GpuResources, GpuShaders, RenderTargetInfo, TextureFilter,
     VertexAttribute, VertexDescriptor, VertexUsageHint, WgpuDevice, WgpuDrawTarget,
     WgpuTexture,
 };
@@ -215,4 +215,111 @@ fn ps_clear_renders_clear_color_into_texture() {
     assert_eq!(center[1], 0, "G channel: {:?}", center);
     assert_eq!(center[2], 255, "R channel (red expected): {:?}", center);
     assert_eq!(center[3], 255, "A channel: {:?}", center);
+}
+
+/// Verifies the pipeline variant cache: link_program seeds the DEFAULT
+/// variant; a draw with blend enabled triggers `resolve_pipeline_variant`
+/// to build + cache a second variant for the (PremultipliedAlpha, full
+/// color write) state. The cache should grow from 1 → 2 entries.
+///
+/// This is the smallest test that exercises the pipeline-state cluster
+/// (cluster #1) end-to-end: the state-recording methods (`set_blend`,
+/// `set_blend_mode`) propagate through to the variant key, and a
+/// cache-miss correctly triggers a new pipeline build.
+#[test]
+fn blend_state_change_caches_new_pipeline_variant() {
+    let Some(mut device) = try_create_device() else {
+        eprintln!("skip: no wgpu adapter available");
+        return;
+    };
+
+    let target_tex: WgpuTexture = device.create_texture(
+        ImageBufferKind::Texture2D,
+        ImageFormat::BGRA8,
+        16,
+        16,
+        TextureFilter::Nearest,
+        Some(RenderTargetInfo { has_depth: false }),
+    );
+
+    static VERT: &[VertexAttribute] = &[VertexAttribute::quad_instance_vertex()];
+    static INST: &[VertexAttribute] = &[
+        VertexAttribute::f32x4("aRect"),
+        VertexAttribute::f32x4("aColor"),
+    ];
+    static DESC: VertexDescriptor = VertexDescriptor {
+        vertex_attributes: VERT,
+        instance_attributes: INST,
+    };
+    let program = device
+        .create_program_linked("ps_clear", &[], &DESC)
+        .expect("ps_clear program builds");
+
+    // After link: only the DEFAULT variant is cached.
+    assert_eq!(
+        program.pipelines.borrow().len(),
+        1,
+        "link_program should seed exactly DEFAULT variant"
+    );
+
+    let vao = device.create_vao(&DESC, 1);
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct Vert {
+        pos: [u8; 2],
+        _pad: [u8; 2],
+    }
+    let verts: [Vert; 4] = [
+        Vert { pos: [0, 0],     _pad: [0, 0] },
+        Vert { pos: [255, 0],   _pad: [0, 0] },
+        Vert { pos: [255, 255], _pad: [0, 0] },
+        Vert { pos: [0, 255],   _pad: [0, 0] },
+    ];
+    device.update_vao_main_vertices(&vao, &verts, VertexUsageHint::Static);
+    let indices: [u16; 6] = [0, 1, 2, 0, 2, 3];
+    device.update_vao_indices(&vao, &indices, VertexUsageHint::Static);
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct Inst {
+        rect: [f32; 4],
+        color: [f32; 4],
+    }
+    // Premultiplied half-alpha red.
+    let instances: [Inst; 1] = [Inst {
+        rect: [-1.0, -1.0, 2.0, 2.0],
+        color: [0.5, 0.0, 0.0, 0.5],
+    }];
+    device.update_vao_instances(&vao, &instances, VertexUsageHint::Static, None);
+
+    use euclid::default::Transform3D;
+    let identity: Transform3D<f32> = Transform3D::identity();
+    device.set_uniforms(&program, &identity);
+
+    device.begin_frame();
+    device.bind_draw_target(WgpuDrawTarget::Texture {
+        view: Arc::new(target_tex.texture.create_view(&wgpu::TextureViewDescriptor::default())),
+        dimensions: DeviceIntSize::new(16, 16),
+        with_depth: false,
+    });
+    device.clear_target(Some([0.0, 0.0, 0.0, 1.0]), None, None);
+    let bound = device.bind_program(&program);
+    assert!(bound, "bind_program returned false");
+    // Switch to a non-DEFAULT variant: blend enabled, PremultipliedAlpha.
+    device.set_blend(true);
+    device.set_blend_mode(BlendMode::PremultipliedAlpha);
+    device.bind_vao(&vao);
+    device.draw_indexed_triangles_instanced_u16(6, 1);
+    device.end_frame();
+
+    // After the draw: cache should have grown to 2 (DEFAULT + the alpha
+    // variant just built on cache miss).
+    assert_eq!(
+        program.pipelines.borrow().len(),
+        2,
+        "draw with blend enabled should build + cache a second variant"
+    );
+
+    device.delete_texture(target_tex);
+    device.delete_program(program);
+    device.delete_vao(vao);
 }

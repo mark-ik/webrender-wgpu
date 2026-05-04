@@ -49,6 +49,24 @@ pub use types::{
 pub(crate) use types::image_format_to_wgpu;
 pub use vertex_layout::WgpuVertexLayouts;
 
+/// Snapshot of a bound program — the pieces needed to build pipeline
+/// variants at draw time. All fields are cheap-clone (wgpu handles are
+/// internally Arc; the Rc'd pipelines map shares state with the source
+/// `WgpuProgram` so variants built here are visible to other binds of
+/// the same program).
+pub(super) struct BoundProgram {
+    pub vert_module: wgpu::ShaderModule,
+    pub frag_module: wgpu::ShaderModule,
+    pub uniform_buffer: wgpu::Buffer,
+    pub stem: String,
+    pub descriptor: super::types::VertexDescriptor,
+    pub pipelines: std::rc::Rc<
+        std::cell::RefCell<
+            std::collections::HashMap<types::PipelineVariantKey, wgpu::RenderPipeline>,
+        >,
+    >,
+}
+
 /// Concrete wgpu-backed device.
 pub struct WgpuDevice {
     instance: Arc<wgpu::Instance>,
@@ -81,8 +99,15 @@ pub struct WgpuDevice {
     /// pass. `Cell` for &self interior mutability — `clear_target` is
     /// `&self` per the GL trait signature.
     pub(super) pending_clear: std::cell::Cell<Option<wgpu::Color>>,
-    /// Currently bound pipeline (from `bind_program`).
+    /// Currently bound pipeline (the variant for current state). Resolved
+    /// at draw time via `resolve_pipeline_variant`. Updated in
+    /// `bind_program` to the program's DEFAULT variant initially.
     pub(super) bound_pipeline: Option<wgpu::RenderPipeline>,
+    /// Snapshot of the currently bound program (cheap-clone components
+    /// plus an Rc into the program's variant cache). `issue_draw_indexed`
+    /// uses this to look up / build the pipeline variant matching
+    /// current render state.
+    pub(super) bound_program: Option<BoundProgram>,
     /// Uniform buffer of the currently bound program (for bind group
     /// construction at draw time).
     pub(super) bound_uniform_buffer: Option<wgpu::Buffer>,
@@ -90,15 +115,42 @@ pub struct WgpuDevice {
     pub(super) bound_vertex_buffer: Option<wgpu::Buffer>,
     pub(super) bound_instance_buffer: Option<wgpu::Buffer>,
     pub(super) bound_index_buffer: Option<wgpu::Buffer>,
-    /// Textures bound by `bind_texture`, keyed by raw slot index. Cleared
-    /// at end_frame; consumed by `issue_draw` to build the frag-stage
-    /// bind group (set 1).
+    /// Textures bound by `bind_texture` / `bind_external_texture`, keyed
+    /// by raw slot index. Cleared at end_frame; consumed by `issue_draw`
+    /// to build the frag-stage bind group (set 1).
     pub(super) bound_textures: std::collections::HashMap<usize, wgpu::TextureView>,
-    /// Default sampler used for every textured binding. wgpu requires a
-    /// sampler at each `OpTypeSampler` binding; we use one sampler for
-    /// all (linear filter, clamp-to-edge) until per-texture sampler
-    /// configuration matters.
+    /// Per-slot sampler override, populated by `bind_external_texture`
+    /// when the embedder supplied a sampler. Slots not in this map fall
+    /// back to `default_sampler`. `bind_texture` clears any prior
+    /// override on the slot.
+    pub(super) bound_sampler_overrides:
+        std::collections::HashMap<usize, std::sync::Arc<wgpu::Sampler>>,
+    /// Default sampler used for every textured binding without an
+    /// override. wgpu requires a sampler at each `OpTypeSampler` binding;
+    /// we use one sampler for all (linear filter, clamp-to-edge) until
+    /// per-texture sampler configuration matters.
     pub(super) default_sampler: Option<wgpu::Sampler>,
+
+    // ---- P5 pipeline-state cluster ----
+    /// Whether blending is enabled. `set_blend(true/false)` toggles.
+    pub(super) blend_enabled: std::cell::Cell<bool>,
+    /// Active blend mode; ignored if blend_enabled is false.
+    /// `set_blend_mode(mode)` updates.
+    pub(super) blend_mode: std::cell::Cell<Option<super::traits::BlendMode>>,
+    /// 4-bit RGBA color write mask. `enable_color_write` sets to 0xF;
+    /// `disable_color_write` sets to 0.
+    pub(super) color_write_mask: std::cell::Cell<u8>,
+    /// Whether scissor is enabled. Per-pass setting (not pipeline state).
+    pub(super) scissor_enabled: std::cell::Cell<bool>,
+    /// Active scissor rect; applied at draw time when scissor_enabled.
+    pub(super) scissor_rect: std::cell::Cell<Option<api::units::FramebufferIntRect>>,
+
+    // ---- P5 readback cluster ----
+    /// Current read source texture, set by `attach_read_texture` and
+    /// consumed by `read_pixels`/`read_pixels_into`. Mirrors GL's
+    /// "currently bound GL_READ_FRAMEBUFFER attachment" pattern. A
+    /// `RefCell` (not `Cell`) because `wgpu::Texture` isn't `Copy`.
+    pub(super) current_read_texture: std::cell::RefCell<Option<wgpu::Texture>>,
 }
 
 impl WgpuDevice {
@@ -137,12 +189,20 @@ impl WgpuDevice {
             current_target: None,
             pending_clear: std::cell::Cell::new(None),
             bound_pipeline: None,
+            bound_program: None,
             bound_uniform_buffer: None,
             bound_vertex_buffer: None,
             bound_instance_buffer: None,
             bound_index_buffer: None,
             bound_textures: std::collections::HashMap::new(),
+            bound_sampler_overrides: std::collections::HashMap::new(),
             default_sampler: Some(default_sampler),
+            blend_enabled: std::cell::Cell::new(false),
+            blend_mode: std::cell::Cell::new(None),
+            color_write_mask: std::cell::Cell::new(0xF),
+            scissor_enabled: std::cell::Cell::new(false),
+            scissor_rect: std::cell::Cell::new(None),
+            current_read_texture: std::cell::RefCell::new(None),
         }
     }
 
@@ -254,11 +314,19 @@ impl GpuFrame for WgpuDevice {
         self.current_target = None;
         self.pending_clear.set(None);
         self.bound_pipeline = None;
+        self.bound_program = None;
         self.bound_uniform_buffer = None;
         self.bound_vertex_buffer = None;
         self.bound_instance_buffer = None;
         self.bound_index_buffer = None;
         self.bound_textures.clear();
+        self.bound_sampler_overrides.clear();
+        self.blend_enabled.set(false);
+        self.blend_mode.set(None);
+        self.color_write_mask.set(0xF);
+        self.scissor_enabled.set(false);
+        self.scissor_rect.set(None);
+        *self.current_read_texture.borrow_mut() = None;
     }
 
     fn reset_state(&mut self) {

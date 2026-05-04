@@ -62,8 +62,9 @@ fn ps_clear_create_program_linked_succeeds() {
         .create_program_linked("ps_clear", &[], &DESC)
         .expect("ps_clear should link successfully");
 
-    // The pipeline was built and stashed in the program.
-    assert!(program.pipeline.borrow().is_some());
+    // The DEFAULT pipeline variant was built and stashed in the program's
+    // variant cache. Other variants are built lazily at draw time.
+    assert!(!program.pipelines.borrow().is_empty());
     assert_eq!(program.stem, "ps_clear");
 
     // Uniform buffer is sized for WrLocals { mat4 } = 64 bytes.
@@ -101,7 +102,7 @@ fn ps_quad_textured_create_program_linked_succeeds() {
     let program = wgpu_device
         .create_program_linked("ps_quad_textured", &[], &DESC)
         .expect("ps_quad_textured should link successfully");
-    assert!(program.pipeline.borrow().is_some());
+    assert!(!program.pipelines.borrow().is_empty());
     assert_eq!(program.stem, "ps_quad_textured");
     wgpu_device.delete_program(program);
 }
@@ -124,7 +125,7 @@ fn unknown_shader_returns_compilation_error() {
 fn create_then_link_two_step_works() {
     // GL pattern: create_program first (loads source, doesn't link yet),
     // then link_program with the descriptor. WgpuProgram supports this
-    // by leaving pipeline = None until link_program runs.
+    // by leaving the variant cache empty until link_program runs.
     let Some(mut wgpu_device) = try_create_device() else {
         eprintln!("skip: no wgpu adapter available");
         return;
@@ -140,10 +141,10 @@ fn create_then_link_two_step_works() {
     };
 
     let mut program = wgpu_device.create_program("ps_clear", &[]).expect("create");
-    assert!(program.pipeline.borrow().is_none(), "pipeline absent before link");
+    assert!(program.pipelines.borrow().is_empty(), "variant cache empty before link");
 
     wgpu_device.link_program(&mut program, &DESC).expect("link");
-    assert!(program.pipeline.borrow().is_some(), "pipeline present after link");
+    assert!(!program.pipelines.borrow().is_empty(), "DEFAULT variant cached after link");
 
     wgpu_device.delete_program(program);
 }

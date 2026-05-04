@@ -181,13 +181,15 @@ pub use crate::composite::{MappableCompositor, MappedTileInfo, SWGLCompositeSurf
 pub use crate::device::{UploadMethod, VertexUsageHint, get_gl_target, get_unoptimized_shader_source};
 pub use crate::device::{ProgramBinary, ProgramCache, ProgramCacheObserver, FormatDesc, ShaderError};
 pub use crate::device::Device;
-pub use crate::device::{TextureFilter, GpuFrame, GpuResources, GpuShaders, GpuPass};
+pub use crate::device::{TextureFilter, GpuFrame, GpuResources, GpuShaders, GpuPass, BlendMode, TextureSlot};
 pub use crate::device::{VertexAttribute, VertexAttributeKind, VertexDescriptor};
 pub use crate::internal_types::RenderTargetInfo;
 #[cfg(feature = "wgpu_backend")]
 pub use crate::device::WgpuDevice;
 #[cfg(feature = "wgpu_backend")]
-pub use crate::device::wgpu::{WgpuDrawTarget, WgpuPbo, WgpuProgram, WgpuTexture, WgpuVbo};
+pub use crate::device::wgpu::{
+    WgpuDrawTarget, WgpuExternalTexture, WgpuPbo, WgpuProgram, WgpuTexture, WgpuVbo,
+};
 pub use crate::profiler::{ProfilerHooks, set_profiler_hooks};
 pub use crate::renderer::{
     CpuProfile, DebugFlags, GpuProfile, GraphicsApi,

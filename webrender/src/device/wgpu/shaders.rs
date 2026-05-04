@@ -11,12 +11,134 @@
 //! works for the 97/125 reflectable stages after the P2-spike fixes).
 
 use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
 
 use super::super::traits::GpuShaders;
 use super::super::types::{ShaderError, TextureSlot, VertexDescriptor};
-use super::types::{WgpuProgram, WgpuUniformLocation};
+use super::types::{PipelineVariantKey, WgpuProgram, WgpuUniformLocation};
 use super::vertex_layout::WgpuVertexLayouts;
 use super::WgpuDevice;
+
+/// Maps a `BlendMode` to the wgpu `BlendState` (separate color + alpha
+/// components). Currently covers the common modes; extends additively
+/// as more shaders surface that need them.
+pub(super) fn blend_state_for(mode: super::super::traits::BlendMode) -> wgpu::BlendState {
+    use super::super::traits::BlendMode as BM;
+    use wgpu::{BlendComponent, BlendFactor, BlendOperation, BlendState};
+    match mode {
+        BM::Alpha => BlendState {
+            color: BlendComponent {
+                src_factor: BlendFactor::SrcAlpha,
+                dst_factor: BlendFactor::OneMinusSrcAlpha,
+                operation: BlendOperation::Add,
+            },
+            alpha: BlendComponent {
+                src_factor: BlendFactor::One,
+                dst_factor: BlendFactor::OneMinusSrcAlpha,
+                operation: BlendOperation::Add,
+            },
+        },
+        BM::PremultipliedAlpha => BlendState {
+            color: BlendComponent {
+                src_factor: BlendFactor::One,
+                dst_factor: BlendFactor::OneMinusSrcAlpha,
+                operation: BlendOperation::Add,
+            },
+            alpha: BlendComponent {
+                src_factor: BlendFactor::One,
+                dst_factor: BlendFactor::OneMinusSrcAlpha,
+                operation: BlendOperation::Add,
+            },
+        },
+        BM::Screen => BlendState {
+            color: BlendComponent {
+                src_factor: BlendFactor::One,
+                dst_factor: BlendFactor::OneMinusSrc,
+                operation: BlendOperation::Add,
+            },
+            alpha: BlendComponent::OVER,
+        },
+        BM::Multiply => BlendState {
+            color: BlendComponent {
+                src_factor: BlendFactor::Dst,
+                dst_factor: BlendFactor::Zero,
+                operation: BlendOperation::Add,
+            },
+            alpha: BlendComponent::OVER,
+        },
+        // Other modes (subpixel, dual-source, advanced, etc.) require
+        // wgpu features (DUAL_SOURCE_BLENDING) and/or have no direct
+        // wgpu equivalent. Fall back to PremultipliedAlpha — wrong
+        // visually but keeps the pipeline buildable until per-mode work
+        // lands. Logged at warn level for visibility.
+        _ => {
+            log::warn!("blend_state_for: mode {:?} not yet mapped, using PremultipliedAlpha", mode);
+            BlendState::PREMULTIPLIED_ALPHA_BLENDING
+        }
+    }
+}
+
+/// Translates a `PipelineVariantKey::color_write_mask` (4-bit RGBA) to
+/// `wgpu::ColorWrites` flags.
+pub(super) fn color_writes_from_mask(mask: u8) -> wgpu::ColorWrites {
+    let mut w = wgpu::ColorWrites::empty();
+    if mask & 0x1 != 0 { w |= wgpu::ColorWrites::RED; }
+    if mask & 0x2 != 0 { w |= wgpu::ColorWrites::GREEN; }
+    if mask & 0x4 != 0 { w |= wgpu::ColorWrites::BLUE; }
+    if mask & 0x8 != 0 { w |= wgpu::ColorWrites::ALPHA; }
+    w
+}
+
+/// Builds a `wgpu::RenderPipeline` for a given program + variant key.
+/// Used by both `link_program` (eager DEFAULT build) and the draw-time
+/// cache-miss path (`pipeline_for` in mod.rs).
+pub(super) fn build_pipeline_variant(
+    device: &wgpu::Device,
+    program: &WgpuProgram,
+    descriptor: &VertexDescriptor,
+    key: PipelineVariantKey,
+) -> wgpu::RenderPipeline {
+    let layouts = WgpuVertexLayouts::from_descriptor(descriptor);
+    let buffers = layouts.buffers();
+    let nonempty: Vec<wgpu::VertexBufferLayout<'_>> = buffers
+        .iter()
+        .filter(|b| !b.attributes.is_empty())
+        .cloned()
+        .collect();
+
+    let blend = key.blend.map(blend_state_for);
+    let write_mask = color_writes_from_mask(key.color_write_mask);
+
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(&format!(
+            "WgpuProgram[{}] variant blend={:?} mask={:#x}",
+            program.stem, key.blend, key.color_write_mask,
+        )),
+        layout: None,
+        vertex: wgpu::VertexState {
+            module: &program.vert_module,
+            entry_point: Some("main"),
+            buffers: &nonempty,
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &program.frag_module,
+            entry_point: Some("main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Bgra8Unorm,
+                blend,
+                write_mask,
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
 
 /// Builds the SPIR-V artifact stem from a base shader name + features.
 /// Mirrors `gen_spirv.rs`'s naming exactly: features sorted, then
@@ -89,9 +211,17 @@ impl GpuShaders for WgpuDevice {
         Ok(WgpuProgram {
             vert_module,
             frag_module,
-            pipeline: RefCell::new(None),
+            pipelines: Rc::new(RefCell::new(HashMap::new())),
             uniform_buffer,
             stem,
+            // Placeholder descriptor — link_program overwrites with the
+            // real one when called. create_program-then-use-without-link
+            // is unsupported in WebRender's flow (renderer always links
+            // before draw).
+            descriptor: VertexDescriptor {
+                vertex_attributes: &[],
+                instance_attributes: &[],
+            },
         })
     }
 
@@ -111,50 +241,24 @@ impl GpuShaders for WgpuDevice {
         program: &mut Self::Program,
         descriptor: &VertexDescriptor,
     ) -> Result<(), ShaderError> {
-        // Build pipeline using the descriptor's vertex layout.
-        // `layout: None` lets wgpu's internal naga auto-derive the
-        // PipelineLayout from SPIR-V (works for 97/125 stages post-P2).
-        let layouts = WgpuVertexLayouts::from_descriptor(descriptor);
-        let buffers = layouts.buffers();
-
-        // Filter empty layouts for shaders without per-vertex inputs
-        // (rare; mostly the cs_* compute-style render-target shaders).
-        let nonempty: Vec<wgpu::VertexBufferLayout<'_>> = buffers
-            .iter()
-            .filter(|b| !b.attributes.is_empty())
-            .cloned()
-            .collect();
-
-        // Color target format: BGRA8 matches our preferred_color_formats().
-        // Per-target pipeline cache (for RGBA8 etc.) is a P5+ concern.
-        let pipeline = self.device().create_render_pipeline(
-            &wgpu::RenderPipelineDescriptor {
-                label: Some(&format!("WgpuProgram[{}] pipeline", program.stem)),
-                layout: None,
-                vertex: wgpu::VertexState {
-                    module: &program.vert_module,
-                    entry_point: Some("main"),
-                    buffers: &nonempty,
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &program.frag_module,
-                    entry_point: Some("main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Bgra8Unorm,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            },
+        // Stash the descriptor on the program so future variant builds
+        // can use it.
+        program.descriptor = VertexDescriptor {
+            vertex_attributes: descriptor.vertex_attributes,
+            instance_attributes: descriptor.instance_attributes,
+        };
+        // Eagerly build the DEFAULT-state pipeline (no blend, full color
+        // write). Variants are built lazily at draw time.
+        let pipeline = build_pipeline_variant(
+            self.device(),
+            program,
+            descriptor,
+            PipelineVariantKey::DEFAULT,
         );
-        *program.pipeline.borrow_mut() = Some(pipeline);
+        program
+            .pipelines
+            .borrow_mut()
+            .insert(PipelineVariantKey::DEFAULT, pipeline);
         Ok(())
     }
 

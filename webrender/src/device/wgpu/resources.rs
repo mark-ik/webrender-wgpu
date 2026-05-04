@@ -503,13 +503,13 @@ impl GpuResources for WgpuDevice {
         unimplemented!("map_pbo_for_readback on wgpu — async-map design deferred")
     }
 
-    fn attach_read_texture(&mut self, _texture: &Self::Texture) {
-        // GL: binds a texture as the current GL_READ_FRAMEBUFFER attachment
-        // for subsequent glReadPixels. wgpu reads happen via
-        // copy_texture_to_buffer + buffer mapping (see existing
-        // texture-readback test pattern); no long-lived "attached read
-        // texture" state. Renderer's calls here are honored implicitly
-        // by passing the right texture to its readback paths (P5+).
+    fn attach_read_texture(&mut self, texture: &Self::Texture) {
+        // Records the texture as the current read source. Subsequent
+        // `read_pixels` / `read_pixels_into` calls operate on it. wgpu
+        // has no long-lived "READ_FRAMEBUFFER" binding; we emulate it on
+        // WgpuDevice. wgpu::Texture is Arc-internal so the clone is
+        // cheap.
+        *self.current_read_texture.borrow_mut() = Some(texture.texture.clone());
     }
 
     fn required_upload_size_and_stride(

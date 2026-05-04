@@ -14,7 +14,7 @@
 #![cfg(feature = "shader-reflect")]
 
 use std::path::PathBuf;
-use webrender_build::spirv_reflect::{reflect_dir, BindingsManifest};
+use webrender_build::spirv_reflect::{reflect_dir, BindingKind, BindingsManifest};
 
 fn workspace_root() -> PathBuf {
     // CARGO_MANIFEST_DIR is webrender_build/; workspace root is its parent.
@@ -84,7 +84,11 @@ fn ps_clear_reflection_is_canonical() {
 
     // Vertex stage: 1 uniform_buffer (the WrLocals UBO) + 3 vertex inputs.
     assert_eq!(vert.bindings.len(), 1, "ps_clear vert bindings: {:?}", vert.bindings);
-    assert_eq!(vert.bindings[0].kind, "uniform_buffer");
+    assert!(
+        matches!(vert.bindings[0].kind, BindingKind::UniformBuffer),
+        "ps_clear vert binding 0: expected UniformBuffer, got {:?}",
+        vert.bindings[0].kind,
+    );
     assert_eq!(vert.vertex_inputs.len(), 3, "ps_clear vert inputs: {:?}", vert.vertex_inputs);
     let names: Vec<&str> = vert.vertex_inputs.iter().map(|v| v.name.as_str()).collect();
     assert_eq!(names, vec!["aPosition", "aRect", "aColor"]);

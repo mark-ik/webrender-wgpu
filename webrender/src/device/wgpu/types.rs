@@ -12,29 +12,46 @@
 use api::{ImageBufferKind, ImageFormat};
 use api::units::{DeviceIntSize, FramebufferIntRect, FramebufferIntSize};
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use super::super::types::{TextureFilter, VertexDescriptor};
 
+// PipelineVariantKey lives in `device::types` (the backend-neutral module)
+// so wgpu and the future wgpu-hal backend share the same key shape.
+// Re-exported here so existing `super::types::PipelineVariantKey` imports
+// in this directory keep working.
+pub use super::super::types::PipelineVariantKey;
+
 /// A wgpu-backed shader program.
 ///
 /// Bundles vert + frag SPIR-V `ShaderModule`s plus the uniform buffer for
-/// the `WrLocals { uTransform }` UBO. The actual `wgpu::RenderPipeline`
-/// is built lazily by `link_program` once the `VertexDescriptor` is known
-/// (matches GL device's two-stage create + link pattern).
+/// the `WrLocals { uTransform }` UBO. Pipelines are cached lazily per
+/// `PipelineVariantKey` (state combination): a draw with new state
+/// builds + caches a fresh pipeline; subsequent draws with the same
+/// state reuse it.
 ///
-/// The pipeline field is wrapped in `RefCell` so trait methods that take
-/// `&Program` (the GL contract) can mutate the cached pipeline.
+/// The base/default pipeline (`PipelineVariantKey::DEFAULT`) is built
+/// eagerly by `link_program`.
 pub struct WgpuProgram {
     pub vert_module: wgpu::ShaderModule,
     pub frag_module: wgpu::ShaderModule,
-    /// `None` until link_program builds it.
-    pub pipeline: RefCell<Option<wgpu::RenderPipeline>>,
+    /// Pipeline variants keyed by render-state combination. Includes the
+    /// `DEFAULT` key (no blend, full color write) seeded by `link_program`.
+    /// `Rc<RefCell<...>>` so `bind_program` can stash an Rc-clone on the
+    /// device — variants built at draw time after `bind_program` returns
+    /// land in the same map and stay cached for subsequent draws.
+    pub pipelines: Rc<RefCell<HashMap<PipelineVariantKey, wgpu::RenderPipeline>>>,
     /// Uniform buffer for WrLocals { mat4 uTransform; }. 64 bytes.
     pub uniform_buffer: wgpu::Buffer,
     /// Stem name (e.g. "ps_clear", "brush_solid_ALPHA_PASS") for diagnostics.
     pub stem: String,
+    /// Vertex descriptor used at link time. Stored so variant pipelines
+    /// can reuse the same vertex layout. The `&'static [VertexAttribute]`
+    /// slices inside are cheap to keep.
+    pub descriptor: VertexDescriptor,
 }
 
 /// wgpu doesn't have per-uniform locations — bindings are at the bind-group
@@ -174,7 +191,25 @@ impl WgpuDrawTarget {
     }
 }
 
-pub struct WgpuExternalTexture;
+/// Embedder-supplied external texture (host-shared `wgpu::Texture`).
+/// Wraps an `Arc<wgpu::TextureView>` for the bind group entry plus an
+/// optional `Arc<wgpu::Sampler>` (when `None`, the device's default
+/// sampler is used at bind time).
+///
+/// Constructors are exposed via `WgpuExternalTexture::new` so embedders
+/// that own a `wgpu::Texture` (e.g. host-shared compositor surfaces)
+/// can wrap it once and hand it to the renderer's external_images map.
+pub struct WgpuExternalTexture {
+    pub view: Arc<wgpu::TextureView>,
+    pub sampler: Option<Arc<wgpu::Sampler>>,
+}
+
+impl WgpuExternalTexture {
+    pub fn new(view: Arc<wgpu::TextureView>, sampler: Option<Arc<wgpu::Sampler>>) -> Self {
+        WgpuExternalTexture { view, sampler }
+    }
+}
+
 pub struct WgpuUploadPboPool;
 
 /// Lifetime-bound RAII handle for a CPU-mapped PBO; tied to `&mut self`

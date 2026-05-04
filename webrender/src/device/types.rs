@@ -13,7 +13,7 @@
 //! wgpu impl wires up. See assignment-doc R2 for the full lift/associated-type
 //! categorization.
 
-use api::ImageFormat;
+use api::{ImageFormat, MixBlendMode};
 use std::num::NonZeroUsize;
 use std::ops::Add;
 
@@ -59,6 +59,66 @@ pub enum VertexUsageHint {
     Static,
     Dynamic,
     Stream,
+}
+
+/// Backend-neutral blend mode selector. The 16 individual `set_blend_mode_*`
+/// methods on the legacy `Device` collapse into a single enum-keyed call
+/// on `GpuPass::set_blend_mode`. `Advanced` carries a CSS `MixBlendMode`
+/// for the parameterized blend equations.
+///
+/// Lives in `types.rs` (not `traits.rs`) because `PipelineVariantKey`
+/// references it and pipeline-cache keying belongs to backends with
+/// pipeline-baked state (wgpu, future wgpu-hal).
+///
+/// `Hash + Eq` are derived so wgpu-side pipeline caches can key by mode.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub enum BlendMode {
+    Alpha,
+    PremultipliedAlpha,
+    PremultipliedDestOut,
+    Multiply,
+    SubpixelPass0,
+    SubpixelPass1,
+    SubpixelDualSource,
+    MultiplyDualSource,
+    Screen,
+    PlusLighter,
+    Exclusion,
+    ShowOverdraw,
+    Max,
+    Min,
+    Advanced(MixBlendMode),
+}
+
+/// Cache key for a `RenderPipeline` variant of a single program. Captures
+/// every state aspect that pipeline-baked backends (wgpu, wgpu-hal) bake
+/// into the pipeline (as opposed to per-pass settings like scissor and
+/// viewport). Programs build variants lazily at draw time: a draw with a
+/// new key combination builds a fresh pipeline; subsequent draws with the
+/// same key reuse it.
+///
+/// Lives in the shared `device::types` module so both wgpu and the future
+/// wgpu-hal backend index their pipeline caches by the same key without
+/// drifting. The GL backend ignores it — GL state is mutable per-draw, so
+/// no pipeline cache is needed.
+///
+/// New state aspects (depth function, depth-write enable, stencil
+/// configuration, etc.) extend this struct additively as backends start
+/// honoring them. Today only blend + color-write are keyed.
+#[derive(Hash, PartialEq, Eq, Clone, Copy, Debug)]
+pub struct PipelineVariantKey {
+    /// `None` = blending disabled (no `BlendState` on the color target).
+    pub blend: Option<BlendMode>,
+    /// 4-bit RGBA mask: bit 0 = R, 1 = G, 2 = B, 3 = A. `0xF` = all
+    /// channels write enabled.
+    pub color_write_mask: u8,
+}
+
+impl PipelineVariantKey {
+    pub const DEFAULT: Self = PipelineVariantKey {
+        blend: None,
+        color_write_mask: 0xF,
+    };
 }
 
 /// Depth-test comparison function.

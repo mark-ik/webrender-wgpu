@@ -24,8 +24,45 @@
 //!
 //! See `notes/2026-04-30_p0_method_assignment.md` for the full method-to-trait
 //! assignment. This file is the authoritative trait declaration.
+//!
+//! ## Logical pass state vs. immediate state
+//!
+//! Several `GpuPass` methods (`set_blend_mode`, `set_blend`, `enable_depth`,
+//! `disable_depth`, `enable_depth_write`, `disable_depth_write`,
+//! `disable_stencil`, `enable_color_write`, `disable_color_write`) describe
+//! **logical** pass state, not immediate per-call GPU state. Backends with
+//! pipeline-baked state (wgpu, future wgpu-hal) translate state changes
+//! into a pipeline-cache lookup keyed on `device::types::PipelineVariantKey`:
+//! a draw with a new state combination builds + caches a fresh pipeline;
+//! subsequent draws with the same combination reuse it. The GL backend
+//! treats the same methods as immediate state (`glBlendFunc` etc.) since
+//! GL state is mutable per-draw. Both fulfil the same contract from the
+//! renderer's perspective.
+//!
+//! ## Resource usage hints
+//!
+//! Trait methods that create textures and buffers (`create_texture`,
+//! `create_vbo`, `create_pbo`, plus the implicit usage of
+//! `update_vao_main_vertices`/`update_vao_indices`/`update_vao_instances`)
+//! deliberately do **not** carry explicit `wgpu::TextureUsages` /
+//! `wgpu::BufferUsages` parameters. The existing parameters already
+//! discriminate the relevant cases:
+//!
+//! - `create_texture(..., render_target: Option<RenderTargetInfo>)`
+//!   distinguishes render-attachment vs sampled textures.
+//! - `create_vbo<T>` / `update_vao_main_vertices` / `update_vao_instances`
+//!   are vertex usage by definition (VBO = vertex buffer).
+//! - `update_vao_indices` is index usage by definition.
+//! - `create_pbo` is staging usage (CPU-mapped).
+//!
+//! Backends that need explicit usage flags (wgpu-hal in particular)
+//! derive them from these existing parameters at impl time, optionally
+//! widening to all-bits-set when uncertain. The cost is at most some
+//! lost driver optimization; correctness is unaffected. Re-evaluate this
+//! decision if the wgpu-hal impl surfaces a case where derivation is
+//! genuinely impossible.
 
-use api::{ImageBufferKind, ImageDescriptor, ImageFormat, MixBlendMode, Parameter};
+use api::{ImageBufferKind, ImageDescriptor, ImageFormat, Parameter};
 use api::units::{DeviceIntRect, DeviceIntSize, DeviceSize, FramebufferIntRect};
 use euclid::default::Transform3D;
 use crate::internal_types::{RenderTargetInfo, Swizzle, SwizzleSettings};
@@ -34,20 +71,18 @@ use crate::render_api::MemoryReport;
 use std::num::NonZeroUsize;
 use std::os::raw::c_void;
 
-// Types currently defined in the GL device module that the trait signatures
-// reference. As the wgpu backend is added, types that are truly
-// backend-neutral (like `GpuFrameId`, `Capabilities`, `UploadMethod`,
-// `StrideAlignment`, `TextureFormatPair`) should migrate out of `gl.rs` into
-// a shared location. For P0 they stay where they are; the trait references
-// them through this import.
+// Backend-neutral types referenced by the trait signatures. These all
+// live in `device::types` (the shared module), so traits.rs has no
+// dependency on any specific backend module — the trait surface is
+// fully backend-neutral.
 use super::types::{
     Capabilities, DepthFunction, GpuFrameId, ShaderError, StrideAlignment, Texel,
     TextureFilter, TextureFormatPair, TextureSlot, UploadMethod, VertexDescriptor,
     VertexUsageHint,
 };
-// All backend-coupled types are now associated types on the GpuResources
-// trait. traits.rs no longer imports anything from super::gl — the trait
-// surface is fully backend-neutral.
+// Re-exported so `super::traits::BlendMode` continues to resolve at the
+// existing call sites; the canonical definition lives in `super::types`.
+pub use super::types::BlendMode;
 
 /// Frame lifecycle, capabilities, parameters, and global queries.
 ///
@@ -298,29 +333,6 @@ pub trait GpuShaders: GpuFrame {
     fn bind_shader_samplers<S>(&mut self, program: &Self::Program, bindings: &[(&'static str, S)])
     where
         S: Into<TextureSlot> + Copy;
-}
-
-/// Backend-neutral blend mode selector. Collapses the 16 individual
-/// `set_blend_mode_*` methods on `GpuPass` into a single enum-keyed method.
-/// `Advanced` carries a CSS `MixBlendMode` for the parameterized blend
-/// equations.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum BlendMode {
-    Alpha,
-    PremultipliedAlpha,
-    PremultipliedDestOut,
-    Multiply,
-    SubpixelPass0,
-    SubpixelPass1,
-    SubpixelDualSource,
-    MultiplyDualSource,
-    Screen,
-    PlusLighter,
-    Exclusion,
-    ShowOverdraw,
-    Max,
-    Min,
-    Advanced(MixBlendMode),
 }
 
 /// Per-pass binding, state, draw commands, blits, readback.
