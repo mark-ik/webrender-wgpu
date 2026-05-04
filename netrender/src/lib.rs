@@ -26,16 +26,13 @@
     mismatched_lifetime_syntaxes
 )]
 
-mod compositor;
 pub mod render_graph;
 mod renderer;
 pub mod scene;
-pub(crate) mod space;
 pub mod tile_cache;
 pub mod vello_rasterizer;
 pub mod vello_tile_rasterizer;
 
-pub use crate::compositor::{Compositor, NativeCompositor};
 pub use crate::render_graph::{EncodeCallback, RenderGraph, Task, TaskId};
 pub use crate::renderer::init::{NetrenderOptions, create_netrender_instance};
 pub use crate::renderer::{ColorLoad, Renderer, RendererError};
@@ -44,7 +41,6 @@ pub use crate::scene::{
     SceneRect, Transform,
 };
 pub use crate::tile_cache::{TileCache, TileCoord};
-pub use crate::space::{ROOT_SPATIAL_NODE, SpatialTransform, SpatialTree};
 
 // Re-export the device-foundation surface embedders need to construct
 // `WgpuHandles` and run render-graph tasks (blur, clip mask) whose

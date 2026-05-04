@@ -160,35 +160,35 @@ dependency hashing, retain heuristic. Output: which `TileCoord`s
 need their content rebuilt this frame. The *rasterizer* owns
 everything from there forward, including its own per-tile cache.
 
+**Implemented shape** (post-Phase 7' delivery):
+[`VelloTileRasterizer`](../netrender/src/vello_tile_rasterizer.rs)
+is a concrete struct, not a trait impl. `Renderer` holds a
+`Option<Mutex<VelloTileRasterizer>>` directly and routes through it
+in [`Renderer::render_vello`](../netrender/src/renderer/mod.rs).
+
 ```rust
-pub trait Rasterizer: Send {
-    /// Rebuild the cached representation for the given dirty tiles.
-    /// For VelloRasterizer this means: for each TileCoord, build a
-    /// fresh `vello::Scene` from `scene` filtered to that tile's
-    /// world rect, store it in the rasterizer's per-tile cache.
-    fn update_tiles(
+// Actual today:
+impl VelloTileRasterizer {
+    pub fn render(
         &mut self,
         scene: &Scene,
-        dirty: &[TileCoord],
-        tile_cache: &TileCache, // for tile_world_rect lookup
-    );
-
-    /// Compose all currently-cached tile representations into a
-    /// single frame and render to `target`. For VelloRasterizer
-    /// this is `Scene::append` of every cached tile-Scene into one
-    /// frame Scene, then `vello::Renderer::render_to_texture` once.
-    fn render_frame(
-        &mut self,
-        wgpu_device: &WgpuDevice,
-        target: &wgpu::TextureView,
-    );
+        tile_cache: &mut TileCache,
+        target_view: &wgpu::TextureView,
+        base_color: peniko::Color,
+    ) -> Result<(), vello::Error>;
 }
 ```
 
-`Renderer` holds a `Box<dyn Rasterizer>`. Production constructor
-selects `VelloRasterizer`. The test seam (§10) is a `TestRasterizer`
-that records calls without GPU work — useful for unit-testing
-filter/dispatch logic without booting wgpu.
+**Why no trait** — earlier drafts of this section proposed
+`pub trait Rasterizer { fn update_tiles(…); fn render_frame(…); }`
+with `Box<dyn Rasterizer>` on `Renderer`. The trait was justified by
+the existence of *two* rasterizers (batched WGSL + vello) and the
+need for a `TestRasterizer` seam. After the batched-WGSL path was
+retired (§10's "two backends trap" decision applied) there's
+exactly one rasterizer, so the trait would be an abstraction
+without users. Test code talks to `VelloTileRasterizer` directly.
+Re-introduce the trait if a second rasterizer ever ships (e.g. a
+`vello_hybrid` variant for CPU/sparse-strips); not before.
 
 ### 2.3 Why this exact shape
 
@@ -648,6 +648,100 @@ fallback (~8 ALU ops per fragment).
   alpha-blend scenes will diverge — re-capture, document the diff,
   move on.
 
+### 6.3 Scene API color contract — sRGB-encoded blend space
+
+Decision (post-cleanup, 2026-05-04): **Scene primitive colors are
+interpreted as premultiplied sRGB-encoded values, matching how vello
+operates internally.** This is the contract embedders code against.
+We considered and rejected an "encode-on-input" wrapper that would
+sRGB-encode user-supplied "linear" values before handing them to
+peniko; see "Why not encode-on-input" below.
+
+**The contract:**
+
+- A `SceneRect.color = [r, g, b, a]` is premultiplied RGBA in
+  **sRGB-encoded space**. To match conventional usage where colors
+  are specified in sRGB (CSS, designer tools, image asset bytes),
+  hand the values through unchanged: 50% gray is `[0.5, 0.5, 0.5,
+  1.0]` and lands at byte 128 in storage.
+- Alpha-compositing (`source-over`, the universal default) happens
+  in sRGB-encoded space inside vello. This matches the de facto
+  behaviour of shipping web engines (Blink / Gecko / WebKit
+  historically blend `source-over` in sRGB-encoded space for
+  performance / legacy reasons; the "linear-light is canonical"
+  reading of CSS Compositing Level 1 is more honored in spec than
+  in implementations).
+- p9b_02 was re-greened with assertion bands matching vello's
+  sRGB-encoded blend output (interior shadow ≈ 77, not 149). The
+  original linear-blend pipeline produced 149, but **149 was the
+  outlier vs typical web-engine output, not 77.** The cleanup
+  brought us closer to engine-conformant rendering, not further.
+
+**Why not encode-on-input:**
+
+The half-fix would be: at scene_to_vello time, sRGB-encode each
+user-supplied channel before constructing the `peniko::Color`.
+
+```rust
+// Rejected:
+let encoded = [
+    linear_to_srgb(c[0]), linear_to_srgb(c[1]),
+    linear_to_srgb(c[2]), c[3],
+];
+peniko::Color::from_rgba_f32(encoded[0], encoded[1], encoded[2], encoded[3])
+```
+
+This makes opaque-color round-trips through `Rgba8Unorm` storage +
+`Rgba8UnormSrgb` view-format produce the linear value the user
+supplied — endpoint preservation. **But the blend math in between
+still happens in vello's sRGB-encoded space.** Vello operates
+entirely in sRGB-encoded space (Cairo / 2D-canvas tradition); we
+can't change that without forking `WgpuEngine` (off-limits per §11.3)
+or switching to `vello_hybrid` (CPU/sparse-strips, different perf
+profile, not yet production-ready per its own README).
+
+So encode-on-input fixes endpoints while leaving the math wrong-vs-
+linear for partial-cover and partial-alpha cases. That's worse than
+picking a side cleanly: it obscures the actual semantic question
+("is the renderer's blend space linear or sRGB-encoded?") behind a
+half-truth.
+
+Cost estimate, for the record: 3 `powf` calls per RGB color, or
+~30ns. Trivial for any realistic scene. Cost is not the reason to
+reject it; correctness is.
+
+**CSS conformance — what's reachable today, what isn't:**
+
+CSS conformance breaks into three regimes:
+
+| Regime | Vello today | Status |
+| --- | --- | --- |
+| `source-over` plain alpha compositing | sRGB-encoded blend | **Matches engine reality**; document and move on |
+| Gradient linear-light interpolation (CSS Color 4 `color-interpolation`) | Not honored on GPU compute path | **Upstream-blocked**; tracked by `p1prime_03` (inverts to known-failure when fixed) |
+| SVG/CSS filter linear-light operations (gaussian blur, color-matrix) | Filters today run through netrender's render-graph in custom WGSL passes | Linear-light filter math is doable in those passes independently of vello blending — Phase 11'+ scope |
+
+The path to CSS Color 4 gradient conformance is **upstream a fix to
+`vello_encoding/src/ramp_cache.rs:84-111`** to honor
+`gradient.interpolation_cs` instead of hard-coding
+`to_alpha_color::<Srgb>()`. That's a bounded change in vello, not a
+fork. `p1prime_03` will catch it the moment it lands.
+
+### 6.4 Implications for Phase 10' / 11' / 12'
+
+Lock the contract before adding text and stroked paths. Concretely:
+
+- **Phase 10' text:** glyph color values from a font / glyph-run
+  source are typically in sRGB. They go through unchanged — no
+  per-glyph encode step needed.
+- **Phase 11' borders:** CSS border colors are sRGB-specified. Pass
+  through unchanged.
+- **Phase 12' compositing:** group opacity, isolated blend modes, and
+  backdrop filters interact with the blend-space contract. The
+  composited result of a `mix-blend-mode: multiply` over a
+  `source-over` background is sRGB-encoded throughout — matches
+  engine behavior, but document the limitation that `linear-light`
+  mode (where specified) is upstream-blocked.
+
 ## 7. Axiom amendments
 
 The parent plan's axiom 10 says "feature tiering is real" and that
@@ -901,92 +995,179 @@ Both 11.6 items resolved as a side effect: no Vulkan validation
 errors observed on the dev box (DX12-backed wgpu adapter), and
 quantization round-trip is exact for primary opaque colors.
 
+### 11.8 Phase 7' completion findings (2026-05-04) — **CLEARED**
+
+The Masonry-pattern tile cache shipped as
+[`netrender/src/vello_tile_rasterizer.rs`](../netrender/src/vello_tile_rasterizer.rs)
+(305 lines). All four `p7prime_vello_tile_cache` probes pass + four
+`p7prime_renderer_integration` end-to-end probes pass against the
+existing batched-pipeline oracle PNGs.
+
+**What we verified:**
+
+1. **`Scene::append` is bytewise-cheap as expected.** No measurable
+   per-tile composition overhead in the test harness; the per-frame
+   work is dominated by vello's compute dispatches, not the CPU-side
+   tile-Scene merge. Aligns with `vello_encoding/src/encoding.rs`
+   verification from §11.3.
+2. **Per-tile clip layers correctly handle spanning primitives.** A
+   half-alpha rect spanning all four tiles of a 2×2 grid renders to
+   uniform `(255, 0, 0, 128)` everywhere it covers — no double-blend
+   at tile borders. Each tile-Scene is wrapped in
+   `push_layer(tile_world_rect)` / `pop_layer` at compose time, which
+   constrains each tile's draws to its own region. Verified by
+   `p7prime_04_spanning_primitive_no_double_render`.
+3. **TileCache invalidation drives the rasterizer correctly.** A
+   no-op re-render reports zero dirty tiles
+   (`p7prime_02_unchanged_scene_no_dirty`); a single-rect color
+   change marks only its tile dirty
+   (`p7prime_03_localized_change`). The `cached_tile_count` /
+   `last_dirty_count` getters expose this for hit-rate assertions.
+4. **Renderer-level integration via `enable_vello: true`.** The two
+   pipelines (batched, vello) coexisted briefly via parallel
+   entry points (`prepare/render` vs `render_vello`) sharing the
+   same `TileCache`; this proved the integration shape, then the
+   batched path was retired entirely (§10's "two backends trap"
+   decision applied).
+
+**What we deferred or simplified:**
+
+- **No `Rasterizer` trait.** §2.2 originally proposed
+  `Box<dyn Rasterizer>` on `Renderer`. With one rasterizer, the
+  trait is an abstraction without users. `VelloTileRasterizer` is
+  concrete on `Renderer`. Re-introduce only when a second rasterizer
+  ships.
+- **Per-frame image-cache rebuild.** `refresh_image_data` clears and
+  rebuilds the Path A `peniko::ImageData` map every frame, defeating
+  vello's `Blob.id()` dedup. Documented in module docs as a known
+  inefficiency to revisit when image-heavy scenes show up in
+  profiles. Not load-bearing for the test suite.
+- **No native-compositor handoff (axiom 14).** Confirmed loss as
+  predicted in §2.4. Servo doesn't use this today; the v1.5 fallback
+  in §recommendation (whole-frame vello + post-render tile slicing)
+  remains an option if Firefox-style native compositing becomes
+  required.
+
+**Cleanup outcome (2026-05-04):**
+
+After Phase 7' integration, the batched WGSL rasterizer was retired
+on `main`:
+
+- `netrender/src/batch.rs` (608 lines) deleted
+- `netrender/src/image_cache.rs` (170 lines) deleted
+- `Renderer::prepare` / `render` / `prepare_direct` /
+  `prepare_tiled` / `render_dirty_tiles*` /
+  `build_tile_composite_draw` / `ensure_gradient_pipelines` /
+  `insert_image_gpu` removed
+- `PreparedFrame` / `FrameTarget` / `ResourceRefs` /
+  `ColorAttachment` / `DepthAttachment` / `DrawIntent` /
+  `RenderPassTarget` removed
+- `netrender_device`'s `brush_solid` / `brush_rect_solid` /
+  `brush_image` / `brush_gradient` pipeline factories + WGSL
+  sources + bind-group layouts + tests retired (the crate dropped
+  from 2394 → 730 lines)
+- 11 redundant batched-path tests deleted; remaining tests run
+  through `render_vello`
+- The legacy upstream WebRender code (`webrender_api`, `wrench`,
+  `wr_glyph_rasterizer`, `examples`, `wrshell`,
+  `example-compositor`, `fog`, `peek-poke`, `wr_malloc_size_of`,
+  `ci-scripts`) was removed from the workspace and the working
+  tree (preserved on the `webrender-wgpu-upstream` side worktree)
+
+Net: -90,000 lines on `main` across the cleanup, leaving netrender
+(6,034) + netrender_device (730) ≈ 6,764 lines of live Rust. Vello
+is the sole rasterizer.
+
 ## 12. Phase mapping under this plan
 
 Renumbered; "Phase X' " is the vello-path equivalent of the parent
 plan's Phase X.
 
-- **Phase 0.5'**: parent's 0.5, unchanged. Crate split lands
-  before any vello work.
-- **Phase 1'**: parent's 1 + color-contract acceleration. Surface
-  `Rgba8UnormSrgb` pinned (unchanged); tile / intermediate textures
-  pin to vello's preferred linear format (likely `Rgba16Float`).
-  Re-capture `rotated_line`, `fractional_radii`, `indirect_rotate`,
-  `linear_aligned_border_radius` oracles against the vello path.
-  `blank` survives without re-capture. Receipt: oracle smoke green
-  through `VelloRasterizer`.
-- **Phase 2'**: rect ingestion. `SceneRect` → vello fill. 5 rect-only
-  goldens. Same as parent Phase 2 in scope, different rasterizer
-  inside. Receipt unchanged.
-- **Phase 3'**: transforms + axis-aligned clips. `transform_id` →
-  `kurbo::Affine`; clip rect → `push_layer` / `pop_layer`. Scope
-  identical to parent Phase 3.
-- **Phase 4'**: depth and ordering. *Substantially smaller than
-  parent Phase 4.* Vello handles painter-order natively. The work
-  here is mapping netrender's z-depth assignment (which today
-  drives webrender's depth pre-pass for opaques) onto vello's
-  layer model. Likely: drop the depth pre-pass entirely; vello's
-  prefix-sum tile rasterizer handles overdraw correctly without
-  early-Z. Receipt: 100-overlapping-rect scene matches reference.
-- **Phase 5'**: image primitives. `SceneImage` → vello image fill
-  (§3.2). ImageCache decision (§3.5 Path A vs. B) settles here.
-- **Phase 6'**: render-task graph. *Same scope* as parent Phase 6
-  — already delivered. Vello slots in as the per-tile rasterization
-  task; everything else (graph topo-sort, transient pool, encode
-  callbacks) stays. Drop-shadow receipt (parent's `p6_02`)
-  re-greens through the vello path.
-- **Phase 7'**: picture caching, **shape changes substantially**.
-  Parent Phase 7's tile cache stored `Arc<wgpu::Texture>` per tile;
-  the rasterizer rendered each dirty tile to its own texture; the
-  composite drew one `brush_image_alpha` per tile. Under Option C
-  (Masonry pattern), the cached unit becomes `vello::Scene` per
-  tile; composition is `Scene::append` into one frame Scene; one
-  `render_to_texture` per frame, one submit, no per-tile textures.
-  `TileCache` keeps its invalidation algorithm (frame-stamp +
-  dependency hash + retain heuristic — Phase 7A's algorithmic core
-  carries forward). What's deleted: `Tile.texture: Option<Arc<wgpu::Texture>>`
-  field, `render_dirty_tiles` per-tile passes, the
-  `brush_image_alpha`-per-tile composite. What's added: a
-  `VelloRasterizer` owning `HashMap<TileCoord, vello::Scene>` and a
-  single `vello::Renderer`. Receipt: the Phase 7C pixel-equivalence
-  test re-greens through the new path. Note: cross-frame GPU-work
-  skipping is *not* preserved (per §11.3 / risk 8).
-- **Phase 8'**: gradients. Collapses to one slice: `SceneGradient`
-  → `peniko::Gradient` (§3.3). Linear / radial / conic / N-stop
-  all in one push. Estimate: ~1 week vs. parent Phase 8's
-  ~3 months.
-- **Phase 9'**: clips beyond axis-aligned. Vello `push_layer` with
-  arbitrary path. Estimate: ~1 week vs. parent Phase 9's
-  ~1 month, because the rasterizer side is free.
-- **Phase 10'**: text. Per §4: skrifa-based glyph runs through
-  `vello::Scene::draw_glyphs`. Drops `wr_glyph_rasterizer` lift
-  and the atlas. Layout (shaping, BiDi, line breaking, font
-  fallback) stays embedder-side per §4.4 — Servo lowers from its
-  existing `gfx` + harfrust + inline-layout stack; embedders
-  without one are pointed at parley as the recommended companion.
-  Estimate: ~1 month total (consumer-side font ingestion plumbing
-  is the bulk of this), vs. parent's combined Phase 10a + 10b at
-  ~2–3 months.
-- **Phase 11'**: borders / box shadows / line decorations. Strokes,
-  filled paths, blurred fills — vello primitives. Estimate: ~3 weeks
-  vs. parent Phase 11's ~2 months.
-- **Phase 12'**: compositing correctness. Same scope as parent
-  Phase 12 (filter chains, nested isolation, group opacity,
-  backdrop). Vello does the in-picture parts; render-task graph
-  does between-picture parts. Estimate: similar to parent at
-  ~1–2 months — this is where vello *doesn't* save much, because
-  the hard work is graph topology.
-- **Phase 13'**: native compositor. Unchanged from parent.
+**Status legend:** ✅ delivered · 🚧 partial · ⏳ pending
 
-**Total revised estimate**: ~6–7 months for full webrender-equivalent
-under the vello path, vs. parent's ~13. The savings come almost
-entirely from Phases 8 / 10 / 11. Static-page demo lands at
-month 2–3 (rects + transforms + clips + images + simple text).
-Production-quality on a single platform at month 5–6.
+- ✅ **Phase 0.5'**: crate split (`netrender` + `netrender_device`).
+  Delivered before vello work began.
+- ✅ **Phase 1'**: first-light + oracle smoke green. Three probes
+  in `p1prime_vello_first_light` cleared the §11.6 runtime spikes;
+  five p2 oracle PNGs round-trip byte-exactly through vello via
+  `p1prime_oracle_regreen`. §11.7 captures the findings.
+- ✅ **Phase 2'**: rect ingestion + transforms + axis-aligned clips.
+  Receipts at `p2prime_vello_rects` (3 probes) and the re-greened
+  `p3_transforms` (7 tests; 5 byte-exact, 2 with vello-captured
+  oracles for rotation cases).
+- ✅ **Phase 3'**: subsumed into Phase 2' — `transform_id` +
+  `clip_rect` flow through the same translator.
+- ✅ **Phase 4'**: depth / ordering. Vello handles painter order
+  natively; the parent plan's depth pre-pass for opaques was
+  dropped entirely. No receipt needed beyond what Phase 2'
+  scenes already cover.
+- ✅ **Phase 5'**: image primitives, all three sub-phases:
+  - 5a image translator (full UV, alpha tint)
+  - 5b chromatic tints via Mix::Multiply + SrcAtop
+  - 5c Path B `register_texture` for GPU-resident image sources
+- ✅ **Phase 6'**: render-task graph (delivered before vello).
+  Vello does NOT slot in as a per-tile rasterization task as the
+  pre-spike draft envisioned; the bridge is `insert_image_vello`
+  for graph outputs to feed into vello scenes (see §11.8). Drop-
+  shadow receipt (`p6_02`) re-greened through `render_vello`.
+- ✅ **Phase 7'**: picture caching via Masonry pattern. See §11.8
+  for full findings + cleanup outcome. The §2.2 `Rasterizer`
+  trait was dropped in favor of direct `VelloTileRasterizer`
+  ownership on `Renderer`.
+- ✅ **Phase 8'**: gradients. `p8prime_vello_gradients` covers
+  linear / circular-radial / elliptical-radial / conic with
+  N-stop ramps.
+- ⏳ **Phase 9'**: path-shaped clips (arbitrary `kurbo::BezPath`
+  in `push_layer`). Currently the existing rounded-rect mask
+  tests (`p9a/b/c`) work via the render-graph clip_rectangle
+  pipeline + `insert_image_vello` — the mask becomes a tinted
+  image rather than a vello-native path clip. Phase 9' replaces
+  that indirection with native vello path clips. Smallest pending
+  phase.
+- ⏳ **Phase 10'**: text via `Scene::draw_glyphs` + skrifa. Layout
+  stays embedder-side per §4.4 (parley for embedders without an
+  existing layout layer). Bigger lift; needs glyph-run plumbing
+  in the netrender Scene API.
+- ⏳ **Phase 11'**: borders / box shadows / line decorations as
+  native vello primitives. Today box-shadow goes through the
+  brush_blur render-graph task (which still works). Phase 11'
+  replaces strokes + blurred fills with vello-native primitives.
+- ⏳ **Phase 12'**: compositing correctness — filter chains, nested
+  isolation, group opacity, backdrop filters. Vello does the
+  in-picture parts; render-task graph does between-picture parts.
+  Color-space contract (§6.3) constrains what's reachable here:
+  `mix-blend-mode: linear-light` and similar are upstream-blocked
+  on vello GPU compute path.
+- ⏳ **Phase 13'**: native compositor (axiom 14). Unchanged from
+  parent. Lost the trivial-handoff property at Phase 7' (per §2.4);
+  v1.5 fallback (whole-frame vello + post-render tile slicing for
+  native-compositor handoff) remains an escape hatch if needed.
 
-These are targets in the parent's idiom, not estimates. Done
-conditions per phase are the receipts above; calendar is whatever
-calendar lands those receipts.
+**Priority guidance for the four pending phases:**
+
+The order to tackle 9'/10'/11'/12' depends on what consumer needs
+land first. As of post-cleanup:
+
+1. **Phase 9'** is the smallest and unblocks the existing
+   `p9a`/`p9b`/`p9c` tests to use vello-native path clips
+   instead of the render-graph mask indirection. Good warm-up
+   slice.
+2. **Phase 10'** is the largest. Glyph-run plumbing in Scene +
+   font ingestion + measurement story (especially for content
+   not coming from an existing layout engine). For a graphshell
+   consumer, 10' might land *after* a parley adapter is needed;
+   for Servo, this is its existing `gfx` lowering target.
+3. **Phase 11'** is bounded by what borders / shadows the consumer
+   needs. CSS-style borders are well-trodden; SVG strokes need
+   more vello primitive coverage.
+4. **Phase 12'** is filters + compositing correctness. Lowest
+   priority for a static-content consumer, highest for a real
+   web-engine target.
+
+Re-evaluate the order based on what graphshell actually needs to
+render first. The parent plan's calendar estimates ("~1 week" for
+9', "~1 month" for 10', etc.) are loose; do the work and let the
+receipts land when they land.
 
 ## 13. Risks not already covered
 

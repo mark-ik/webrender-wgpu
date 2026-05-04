@@ -157,6 +157,15 @@ impl VelloTileRasterizer {
     ) -> Result<(), vello::Error> {
         self.refresh_image_data(scene);
 
+        // Build the merged Path A + Path B image map once per frame
+        // (Path B overrides win on key collision). Previously this
+        // ran inside build_tile_scene and re-merged for every dirty
+        // tile — O(N_images × N_dirty_tiles) instead of O(N_images).
+        let mut merged_images = self.image_data.clone();
+        for (key, image) in &self.image_overrides {
+            merged_images.insert(*key, image.clone());
+        }
+
         let dirty = tile_cache.invalidate(scene);
         self.last_dirty_count = dirty.len();
 
@@ -164,7 +173,8 @@ impl VelloTileRasterizer {
             let world_rect = tile_cache
                 .tile_world_rect(coord)
                 .expect("dirty tile must be in tile_cache");
-            let tile_scene = self.build_tile_scene(scene, world_rect);
+            let filtered = filter_scene_to_tile(scene, world_rect);
+            let tile_scene = scene_to_vello_with_overrides(&filtered, &merged_images);
             self.tile_scenes.insert(coord, tile_scene);
         }
 
@@ -211,18 +221,6 @@ impl VelloTileRasterizer {
                 },
             );
         }
-    }
-
-    fn build_tile_scene(&self, scene: &Scene, tile_rect: [f32; 4]) -> vello::Scene {
-        let filtered = filter_scene_to_tile(scene, tile_rect);
-        // Merge per-frame Path A blobs with caller-registered Path B
-        // textures. Path B wins on key collision (same precedence as
-        // `scene_to_vello_with_overrides` itself enforces).
-        let mut merged = self.image_data.clone();
-        for (key, image) in &self.image_overrides {
-            merged.insert(*key, image.clone());
-        }
-        scene_to_vello_with_overrides(&filtered, &merged)
     }
 
     fn compose_master(&self, tile_cache: &TileCache) -> vello::Scene {
