@@ -41,6 +41,7 @@
 
 pub(crate) mod adapter;
 pub(crate) mod binding;
+pub mod compositor;
 pub(crate) mod core;
 pub(crate) mod frame;
 pub(crate) mod pipeline;
@@ -48,6 +49,7 @@ pub(crate) mod readback;
 pub(crate) mod shader;
 
 pub use crate::adapter::WgpuDevice;
+pub use crate::compositor::{Compositor, LayerPresent, PresentedFrame, SurfaceKey};
 pub use crate::core::{BootError, REQUIRED_FEATURES, WgpuHandles, boot};
 pub use crate::pipeline::{
     BrushBlurPipeline, ClipRectanglePipeline, GradientKind, build_brush_blur,

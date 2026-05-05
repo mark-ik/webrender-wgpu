@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use netrender::{
     ColorLoad, FontBlob, Glyph, NetrenderOptions, Scene, boot, create_netrender_instance,
+    peniko::Blob,
 };
 
 const DIM: u32 = 128;
@@ -92,7 +93,7 @@ fn p10b_01_render_real_font_glyph() {
 
     let mut scene = Scene::new(DIM, DIM);
     let font_id = scene.push_font(FontBlob {
-        data: Arc::new(font_bytes),
+        data: Blob::new(Arc::new(font_bytes)),
         index: 0,
     });
 

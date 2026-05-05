@@ -62,7 +62,7 @@ fn read_png(path: &Path) -> (u32, u32, Vec<u8>) {
 }
 
 fn should_regen() -> bool {
-    std::env::var("NETRENDER_REGEN").map_or(false, |v| v == "1")
+    std::env::var("NETRENDER_REGEN").is_ok_and(|v| v == "1")
 }
 
 /// Upload CPU bytes as a `Rgba8Unorm` TEXTURE_BINDING texture.
@@ -101,7 +101,6 @@ fn upload_rgba8(
     tex
 }
 
-/// Bilinear-clamp sampler for blur passes.
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 /// Uniform color is invariant under Gaussian blur: output must equal input
@@ -182,7 +181,7 @@ fn p6_02_drop_shadow() {
         .flat_map(|i| {
             let x = (i % DIM) as i32;
             let y = (i / DIM) as i32;
-            if x >= 16 && x < 48 && y >= 16 && y < 48 {
+            if (16..48).contains(&x) && (16..48).contains(&y) {
                 [255u8, 255, 255, 255]
             } else {
                 [0u8, 0, 0, 0]

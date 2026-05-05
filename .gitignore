@@ -25,3 +25,5 @@ wrench/ron_frames
 
 # System
 .fuse_hidden*
+test-logs/
+netrender/examples/output/

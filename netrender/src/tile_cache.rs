@@ -12,12 +12,12 @@
 //!
 //! Algorithm:
 //!   1. Tick `current_frame`.
-//!   2. For each tile in the viewport grid:
-//!      a. Hash the per-prim state of every primitive whose world AABB
-//!         intersects the tile, in painter order.
-//!      b. Compare against the tile's `last_hash`. New or changed →
-//!         report as dirty and update the cached hash.
-//!      c. Mark the tile as seen this frame.
+//!   2. For each tile in the viewport grid: hash every primitive
+//!      whose world AABB intersects the tile (in painter order),
+//!      compare against the tile's `last_hash`, and report new or
+//!      changed tiles as dirty (updating the cached hash). Mark
+//!      every tile seen this frame.
+//!
 //!   3. Evict tiles whose `last_seen_frame` is more than `RETAIN_FRAMES`
 //!      stale (Arc drop, wgpu reclaims memory in Phase 7B+).
 //!
@@ -28,11 +28,10 @@
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
-use std::sync::Arc;
 
 use crate::scene::{
-    PathOp, Scene, SceneGlyphRun, SceneGradient, SceneImage, SceneRect, SceneShape, SceneStroke,
-    Transform,
+    PathOp, Scene, SceneGlyphRun, SceneGradient, SceneImage, SceneOp, SceneRect, SceneShape,
+    SceneStroke, Transform,
 };
 
 /// Integer (col, row) coordinate of a tile within the cache grid.
@@ -47,20 +46,13 @@ const RETAIN_FRAMES: u64 = 4;
 /// `last_seen_frame == 0`.
 const FRESH_HASH_SENTINEL: u64 = 0xDEAD_BEEF_DEAD_BEEF;
 
-/// One tile's bookkeeping. Phase 7A stores the world rect, the last
-/// computed dependency hash, and the frame stamp. Phase 7B adds an
-/// `Arc<wgpu::Texture>` for the cached render output.
+/// One tile's bookkeeping: the world rect this tile covers, the last
+/// computed dependency hash, and the frame stamp.
 #[derive(Clone)]
 pub(crate) struct Tile {
-    /// World-space rect this tile covers. Read by 7B's per-tile
-    /// projection builder.
     pub world_rect: [f32; 4],
     pub last_hash: u64,
     pub last_seen_frame: u64,
-    /// Cached render output. `None` until the tile is first rendered;
-    /// re-allocated on each dirty re-render (Arc drop releases the old
-    /// texture's GPU memory).
-    pub texture: Option<Arc<wgpu::Texture>>,
 }
 
 /// Picture-cache state. One instance per cached picture (Phase 7A ships
@@ -111,12 +103,6 @@ impl TileCache {
         self.tiles.get(&coord).map(|t| t.world_rect)
     }
 
-    /// Cached render texture for the named tile, or `None` if the tile
-    /// has never been rendered (or has been evicted).
-    pub fn tile_texture(&self, coord: TileCoord) -> Option<Arc<wgpu::Texture>> {
-        self.tiles.get(&coord).and_then(|t| t.texture.clone())
-    }
-
     /// Tick the frame counter, recompute each tile's dependency hash
     /// against `scene`, and return the list of tile coords whose
     /// dependencies changed (= need re-rendering in Phase 7B).
@@ -128,8 +114,8 @@ impl TileCache {
         let frame = self.current_frame;
         let tile_size = self.tile_size;
 
-        let n_cols = (scene.viewport_width + tile_size - 1) / tile_size;
-        let n_rows = (scene.viewport_height + tile_size - 1) / tile_size;
+        let n_cols = scene.viewport_width.div_ceil(tile_size);
+        let n_rows = scene.viewport_height.div_ceil(tile_size);
 
         let mut dirty = Vec::new();
 
@@ -149,7 +135,6 @@ impl TileCache {
                     world_rect,
                     last_hash: FRESH_HASH_SENTINEL,
                     last_seen_frame: 0,
-                    texture: None,
                 });
 
                 let is_new = tile.last_seen_frame == 0;
@@ -188,42 +173,59 @@ fn hash_tile_deps(scene: &Scene, tile_rect: [f32; 4]) -> u64 {
     hasher.write_u8(scene.root_blend_mode as u8);
 
 
-    for rect in &scene.rects {
-        let aabb = world_aabb_rect(rect, scene);
-        if aabb_intersects(aabb, tile_rect) {
-            hash_rect(&mut hasher, rect);
-        }
-    }
-    for image in &scene.images {
-        let aabb = world_aabb_image(image, scene);
-        if aabb_intersects(aabb, tile_rect) {
-            hash_image(&mut hasher, image);
-        }
-    }
-    for grad in &scene.gradients {
-        let aabb = world_aabb_gradient(grad, scene);
-        if aabb_intersects(aabb, tile_rect) {
-            hash_gradient(&mut hasher, grad);
-        }
-    }
-    for stroke in &scene.strokes {
-        let aabb = world_aabb_stroke(stroke, scene);
-        if aabb_intersects(aabb, tile_rect) {
-            hash_stroke(&mut hasher, stroke);
-        }
-    }
-    for shape in &scene.shapes {
-        if let Some(aabb) = world_aabb_shape(shape, scene) {
-            if aabb_intersects(aabb, tile_rect) {
-                hash_shape(&mut hasher, shape);
+    // Walk ops in painter order; hash anything whose AABB intersects
+    // the tile. The ordering is consumer push order, so within-tile
+    // hash bytes change if a primitive is reordered relative to its
+    // siblings (which is correct: reordering changes the rendered
+    // result).
+    for op in &scene.ops {
+        match op {
+            SceneOp::Rect(rect) => {
+                let aabb = world_aabb_rect(rect, scene);
+                if aabb_intersects(aabb, tile_rect) {
+                    hash_rect(&mut hasher, rect);
+                }
             }
-        }
-    }
-    for run in &scene.glyph_runs {
-        if let Some(aabb) = world_aabb_glyph_run(run, scene) {
-            if aabb_intersects(aabb, tile_rect) {
-                hash_glyph_run(&mut hasher, run);
+            SceneOp::Image(image) => {
+                let aabb = world_aabb_image(image, scene);
+                if aabb_intersects(aabb, tile_rect) {
+                    hash_image(&mut hasher, image);
+                }
             }
+            SceneOp::Gradient(grad) => {
+                let aabb = world_aabb_gradient(grad, scene);
+                if aabb_intersects(aabb, tile_rect) {
+                    hash_gradient(&mut hasher, grad);
+                }
+            }
+            SceneOp::Stroke(stroke) => {
+                let aabb = world_aabb_stroke(stroke, scene);
+                if aabb_intersects(aabb, tile_rect) {
+                    hash_stroke(&mut hasher, stroke);
+                }
+            }
+            SceneOp::Shape(shape) => {
+                if let Some(aabb) = world_aabb_shape(shape, scene) {
+                    if aabb_intersects(aabb, tile_rect) {
+                        hash_shape(&mut hasher, shape);
+                    }
+                }
+            }
+            SceneOp::GlyphRun(run) => {
+                if let Some(aabb) = world_aabb_glyph_run(run, scene) {
+                    if aabb_intersects(aabb, tile_rect) {
+                        hash_glyph_run(&mut hasher, run);
+                    }
+                }
+            }
+            // Layer push/pop ops are global to a tile's content
+            // structure: the layer's visual effect modifies every
+            // inner op's pixels. Hash the layer fields for every
+            // tile so changes invalidate all affected tiles.
+            // (Conservative — could be tightened by walking the
+            // layer's clip-AABB later if profiles surface it.)
+            SceneOp::PushLayer(layer) => hash_push_layer(&mut hasher, layer),
+            SceneOp::PopLayer => hasher.write_u8(0xFF),
         }
     }
 
@@ -377,6 +379,60 @@ fn hash_gradient(h: &mut DefaultHasher, g: &SceneGradient) {
     }
     for c in g.clip_corner_radii {
         h.write_u32(c.to_bits());
+    }
+}
+
+fn hash_push_layer(h: &mut DefaultHasher, layer: &crate::scene::SceneLayer) {
+    use crate::scene::SceneClip;
+    h.write_u32(layer.alpha.to_bits());
+    h.write_u8(layer.blend_mode as u8);
+    h.write_u32(layer.transform_id);
+    match &layer.clip {
+        SceneClip::None => h.write_u8(0),
+        SceneClip::Rect { rect, radii } => {
+            h.write_u8(1);
+            for f in rect {
+                h.write_u32(f.to_bits());
+            }
+            for f in radii {
+                h.write_u32(f.to_bits());
+            }
+        }
+        SceneClip::Path(path) => {
+            h.write_u8(2);
+            h.write_usize(path.ops.len());
+            for op in &path.ops {
+                match *op {
+                    crate::scene::PathOp::MoveTo(x, y) => {
+                        h.write_u8(b'M');
+                        h.write_u32(x.to_bits());
+                        h.write_u32(y.to_bits());
+                    }
+                    crate::scene::PathOp::LineTo(x, y) => {
+                        h.write_u8(b'L');
+                        h.write_u32(x.to_bits());
+                        h.write_u32(y.to_bits());
+                    }
+                    crate::scene::PathOp::QuadTo(cx, cy, x, y) => {
+                        h.write_u8(b'Q');
+                        h.write_u32(cx.to_bits());
+                        h.write_u32(cy.to_bits());
+                        h.write_u32(x.to_bits());
+                        h.write_u32(y.to_bits());
+                    }
+                    crate::scene::PathOp::CubicTo(c1x, c1y, c2x, c2y, x, y) => {
+                        h.write_u8(b'C');
+                        h.write_u32(c1x.to_bits());
+                        h.write_u32(c1y.to_bits());
+                        h.write_u32(c2x.to_bits());
+                        h.write_u32(c2y.to_bits());
+                        h.write_u32(x.to_bits());
+                        h.write_u32(y.to_bits());
+                    }
+                    crate::scene::PathOp::Close => h.write_u8(b'Z'),
+                }
+            }
+        }
     }
 }
 

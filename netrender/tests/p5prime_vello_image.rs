@@ -123,13 +123,13 @@ fn quadrant_image() -> ImageData {
             bytes.extend_from_slice(&pixel);
         }
     }
-    ImageData { width: SZ, height: SZ, bytes }
+    ImageData::from_bytes(SZ, SZ, bytes)
 }
 
 /// Build a uniformly-white opaque image at the given size.
 fn solid_white_image(size: u32) -> ImageData {
     let bytes: Vec<u8> = (0..size * size).flat_map(|_| [255u8, 255, 255, 255]).collect();
-    ImageData { width: size, height: size, bytes }
+    ImageData::from_bytes(size, size, bytes)
 }
 
 const IMG_KEY: u64 = 0x01;

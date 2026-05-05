@@ -110,7 +110,7 @@ fn render_scene(scene: &Scene) -> Vec<u8> {
 
 fn solid_white_image(size: u32) -> ImageData {
     let bytes: Vec<u8> = (0..size * size).flat_map(|_| [255u8, 255, 255, 255]).collect();
-    ImageData { width: size, height: size, bytes }
+    ImageData::from_bytes(size, size, bytes)
 }
 
 /// White image with full red tint `[1.0, 0.0, 0.0, 1.0]` — output
@@ -181,7 +181,7 @@ fn p5b_03_chromatic_preserves_image_alpha() {
     let mut bytes = Vec::with_capacity((SZ * SZ * 4) as usize);
     for y in 0..SZ {
         for x in 0..SZ {
-            let inside = x >= 4 && x < 12 && y >= 4 && y < 12;
+            let inside = (4..12).contains(&x) && (4..12).contains(&y);
             let pixel = if inside {
                 [255u8, 255, 255, 255]
             } else {
@@ -190,7 +190,7 @@ fn p5b_03_chromatic_preserves_image_alpha() {
             bytes.extend_from_slice(&pixel);
         }
     }
-    let img = ImageData { width: SZ, height: SZ, bytes };
+    let img = ImageData::from_bytes(SZ, SZ, bytes);
 
     let mut scene = Scene::new(DIM, DIM);
     scene.image_sources.insert(IMG_KEY, img);

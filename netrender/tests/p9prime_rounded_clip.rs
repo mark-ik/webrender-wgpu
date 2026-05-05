@@ -152,7 +152,7 @@ fn p9prime_02_image_rounded_clip() {
     const KEY: u64 = 0xC11D;
     // 8×8 solid blue image, stretched to fill the canvas.
     let bytes: Vec<u8> = (0..64).flat_map(|_| [0u8, 0, 255, 255]).collect();
-    let img = ImageData { width: 8, height: 8, bytes };
+    let img = ImageData::from_bytes(8, 8, bytes);
 
     let mut scene = Scene::new(DIM, DIM);
     scene.image_sources.insert(KEY, img);

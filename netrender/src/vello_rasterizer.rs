@@ -48,18 +48,31 @@
 //! matching `kurbo::Affine::new([a, b, c, d, e, f])`.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use vello::kurbo::{Affine, BezPath, Point, Rect, RoundedRect, RoundedRectRadii, Stroke};
 use vello::peniko::{
-    self, BlendMode, Blob, Color, ColorStop, Compose, Fill, FontData, Gradient, ImageAlphaType,
+    self, BlendMode, Color, ColorStop, Compose, Fill, FontData, Gradient, ImageAlphaType,
     ImageBrush, ImageData, ImageFormat, Mix,
 };
 
 use crate::scene::{
-    FontBlob, GradientKind, ImageKey, NO_CLIP, PathOp, Scene, SceneGlyphRun, SceneGradient,
-    SceneImage, SceneRect, SceneShape, SceneStroke, Transform,
+    FontBlob, GradientKind, ImageKey, NO_CLIP, PathOp, Scene, SceneBlendMode, SceneClip,
+    SceneGlyphRun, SceneGradient, SceneImage, SceneLayer, SceneOp, SceneRect, SceneShape,
+    SceneStroke, Transform,
 };
+
+/// Map a netrender [`SceneBlendMode`] to a vello [`BlendMode`].
+pub(crate) fn map_blend_mode(b: SceneBlendMode) -> peniko::BlendMode {
+    let mix = match b {
+        SceneBlendMode::Normal => peniko::Mix::Normal,
+        SceneBlendMode::Multiply => peniko::Mix::Multiply,
+        SceneBlendMode::Screen => peniko::Mix::Screen,
+        SceneBlendMode::Overlay => peniko::Mix::Overlay,
+        SceneBlendMode::Darken => peniko::Mix::Darken,
+        SceneBlendMode::Lighten => peniko::Mix::Lighten,
+    };
+    peniko::BlendMode::new(mix, peniko::Compose::SrcOver)
+}
 
 /// Translate a netrender [`Scene`] into a [`vello::Scene`] suitable
 /// for [`vello::Renderer::render_to_texture`].
@@ -94,24 +107,42 @@ pub fn scene_to_vello_with_overrides(
 
     let images = build_image_cache(scene, image_overrides);
 
-    for rect in &scene.rects {
-        emit_rect(&mut vscene, rect, &scene.transforms);
+    // Single pass over the unified op list — painter order = consumer
+    // push order. (Pre-2026-05-04 op-list refactor this dispatched
+    // through six per-type Vec passes with a fixed cross-type order;
+    // see plan §11.11 for context.)
+    // Layer-balance counter so debug builds catch unbalanced
+    // PushLayer/PopLayer pairs at scene-translation time. In release
+    // an unbalanced PopLayer with no live layer is silently skipped
+    // (vello would panic on underflow).
+    let mut layer_depth: u32 = 0;
+    for op in &scene.ops {
+        match op {
+            SceneOp::Rect(rect) => emit_rect(&mut vscene, rect, &scene.transforms),
+            SceneOp::Stroke(stroke) => emit_stroke(&mut vscene, stroke, &scene.transforms),
+            SceneOp::Gradient(gradient) => emit_gradient(&mut vscene, gradient, &scene.transforms),
+            SceneOp::Image(image) => emit_image(&mut vscene, image, &scene.transforms, &images),
+            SceneOp::Shape(shape) => emit_shape(&mut vscene, shape, &scene.transforms),
+            SceneOp::GlyphRun(run) => {
+                emit_glyph_run(&mut vscene, run, &scene.fonts, &scene.transforms)
+            }
+            SceneOp::PushLayer(layer) => {
+                emit_push_layer(&mut vscene, layer, scene);
+                layer_depth += 1;
+            }
+            SceneOp::PopLayer => {
+                debug_assert!(layer_depth > 0, "SceneOp::PopLayer with no matching PushLayer");
+                if layer_depth > 0 {
+                    vscene.pop_layer();
+                    layer_depth -= 1;
+                }
+            }
+        }
     }
-    for stroke in &scene.strokes {
-        emit_stroke(&mut vscene, stroke, &scene.transforms);
-    }
-    for gradient in &scene.gradients {
-        emit_gradient(&mut vscene, gradient, &scene.transforms);
-    }
-    for image in &scene.images {
-        emit_image(&mut vscene, image, &scene.transforms, &images);
-    }
-    for shape in &scene.shapes {
-        emit_shape(&mut vscene, shape, &scene.transforms);
-    }
-    for run in &scene.glyph_runs {
-        emit_glyph_run(&mut vscene, run, &scene.fonts, &scene.transforms);
-    }
+    debug_assert_eq!(
+        layer_depth, 0,
+        "Scene ended with {} unclosed PushLayer(s)", layer_depth,
+    );
 
     vscene
 }
@@ -121,13 +152,14 @@ fn build_image_cache(
     overrides: &HashMap<ImageKey, ImageData>,
 ) -> HashMap<ImageKey, ImageData> {
     let mut cache = HashMap::with_capacity(scene.image_sources.len() + overrides.len());
-    // Path A — CPU bytes from scene.image_sources.
+    // Path A — Arc-shared bytes from scene.image_sources. Cloning a
+    // peniko::Blob is Arc-bump + id copy; vello dedups atlas slots
+    // by Blob::id() so the same source bytes share one upload.
     for (key, data) in &scene.image_sources {
-        let blob = Blob::new(Arc::new(data.bytes.clone()));
         cache.insert(
             *key,
             ImageData {
-                data: blob,
+                data: data.data.clone(),
                 format: ImageFormat::Rgba8,
                 alpha_type: ImageAlphaType::Alpha,
                 width: data.width,
@@ -172,8 +204,11 @@ fn emit_glyph_run(
         return;
     }
     let blob = &fonts[run.font_id as usize];
+    // `FontBlob.data` is already a `peniko::Blob<u8>` with a stable
+    // id across frames (post-FontBlob unification); cloning it is
+    // an Arc bump + id copy, not a fresh atlas slot.
     let font_data = FontData {
-        data: Blob::new(blob.data.clone()),
+        data: blob.data.clone(),
         index: blob.index,
     };
     let world = transform_to_affine(&transforms[run.transform_id as usize]);
@@ -283,6 +318,58 @@ fn emit_stroke(vscene: &mut vello::Scene, stroke: &SceneStroke, transforms: &[Tr
 
     if needs_clip {
         vscene.pop_layer();
+    }
+}
+
+/// Phase 12b' — emit a `vscene.push_layer` for a [`SceneLayer`] op.
+/// The matching `pop_layer` is emitted by the `SceneOp::PopLayer`
+/// arm of `scene_to_vello_with_overrides`.
+fn emit_push_layer(vscene: &mut vello::Scene, layer: &SceneLayer, scene: &Scene) {
+    let blend = map_blend_mode(layer.blend_mode);
+    let alpha = layer.alpha.clamp(0.0, 1.0);
+    let world = transform_to_affine(&scene.transforms[layer.transform_id as usize]);
+
+    match &layer.clip {
+        SceneClip::None => {
+            // No clip → use the viewport rect so vello has a shape
+            // to clip against; the layer is logically unbounded but
+            // pixels outside the viewport never get sampled anyway.
+            let viewport = Rect::new(
+                0.0,
+                0.0,
+                scene.viewport_width as f64,
+                scene.viewport_height as f64,
+            );
+            vscene.push_layer(Fill::NonZero, blend, alpha, world, &viewport);
+        }
+        SceneClip::Rect { rect, radii } => {
+            let r = Rect::new(
+                rect[0] as f64,
+                rect[1] as f64,
+                rect[2] as f64,
+                rect[3] as f64,
+            );
+            if radii.iter().any(|&v| v > 0.0) {
+                let rrect = RoundedRect::from_rect(
+                    r,
+                    RoundedRectRadii::new(
+                        radii[0] as f64,
+                        radii[1] as f64,
+                        radii[2] as f64,
+                        radii[3] as f64,
+                    ),
+                );
+                vscene.push_layer(Fill::NonZero, blend, alpha, world, &rrect);
+            } else {
+                vscene.push_layer(Fill::NonZero, blend, alpha, world, &r);
+            }
+        }
+        SceneClip::Path(path) => {
+            // Phase 9b' — arbitrary `kurbo::BezPath` clip. Same
+            // path-build pipeline as `SceneShape`.
+            let bez = build_bez_path(path);
+            vscene.push_layer(Fill::NonZero, blend, alpha, world, &bez);
+        }
     }
 }
 

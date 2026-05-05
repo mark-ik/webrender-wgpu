@@ -516,6 +516,55 @@ Servo, with its existing layout, ignores that adapter and lowers
 through its own path. Both paths converge on the same downstream
 glyph-run interface — the layering stays clean.
 
+**Status — landed (2026-05-04):** `netrender_text` exists as a
+sibling crate in the workspace. Public API is one function:
+
+```rust
+pub fn push_layout(scene: &mut Scene, layout: &parley::Layout<[f32; 4]>, origin: [f32; 2])
+```
+
+`Brush` is fixed to `[f32; 4]` (premultiplied RGBA, matching
+netrender's color contract) so consumers vary text color via
+`StyleProperty::Brush(...)` on parley spans. Fonts referenced by a
+single layout are deduped within one `push_layout` call by
+`peniko::Blob::id()` + font index. Across calls, fonts re-register;
+a persistent cross-call font map is a future addition for streaming
+consumers. Decoration painting (underline / strikethrough), inline
+boxes, and synthesis are explicitly out of scope — the consumer
+handles inline boxes, decorations land when there's pull, and
+synthesis is upstream-blocked.
+
+The boundary is the **data type** (`netrender::SceneGlyphRun`), not
+a `Shaper` trait — same "abstraction without users" reasoning that
+killed the `Rasterizer` trait in §2.2 applies. A consumer wanting
+cosmic-text writes `netrender_cosmic_text` that emits SceneGlyphRuns
+the same way; nothing in `netrender` or `netrender_text` changes.
+
+Receipts at `netrender_text/tests/shape_and_paint.rs`:
+
+- `netrender_text_01_shaped_paragraph_paints` — load a system font,
+  shape "Hello, world!" through parley, push to a Scene, render via
+  the vello path, count painted pixels. Skips on hosts without a
+  recognized font path.
+- `netrender_text_02_font_deduped_within_layout` — multi-line
+  layout with a single font registers exactly one entry in
+  `scene.fonts` (slot 1; slot 0 is the no-font sentinel) and every
+  glyph run references that slot.
+
+Demo (`netrender/examples/demo_card_grid.rs`) consumes the adapter
+for its card labels. Comparison vs. the pre-shaping hand-rolled
+fixed-pitch label code: shaped output handles mixed-case strings,
+real kerning, and arbitrary characters (e.g. "Z-order probe",
+"Radial + shadow") that the previous uppercase-only ASCII hack
+couldn't render.
+
+**Cross-call dedup — landed via `netrender::FontRegistry`.** Pulled
+forward as part of the C-architecture readiness work (§11.17) so
+the consumer side ships ready for both single-consumer and
+multi-consumer patterns. Used via `push_layout_with_registry`;
+the existing `push_layout` is a thin wrapper that builds a fresh
+registry per call.
+
 ## 5. Filters and the render-task graph
 
 Phase 6 is delivered. Phase 12 (filter chains, nested isolation)
@@ -1037,11 +1086,20 @@ existing batched-pipeline oracle PNGs.
   trait is an abstraction without users. `VelloTileRasterizer` is
   concrete on `Renderer`. Re-introduce only when a second rasterizer
   ships.
-- **Per-frame image-cache rebuild.** `refresh_image_data` clears and
-  rebuilds the Path A `peniko::ImageData` map every frame, defeating
-  vello's `Blob.id()` dedup. Documented in module docs as a known
-  inefficiency to revisit when image-heavy scenes show up in
-  profiles. Not load-bearing for the test suite.
+- **Per-frame image-cache rebuild — resolved (2026-05-04).**
+  `VelloTileRasterizer::refresh_image_data` previously cleared and
+  rebuilt the Path A `peniko::ImageData` map every frame, defeating
+  vello's `Blob.id()` dedup. Now the map is persistent: new
+  `ImageKey`s are added on first sight via `entry().or_insert_with`,
+  keys that disappear from `scene.image_sources` are evicted via
+  `retain`. Each `Arc<Vec<u8>>` lives across frames so vello's atlas
+  uploads once per key. Verified by `p7prime_05` (Blob id stable
+  across re-render and Scene-instance swap) and `p7prime_06`
+  (eviction when key drops from scene). The same per-frame rebuild
+  still exists in `vello_rasterizer::build_image_cache` for the
+  non-tile path; that path doesn't own state across frames so the
+  fix would require either a stateful wrapper or moving the cache
+  up into the caller.
 - **No native-compositor handoff (axiom 14).** Confirmed loss as
   predicted in §2.4. Servo doesn't use this today; the v1.5 fallback
   in §recommendation (whole-frame vello + post-render tile slicing)
@@ -1077,6 +1135,564 @@ on `main`:
 Net: -90,000 lines on `main` across the cleanup, leaving netrender
 (6,034) + netrender_device (730) ≈ 6,764 lines of live Rust. Vello
 is the sole rasterizer.
+
+### 11.9 `FontBlob` unified to `peniko::Blob<u8>` (2026-05-04) — **CLEARED**
+
+`netrender::FontBlob` originally held `Arc<Vec<u8>>` plus a `u32`
+font-collection index, and `vello_rasterizer::emit_glyph_run`
+wrapped it in a fresh `peniko::Blob::new(...)` per glyph run, per
+render. Two consequences:
+
+1. **Vello's font atlas couldn't dedup across frames.** Vello keys
+   font atlas slots on `Blob::id()`. `Blob::new` mints a unique id
+   at construction; reconstructing the blob every render meant
+   every frame's font lookup hit a fresh id and re-uploaded.
+2. **The parley adapter copied bytes per `push_layout` call** —
+   `Arc::new(font_data.data.data().to_vec())` allocated a fresh
+   `Vec<u8>` of the TTF size, since `parley::FontData::data` was
+   `peniko::Blob<u8>` and `FontBlob.data` was `Arc<Vec<u8>>`.
+   Different shape, no conversion path that preserved id.
+
+Resolution: changed `pub data: Arc<Vec<u8>>` to `pub data:
+peniko::Blob<u8>` (re-exported via `netrender::peniko::Blob`).
+Construction sites in tests now wrap with `Blob::new(Arc::new(..))`
+once. `emit_glyph_run` clones the blob (Arc + id copy, no bytes).
+Parley adapter clones `font_data.data` directly, no `to_vec()`.
+
+This deliberately leaks `peniko` into `netrender::scene`'s public
+API. The earlier doc claim "the wrapper exists so netrender's Scene
+API doesn't leak peniko types" was undermined by the rasterizer
+already round-tripping through `peniko::Blob` per render and
+defeating its dedup. The honest fix is to align the type, accept
+the public-API surface, and re-export `peniko` for consumer access.
+
+Receipts:
+
+- All 79 workspace tests pass after the change (the same set that
+  passed before, including the parley adapter's `shape_and_paint`
+  binary and the renderer integration tests).
+- Construction-site updates in
+  `netrender/tests/p10prime_a_glyph_api.rs` (5 sites),
+  `netrender/tests/p10prime_b_glyph_render.rs` (1 site), and
+  `netrender_text/src/lib.rs` (1 site, now `font_data.data.clone()`).
+- `vello_rasterizer.rs::emit_glyph_run` simplified from
+  `Blob::new(blob.data.clone())` to `blob.data.clone()`.
+
+Side effect: `netrender` now `pub use vello::peniko;` so consumers
+can build `FontBlob` without a separate `vello`/`peniko` dep.
+
+### 11.10 Variable-radius box-shadow blur (2026-05-04) — **CLEARED**
+
+`Renderer::build_box_shadow_mask` previously took a `blur_step: f32`
+(texel-space sample distance for one fixed 2-pass blur). The 5-tap
+binomial kernel saturates at small effective blur — pushing the
+step up past ~2 px per tap produces visible 5-tap quantization
+instead of a smooth Gaussian, so the API couldn't honestly serve
+CSS-style `box-shadow: 0 0 12px` requests.
+
+Resolution: signature is now `blur_radius_px: f32` (CSS-pixel
+units). `blur_kernel_plan` picks a per-pass step capped at 2 px
+and a pass count `N = ceil((σ_target / step)²)` where
+`σ_target = blur_radius_px / 2` (WebKit/Mozilla convention; the
+spec is ambiguous, the comment in `renderer/mod.rs` flags this).
+`build_box_shadow_mask` then chains `1 + 2N` render-graph tasks:
+mask, then N alternating H/V `brush_blur` passes. Pass count
+capped at 50 — large blurs that exceed it would benefit from the
+classic downscale-blur-upscale trick, not implemented yet.
+
+Receipts:
+
+- Five unit tests (`blur_plan_tests`) cover the planner: zero
+  radius, σ at the cap boundary, cascade trigger, the σ_total
+  invariant, and the pass-count cap.
+- `p11c_02_blur_radius_extends_halo` (in
+  `netrender/tests/p11prime_c_box_shadow.rs`) renders the same
+  shadow source with `blur_radius_px = 2` and `= 16` and asserts
+  the larger blur darkens a probe 8 px outside the source by
+  ≥ 25 grayscale levels — visible runtime evidence the cascade
+  widens the kernel as the radius grows.
+- Demo (`demo_card_grid.rs`) bumped from a 1-pass tight blur to
+  `blur_radius_px = 12.0` for Card 5; the resulting halo is
+  visibly softer and extends further than the previous output.
+
+Math notes (for future maintainers):
+
+- One 5-tap binomial pass with step = `k` pixels has σ = `k`
+  (variance = `k²` — the kernel weights `[1, 4, 6, 4, 1] / 16`
+  applied at offsets `[-2k, -k, 0, k, 2k]`).
+- Cascading N H+V pairs accumulates variance: `σ_total = k · √N`.
+- The empirical receipt at the probe matches Gaussian-edge falloff
+  `0.5 · erfc(d / (σ√2))` to within bilinear-sampler precision.
+
+### 11.17 C-architecture readiness — `compose_into` + registries (2026-05-04) — **CLEARED**
+
+Background: graphshell-shaped consumers building multiple netrender
+viewports per frame have three architecture options (per the
+recommendation discussion this session):
+
+- **A.** Each consumer owns its own `vello::Renderer` and renders to
+  its own texture. Cross-consumer interaction = texture sampling.
+- **B.** Consumers share one `vello::Renderer` via `Mutex`. Each
+  still renders to its own texture; renders serialize at the lock.
+- **C.** A single `vello::Scene` per frame, composed from N
+  consumers via `Scene::append`, rendered once. Atlas slots dedup
+  across consumers via `peniko::Blob::id()`. Cross-consumer
+  interaction = bytewise scene composition.
+
+The decision was: don't ship the consumer side of A→B→C yet (no
+multi-consumer code paths exist), but **make the netrender side
+C-ready now** so when graphshell decides on C the renderer is
+already speaking the protocol. The work landed in this finding.
+
+**What changed:**
+
+1. **`ImageData.bytes` unified to `peniko::Blob<u8>`** (analog to
+   §11.9's `FontBlob` unification). Required for cross-consumer
+   atlas dedup: vello keys atlas slots on `Blob::id()`, which is
+   stable through `Arc`-shared bytes but not through fresh
+   `Vec<u8>` clones. New constructors `ImageData::from_bytes` and
+   `ImageData::from_blob` cover the common cases. 8 construction
+   sites updated across tests and the demo.
+
+2. **`netrender::FontRegistry`** (`registry.rs`). HashMap from
+   `(Blob::id(), font_index)` → `FontId`. Threaded through
+   `netrender_text::push_layout_with_registry` (new function);
+   the existing `push_layout` becomes a thin wrapper that builds
+   a fresh registry per call. Consumers that build many layouts
+   into one Scene per frame share one registry → one entry in
+   `scene.fonts` per unique font, regardless of call count.
+   Receipts: 3 unit tests (dedup within call, separate distinct
+   blobs, separate distinct collection indices).
+
+3. **`netrender::ImageRegistry<K>`** (`registry.rs`). HashMap from
+   consumer-supplied key `K: Eq + Hash` → `ImageKey`. The
+   consumer-key shape acknowledges that "is image A the same as
+   image B" is a consumer-domain question (same URL? content
+   hash?) we can't answer — we just provide the bookkeeping.
+   Receipts: 3 unit tests (dedup by consumer key, distinct keys
+   allocate distinct ImageKeys, `get` doesn't insert).
+
+4. **`VelloTileRasterizer::compose_into`** — the C entry point.
+   Same tile-cache update + master-scene composition as `render`,
+   but appends the result into a caller-provided `vello::Scene`
+   with a caller-provided `Affine` instead of rendering to a
+   texture. Internal: factored a private `build_master_scene`
+   helper that both `render` and `compose_into` call. Receipts:
+   3 integration tests:
+   - `compose_into_01_identity_matches_render` — pixel-exact
+     match (within ±1 channel) between rendering directly and
+     composing-then-rendering at identity transform. Pins the
+     contract that `compose_into` is a refactor of the inner
+     steps of `render`, not a different code path.
+   - `compose_into_02_transform_translates_content` — translate
+     transform shifts content by exactly that translate.
+   - `compose_into_03_two_consumers_share_atlas` — two
+     `VelloTileRasterizer`s composing scenes that reference the
+     *same* `Arc`-shared image bytes produce the same Blob id in
+     each rasterizer's image cache. The cross-consumer dedup
+     signal vello's atlas keys on is reachable.
+
+**What this enables:**
+
+- Graphshell can hold one `vello::Renderer` at app boot, give
+  netrender consumers a `&mut vello::Scene` to compose into, and
+  do a single `render_to_texture` per frame. No cross-consumer
+  texture-sampling boundary; one GPU submit; atlas slots shared
+  across panes.
+- An animating embedded surface (graph node moving across canvas
+  with embedded webview content) re-rasterizes from vector data
+  every frame instead of resampling a fixed texture — sharp at
+  any zoom and any motion.
+- Live thumbnails for a navigator: append a pane's tile-Scenes
+  into the swatch's master Scene with a scale transform; one
+  rasterization, no texture readback.
+
+**What it does *not* enable on its own:**
+
+- Concurrent N-consumer encoding under B is still serialized at
+  the renderer Mutex; only C avoids that.
+- Cross-consumer image-data sharing only kicks in when consumers
+  hand the same `Arc`-shared bytes (or use a shared
+  `ImageRegistry`). Two consumers that each load the same favicon
+  from disk into separate `Vec`s still get separate atlas slots
+  — by design (we don't try to content-hash bytes for them).
+
+**Workspace state after this finding:** 114 tests passing
+(was 105; +9: 6 registry, 3 compose_into), 0 failures,
+0 clippy warnings, 0 build warnings.
+
+### 11.11 Unified painter-order op list (2026-05-04) — **CLEARED**
+
+Pre-refactor `Scene` carried six per-type Vecs (`rects`, `strokes`,
+`gradients`, `images`, `shapes`, `glyph_runs`) and the rasterizer
+walked them in a fixed cross-type order: rects → strokes →
+gradients → images → shapes → glyph runs. Painter order was
+implicit in primitive *type*, not consumer push order.
+
+The first iteration of the demo's Card 6 made the failure mode
+concrete: a magenta "badge" rect pushed *after* an image painted
+*under* the image, because rects-before-images is a property of the
+type-Vec design regardless of consumer intent. The matching note in
+`p11prime_c_box_shadow.rs::p11c_01` flagged the same shape: a drop
+shadow image had to land over (rather than under) its associated
+card body, since rects come first.
+
+Resolution: replaced the six Vecs with one `pub ops: Vec<SceneOp>`
+where
+
+```rust
+pub enum SceneOp {
+    Rect(SceneRect),
+    Stroke(SceneStroke),
+    Gradient(SceneGradient),
+    Image(SceneImage),
+    Shape(SceneShape),
+    GlyphRun(SceneGlyphRun),
+}
+```
+
+Every `Scene::push_*` helper appends one variant; the rasterizer
+iterates `ops` once and dispatches per match arm. Tile-cache
+dependency hashing (`hash_tile_deps`) and the per-tile filter
+(`filter_scene_to_tile`) collapsed similarly — one walk over `ops`
+replaces the six separate walks. Convenience iterators
+`Scene::iter_rects`, `iter_strokes`, … re-expose the per-type view
+where consumers want it (currently used only by tests).
+
+`SceneOp` is now in the public surface alongside `Scene`.
+
+Receipts:
+
+- `netrender/tests/op_list_painter_order.rs` — three new tests:
+  `op_order_01` proves a rect pushed after an image paints on top
+  (the previous design failed this); `op_order_02` is the symmetric
+  case (anchors the contract from the other side); `op_order_03`
+  is a structural check that `Scene::ops` accumulates one entry per
+  push helper, in call order, with the right variant per primitive
+  kind.
+- Demo Card 6: the badge rect now visibly paints over the image —
+  the rendered PNG is the runtime-visible regression switch.
+- Demo Card 5: the drop-shadow image is now pushed *before* the
+  card body via a `ShadowDef` parameter to `build_cards`, so it
+  sits under the card as CSS expects. Pre-refactor the shadow
+  always painted over because images came after rects/gradients
+  by type.
+- Full workspace: 88 tests passing (was 85 + 3 new).
+
+Migration was tightly scoped: 22 push-call sites in `scene.rs`, 3
+iteration sites (`vello_rasterizer.rs`, `tile_cache.rs`,
+`vello_tile_rasterizer.rs::filter_scene_to_tile`), and 3 test
+files reading per-type Vecs (rewritten to use `iter_*`
+accessors). No primitive structs changed; the variants are
+pure carriers.
+
+This refactor unblocks Phase 12b' (nested groups) — once Scene
+holds an op list, push/pop scope ops slot in as additional
+variants without further structural change.
+
+### 11.12 Hit testing (2026-05-04) — **CLEARED**
+
+Open question 3 in the original plan ("hit testing — what's the
+return shape?") had been deferred pending consumer pull; the
+op-list refactor (§11.11) made it the natural next step since
+"top-most primitive at point" maps directly onto "last entry in
+`Scene::ops` whose AABB contains the point."
+
+API: `netrender::hit_test::{hit_test, hit_test_topmost,
+HitResult, HitOpKind}` (re-exported at the crate root).
+
+```rust
+pub fn hit_test(scene: &Scene, point: [f32; 2]) -> Vec<HitResult>;
+pub fn hit_test_topmost(scene: &Scene, point: [f32; 2]) -> Option<HitResult>;
+```
+
+The stack form is the primitive: returns every primitive covering
+the point in top-most-first order. `hit_test_topmost` is the
+short-circuiting common case for "what did the user click on."
+`HitResult` carries an `op_index` (stable for the scene's lifetime)
+and a `HitOpKind` tag mirroring `SceneOp` variants.
+
+**Why a stack, not a single hit:** event bubbling, pick-through-
+transparency, drag selection, hover targeting on overlay stacks —
+all need to traverse from topmost down. Servo / WebRender's hit
+test returns a stack with a short-circuit option; we follow that
+shape. `single = .first()` is the special case; the reverse isn't
+true.
+
+Precision: AABB-level only.
+
+- Rect / image / gradient: world-space AABB of the primitive's
+  local rect, transformed via `scene.transforms`.
+- Stroke: AABB inflated by `stroke_width / 2`. The interior of a
+  stroked rect counts as a hit (typically what UI consumers want).
+- Shape: bounding box of the path. Per-segment point-in-polygon
+  is a future addition when consumer pull surfaces it.
+- Glyph run: combined AABB of glyph origins, inflated by
+  `font_size`. Per-glyph hit-testing needs real font metrics.
+
+`clip_rect` (when set) gates inclusion: a point outside the clip's
+AABB does not hit, even if the primitive AABB covers it. Rounded-
+corner clips test against their AABB; refining the corner regions
+is future work.
+
+Receipts: 7 unit tests in `netrender/src/hit_test.rs::tests` —
+empty scene, inside-rect, outside-rect, three-deep stack ordering,
+top-most short-circuit, clip-rect exclusion, and mixed-kind stack.
+Full workspace 95 tests passing (+7 vs §11.11's 88).
+
+Future refinements (deferred):
+
+- Per-glyph hit testing using the font's outline tables.
+- Per-segment point-in-polygon for `SceneOp::Shape`.
+- Honoring rounded-rect clip corners precisely (currently AABB).
+- Coordinate-space helper for window-to-scene mapping (consumers
+  do this themselves today).
+
+### 11.13 Display-list format — discussion (2026-05-04)
+
+After the op-list refactor (§11.11) the question "what's a
+display list in this codebase" mostly answers itself: `Vec<SceneOp>`
+*is* the display list. Two follow-up questions remain about the
+consumer-facing shape; this section captures the design space so a
+real consumer can pick.
+
+**What the shape looks like in adjacent projects.** Cross-checked
+to inform the decision, not to copy any of them wholesale:
+
+- **WebRender display list** (Servo / Firefox): a flat
+  `Vec<DisplayItem>` with rich CSS-shaped variants — `StackingContext`,
+  `ScrollFrame`, `ClipChain`, `BoxShadow`, plus the leaf primitives.
+  Tuned for cross-process bincode serialization (Servo's content
+  process builds it, the GPU process consumes it). Heavy for a
+  graphshell-scoped consumer that doesn't have a process boundary.
+- **Skia `SkPicture`**: a recorded sequence of canvas calls,
+  played back on demand. Same record-and-replay shape as our op
+  list, with serialization layered on top. Validates the
+  flat-op-list design.
+- **Flutter layer trees**: compositor-shaped, not display-list-
+  shaped. Different problem; not directly applicable.
+- **SVG / CSS painter model**: document order = paint order; the
+  spec is itself a flat-list-with-stacking-contexts model. Our
+  op list maps onto it directly except for stacking contexts (the
+  `push_layer` / `pop_layer` ops we'd add for §12b').
+
+**Three options for the consumer-facing shape:**
+
+A. **Push-helper-only (status quo).** Consumers call
+   `scene.push_rect(...)` etc. `Scene::ops` is public for read,
+   but consumers don't construct `SceneOp` variants directly;
+   they go through the typed helpers. The display list is
+   implicit — there's no "format" the consumer hands in.
+
+   *Best for:* ad-hoc scenes, immediate-mode UI loops.
+
+B. **`Vec<SceneOp>` is the canonical format.** Consumers can
+   either use push helpers or build `Vec<SceneOp>` directly and
+   replace `Scene::ops` wholesale. Recording is `scene.ops.clone()`;
+   replay is `scene.ops = recorded`. Mutation is direct Vec
+   indexing.
+
+   *Best for:* persistent / mutable display lists, recording UIs,
+   editor-shaped consumers that want to manipulate the list
+   between frames. This is what `SkPicture`-shaped uses look like.
+
+C. **Higher-level `DisplayItem` enum that lowers to SceneOp.**
+   A semantic layer: variants like `Card { bounds, color, border }`
+   that the consumer composes, with a translator emitting
+   `Vec<SceneOp>`. Decouples the consumer's domain types from
+   netrender's primitive types.
+
+   *Best for:* a structured document model where consumer
+   "intent" is meaningfully bigger than netrender's primitives
+   (browser-style content, full DOM-equivalent representations).
+
+**Recommendation:** ship Option B explicitly when a real consumer
+needs it; don't pre-build C.
+
+Concretely: `SceneOp` is already public and clonable. Treat it as
+the canonical format. If a consumer surfaces "I want to record /
+replay / serialize a scene" we add a thin recorder API
+(`scene.snapshot() -> Vec<SceneOp>`, `scene.replay(&[SceneOp])`)
+that's literally a Vec clone + assign. No format design work
+required — the data type is the format.
+
+Reject C until a real consumer actually has document types whose
+mismatch with `SceneOp` is costly. If graphshell ends up wanting
+e.g. `Node`-level display items (with edges, ports, labels as
+substructure), that's a graphshell crate, not netrender — same
+boundary as parley → netrender_text. The display list at the
+netrender boundary stays primitive-shaped.
+
+**Don't:** model on WebRender's display list. Stacking contexts
+and scroll frames belong to a CSS-conformance project, which this
+isn't. The op-list-with-future-push/pop-layer-variants design is
+what we have, and it's what we should ship.
+
+### 11.14 Nested layers + arbitrary-path clips (2026-05-04) — **CLEARED**
+
+The op-list refactor (§11.11) ended with the explicit observation
+that `push_layer` / `pop_layer` slot in as additional `SceneOp`
+variants. Done in this pass:
+
+```rust
+pub enum SceneClip {
+    None,
+    Rect { rect: [f32; 4], radii: [f32; 4] },
+    Path(ScenePath),  // Phase 9b'
+}
+
+pub struct SceneLayer {
+    pub clip: SceneClip,
+    pub alpha: f32,
+    pub blend_mode: SceneBlendMode,
+    pub transform_id: u32,
+}
+
+// New variants in `SceneOp`:
+SceneOp::PushLayer(SceneLayer),
+SceneOp::PopLayer,
+```
+
+CSS analogues map cleanly: `opacity` → `SceneLayer::alpha`,
+`mix-blend-mode` → `SceneLayer::blend_mode`,
+`clip-path` / rounded `overflow: hidden` → `SceneClip` variants,
+`isolation: isolate` is the implicit effect of any non-trivial
+layer.
+
+The 9b' arbitrary-path clip is a sub-case of 12b': a layer with
+`SceneClip::Path(ScenePath)`, alpha 1.0, blend mode Normal. No
+separate per-primitive path-clip needed; the layer mechanism
+covers it because layers can wrap one primitive just as well as
+many.
+
+Rasterizer dispatch: `SceneOp::PushLayer` → `vscene.push_layer`,
+`SceneOp::PopLayer` → `vscene.pop_layer`. Debug-builds assert
+push/pop balance at scene-translation time. Empty layers (no
+inner ops between push and pop) are valid and produce no pixels.
+
+Tile cache: `hash_push_layer` mixes the layer's clip / alpha /
+blend / transform into the per-tile dependency hash, and
+`SceneOp::PopLayer` contributes a marker byte. Dirty-tracking
+treats layer changes as global (every tile inside the layer's
+clip-AABB invalidates) — conservative but correct; refining to
+clip-AABB-bounded invalidation is future work.
+
+Tile filter (`filter_scene_to_tile`): always includes layer
+push/pop ops in the filtered scene so balance is preserved per
+tile. Layer's own clip narrows what pixels can be touched anyway.
+
+Receipts (`netrender/tests/p12b_nested_layers.rs`):
+
+- `p12b_01_alpha_layer_fades_inner_content` — alpha 0.5 layer
+  wrapping a red rect over white bg produces mid-pink pixels.
+- `p12b_02_rect_clip_layer_culls_outer_pixels` — rect clip culls
+  pixels outside.
+- `p12b_03_rounded_clip_layer_clips_corners` — rounded-rect clip
+  produces visible corner clipping.
+- `p9b_01_path_clip_layer_culls_outside_path` — triangle-shaped
+  `ScenePath` clip wrapping a full-frame rect: only the triangle
+  paints.
+- `p12b_04_nested_layers_compose` — outer alpha + inner rect clip
+  combine correctly (alpha-faded red inside the clip; bg color
+  outside).
+
+Plus 2 new hit-test unit tests:
+
+- `layer_ops_skipped_in_hit_walk` — `PushLayer` / `PopLayer` ops
+  don't generate hits themselves.
+- `per_glyph_hit_returns_glyph_index` (see §11.15).
+
+Caveat: hit testing does not yet honor a layer's clip (an inner
+op is hit even if the layer's clip would have culled its pixels).
+Documented in `hit_test.rs`'s module doc; future work is a
+clip-stack-aware walk. Today's behavior is conservative — consumer
+can post-filter the stack if they need clip-respecting hits.
+
+### 11.15 Per-glyph hit testing (2026-05-04) — **CLEARED**
+
+`HitResult` gained a `glyph_index: Option<usize>` field. For a
+[`HitOpKind::GlyphRun`] hit, it's the index of the specific glyph
+whose approximate AABB contains the point, or `None` if the point
+is in the run's overall AABB but doesn't land on any individual
+glyph (e.g., trailing whitespace or inter-glyph gap). `None` for
+all other kinds.
+
+Per-glyph AABB (no font metrics required): each glyph at
+`(x, y)` gets a box
+
+```text
+(x, y - font_size, x + advance, y + font_size * 0.25)
+```
+
+where `advance = next_glyph.x - this_glyph.x`, or `font_size` for
+the last glyph. A `0.25 * font_size` floor on advance keeps
+combining marks / narrow glyphs clickable. This sketches an em-
+box top-to-shallow-descender; real font metrics (via skrifa, which
+parley already pulls in transitively) would tighten the box.
+Deferred until a consumer needs the precision; for "click on this
+character" UI the approximation is enough.
+
+Receipt: `hit_test::tests::per_glyph_hit_returns_glyph_index` —
+constructs a 3-glyph run at known x positions, hits each glyph's
+box, verifies the returned `glyph_index`. Also confirms
+`glyph_index = None` for non-glyph-run hits.
+
+See §11.99 below for the consolidated open-items catalogue
+(per-glyph metric refinement, point-in-polygon for shapes, etc.).
+
+### 11.16 Polish sweep (2026-05-04) — **CLEARED**
+
+Closed in one batch:
+
+- **Edition bump.** All three workspace crates (`netrender`,
+  `netrender_device`, `netrender_text`) moved from edition `2018`
+  to `2021`. Unblocks `{var}` capture syntax in `format!` /
+  `assert!`, IntoIterator-for-arrays, and the prelude additions
+  (`TryFrom`, `TryInto`, `FromIterator`).
+- **`Scene::clear_ops()`** — drops the op list without touching
+  `fonts`, `transforms`, or `image_sources`. Lets streaming
+  consumers do "rebuild ops per frame, reuse asset palette"
+  without the boilerplate.
+- **Layer-clip-aware hit testing.** `hit_test` and
+  `hit_test_topmost` now run a forward pre-pass that tracks the
+  active layer-clip stack at each op index, then a reverse pass
+  that skips ops whose visibility is occluded by an enclosing
+  layer's clip. Two new tests
+  (`layer_clip_culls_inner_op_outside_clip`,
+  `nested_layer_clips_intersect`) pin the contract: nested clips
+  intersect, an outer clip culls inner ops correctly. AABB-only
+  for non-axis-aligned clip shapes (rounded-rect corners and
+  arbitrary path interiors register as visible at AABB level —
+  same conservative tradeoff as elsewhere).
+- **Decoration painting in `netrender_text`.** The parley adapter
+  now emits underline / strikethrough rects from
+  `Style::underline` / `Style::strikethrough` and the run's
+  `RunMetrics`. Painting order matches the CSS text-decoration
+  spec (underline → glyphs → strikethrough). Receipt at
+  `netrender_text_03_decorations_emit_rects` checks the rect
+  count, the brush colors, and the painter-order invariant.
+
+105 tests passing across the workspace; 0 failures.
+
+## 11.99 Open items — moved (2026-05-05)
+
+The catalogue of deferred refinements that originally lived here
+has been folded into the feature roadmap as
+[Phase R in `2026-05-04_feature_roadmap.md`][roadmap-r] so all
+open items live in one place.
+
+The architecturally-significant deferrals (12c' backdrop filter,
+13' compositor handoff, linear-light blending) live in
+[`2026-05-05_deferred_phases.md`](2026-05-05_deferred_phases.md) —
+each is bigger than a wart fix and gets its own design discussion
+when its trigger arrives.
+
+When a wart fix from Phase R lands, record it as a `§11.x —
+CLEARED` finding here and remove it from the roadmap. When a
+deferred-phase item lands, do the same and update the deferred-
+phases doc.
+
+[roadmap-r]: 2026-05-04_feature_roadmap.md
 
 ## 12. Phase mapping under this plan
 
@@ -1117,18 +1733,16 @@ plan's Phase X.
 - ✅ **Phase 8'**: gradients. `p8prime_vello_gradients` covers
   linear / circular-radial / elliptical-radial / conic with
   N-stop ramps.
-- 🚧 **Phase 9'**: path-shaped clips. **Rounded-rect clips
-  delivered** (2026-05-04): every Scene primitive carries
-  `clip_corner_radii: [f32; 4]` in addition to `clip_rect`;
-  non-zero radii produce a `kurbo::RoundedRect` clip via vello
-  `push_layer`. Receipt at `p9prime_rounded_clip` covers rect /
-  image / gradient. Existing render-graph mask path (p9a/b/c)
-  unchanged — both shapes coexist; the native-clip path drops a
-  render-graph hop for the common CSS border-radius case.
-  **Arbitrary BezPath clips deferred** to a later slice; not
-  blocking for graphshell-shaped UI (rounded-rect is the 95%
-  case). Lift if/when SVG `clipPath` or non-rectangular UI
-  shapes show up in real consumer scenes.
+- ✅ **Phase 9'**: path-shaped clips.
+  - **9a' rounded-rect clips** delivered (2026-05-04): every Scene
+    primitive carries `clip_corner_radii: [f32; 4]` in addition to
+    `clip_rect`; non-zero radii produce a `kurbo::RoundedRect`
+    clip via vello `push_layer`. Receipt at
+    `p9prime_rounded_clip` covers rect / image / gradient.
+  - **9b' arbitrary BezPath clips** delivered via the layer
+    mechanism (§11.14): `SceneClip::Path(ScenePath)` inside a
+    `SceneLayer` opens a vello layer with the path as its clip
+    shape. Receipt at `p9b_01_path_clip_layer_culls_outside_path`.
 - ✅ **Phase 10'**: text via `Scene::draw_glyphs` + skrifa. Layout
   stays embedder-side per §4.4. Two slices delivered:
   - 10a' Scene API plumbing — `FontBlob`, `Glyph`,
@@ -1167,70 +1781,58 @@ plan's Phase X.
     `make_bilinear_sampler`) were promoted from
     `tests/common/mod.rs` to the public `netrender::filter`
     module to support this helper.
-- 🚧 **Phase 12'**: compositing correctness. **12a' scene-level
-  alpha + blend mode delivered** (2026-05-04): the new
-  `Scene.root_alpha` and `Scene.root_blend_mode: SceneBlendMode`
-  fields apply a single outer `push_layer` wrap to the master
-  scene at compose time. Maps to
-  vello's `BlendMode { mix, compose: SrcOver }` with mix variants
-  Normal / Multiply / Screen / Overlay / Darken / Lighten. No
-  outer layer is added when settings are at defaults — simple
-  scenes pay nothing. Receipt: `p12prime_a_scene_compositing` (4
-  probes: alpha fade, default no-op, multiply blend over a base
-  color, tile-cache invalidation on alpha change).
-
-  **Deferred** to a future sub-phase pending Scene API
-  architectural decisions:
-  - **Nested groups** — per-element opacity that composites a
-    stack of overlapping primitives at < 1.0 alpha as a unit
-    (distinct from per-primitive alpha which already works).
-    Requires the Scene to express nesting; today the painter
-    order is by-primitive-type, which forecloses this. Lift if
-    consumer needs whole-element fade animations on stacks of
-    overlapping content.
-  - **Backdrop filters** (`backdrop-filter: blur(...)`) — reads
-    pixels under the element. Vello's render_to_texture always
-    overwrites the entire target; backdrop filters require
-    multi-pass rendering (snapshot under-pixels → filter →
-    composite over). Architectural change.
-  - **Filter chains** beyond the existing
-    `Renderer::build_box_shadow_mask` (Phase 11c'). The render-
-    graph + insert_image_vello pattern can be extended for one-
-    off filters (drop-shadow, brightness, etc.); ergonomic
-    helpers land per consumer demand.
-  - **Color-space contract** (§6.3): `mix-blend-mode: linear-
-    light` and similar are upstream-blocked on vello's GPU
-    compute path. Tracked.
+- 🚧 **Phase 12'**: compositing correctness.
+  - **12a' scene-level alpha + blend mode** delivered (2026-05-04):
+    `Scene.root_alpha` and `Scene.root_blend_mode: SceneBlendMode`
+    fields apply a single outer `push_layer` wrap. Maps to vello's
+    `BlendMode { mix, compose: SrcOver }` with mix variants Normal
+    / Multiply / Screen / Overlay / Darken / Lighten. No outer
+    layer added when at defaults. Receipt:
+    `p12prime_a_scene_compositing` (4 probes).
+  - **12b' nested groups** delivered (2026-05-04) via the op-list
+    refactor (§11.11) + `SceneOp::PushLayer`/`PopLayer` (§11.14).
+    `SceneLayer` carries `{ clip, alpha, blend_mode, transform_id }`;
+    layers nest. Op-list painter order is consumer push order, so
+    "render this stack of primitives at 50% alpha as a unit" is
+    just a push/pop pair. Receipt: `p12b_nested_layers` (4 tests).
+  - **12c' backdrop filters** still deferred. Reads pixels under
+    the element; vello's render-to-texture always overwrites the
+    entire target. Multi-pass rendering (snapshot under-pixels →
+    filter → composite over) is the shape of the fix.
+    Architectural change; lift on consumer pull.
+  - **Filter chains** (drop-shadow, brightness, etc.) beyond the
+    existing `Renderer::build_box_shadow_mask` (11c'). The
+    render-graph + insert_image_vello pattern handles one-off
+    filters today; ergonomic helpers land per consumer demand.
+  - **Linear-light blending** (§6.3, Pitfall #2): `mix-blend-mode:
+    linear-light` and linear-light gradient interpolation are
+    upstream-blocked on vello's GPU compute path. Tracked at
+    `p1prime_03`; not ours to work around.
 - ⏳ **Phase 13'**: native compositor (axiom 14). Unchanged from
   parent. Lost the trivial-handoff property at Phase 7' (per §2.4);
   v1.5 fallback (whole-frame vello + post-render tile slicing for
   native-compositor handoff) remains an escape hatch if needed.
 
-**Priority guidance for the four pending phases:**
+**What's left in the phase mapping (post-§11.17, 2026-05-05):**
 
-The order to tackle 9'/10'/11'/12' depends on what consumer needs
-land first. As of post-cleanup:
+- **Phase 12c'** (backdrop filters): architectural change, gated
+  on consumer pull. Modern frosted-glass nav bars hit this; static
+  content doesn't.
+- **Phase 13'** (native compositor handoff, axiom 14): unchanged.
+  Lift only if a consumer needs platform-tile export
+  (CALayer / IOSurface / DXGI). v1.5 fallback in §2.4 is the
+  documented escape hatch.
+- **Linear-light blending** (gradient interpolation + linear-
+  light mix-blend-mode): upstream-blocked on vello's GPU compute
+  path. Tracked, not worked around.
 
-1. **Phase 9'** is the smallest and unblocks the existing
-   `p9a`/`p9b`/`p9c` tests to use vello-native path clips
-   instead of the render-graph mask indirection. Good warm-up
-   slice.
-2. **Phase 10'** is the largest. Glyph-run plumbing in Scene +
-   font ingestion + measurement story (especially for content
-   not coming from an existing layout engine). For a graphshell
-   consumer, 10' might land *after* a parley adapter is needed;
-   for Servo, this is its existing `gfx` lowering target.
-3. **Phase 11'** is bounded by what borders / shadows the consumer
-   needs. CSS-style borders are well-trodden; SVG strokes need
-   more vello primitive coverage.
-4. **Phase 12'** is filters + compositing correctness. Lowest
-   priority for a static-content consumer, highest for a real
-   web-engine target.
+Each of these has its own short design plan in
+[`2026-05-05_deferred_phases.md`](2026-05-05_deferred_phases.md)
+covering trigger condition, work shape, and alternatives.
 
-Re-evaluate the order based on what graphshell actually needs to
-render first. The parent plan's calendar estimates ("~1 week" for
-9', "~1 month" for 10', etc.) are loose; do the work and let the
-receipts land when they land.
+Everything else from 0.5'–12b' has shipped with receipts. The
+roadmap of *new capability* + open refinements lives in
+[`2026-05-04_feature_roadmap.md`](2026-05-04_feature_roadmap.md).
 
 ## 13. Risks not already covered
 

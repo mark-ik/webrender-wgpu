@@ -23,8 +23,41 @@ These two are the source of truth for the live architecture.
   records which §11 spike outcomes cleared. Phase 7' (Masonry pattern
   tile cache) is the architectural heart and is delivered.
 
+  **Post-pivot findings landed since (2026-05-04):** persistent
+  per-frame image cache (§11.9 wart, see also §11.16 polish), op-list
+  refactor with consumer-push painter order (§11.11),
+  variable-radius box-shadow blur via cascaded passes (§11.10),
+  `FontBlob` unified to `peniko::Blob<u8>` (§11.9), nested layers +
+  arbitrary-path clips via `SceneOp::PushLayer/PopLayer` (§11.14),
+  hit testing — stack-returning, layer-clip-aware, per-glyph
+  approximate (§11.12, §11.15, §11.16), `netrender_text` parley
+  adapter with decoration painting (§4.4 status block, §11.16),
+  edition-2021 bump, `Scene::clear_ops` helper. Test count: 105
+  passing, 1 ignored, 0 failed across the workspace.
+
+  Open items split between two documents (§11.99 was folded out
+  for findability):
+
+  - [`2026-05-04_feature_roadmap.md`](2026-05-04_feature_roadmap.md)
+    — Phase R (open refinements / wart fixes) + Phases A–F (new
+    capability, diagnostics first).
+  - [`2026-05-05_deferred_phases.md`](2026-05-05_deferred_phases.md)
+    — three architecturally-significant deferrals (12c' backdrop
+    filter, 13' compositor handoff, linear-light blending), each
+    with its own short design plan.
+
 ## Active follow-up plans (small scope)
 
+- [`2026-05-04_feature_roadmap.md`](2026-05-04_feature_roadmap.md)
+  — Phase R (open refinements / wart fixes — was §11.99 of the
+  rasterizer plan) + Phases A–F (new capability: diagnostics
+  first, then consumer-pull-imminent, then SceneOp expansions,
+  then architecturally-significant).
+- [`2026-05-05_deferred_phases.md`](2026-05-05_deferred_phases.md)
+  — the three architecturally-significant deferrals from the
+  rasterizer plan (12c' backdrop filter, 13' compositor handoff,
+  linear-light blending), each with trigger, work shape, and
+  alternatives.
 - [`draw_context_plan.md`](draw_context_plan.md)
 - [`typed_pipeline_metadata_plan.md`](typed_pipeline_metadata_plan.md)
 - [`texture_cache_cleanup_plan.md`](texture_cache_cleanup_plan.md)

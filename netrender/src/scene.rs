@@ -20,6 +20,7 @@
 use std::collections::HashMap;
 
 pub use netrender_device::GradientKind;
+pub use netrender_device::SurfaceKey;
 
 /// A 4×4 column-major transform matrix.
 ///
@@ -147,14 +148,48 @@ pub const SHARP_CLIP: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
 pub type ImageKey = u64;
 
 /// CPU-side pixel data for one image. Format: RGBA8Unorm, row-major,
-/// tightly packed (`width * 4` bytes per row). sRGB handling is deferred
-/// to Phase 7; for now the bytes are treated as linear values.
+/// tightly packed (`data.len()` must equal `width * height * 4`).
+/// sRGB handling is deferred to Phase 7; for now the bytes are
+/// treated as linear values.
+///
+/// `data` is a `peniko::Blob<u8>`, which is `Arc<Vec<u8>>` plus a
+/// stable `Blob::id()`. Two consumers that share the same `Blob`
+/// (cloning preserves id) hand the same atlas slot to vello —
+/// cross-consumer image dedup is a free consequence of Arc-shared
+/// bytes. See [`ImageRegistry`] for the cross-consumer key
+/// coordination story; the data unification is the necessary
+/// condition for it to work.
 #[derive(Debug, Clone)]
 pub struct ImageData {
     pub width: u32,
     pub height: u32,
-    /// Raw RGBA8 bytes; `len()` must equal `width * height * 4`.
-    pub bytes: Vec<u8>,
+    /// Raw RGBA8 bytes wrapped in a peniko `Blob`. Use
+    /// [`ImageData::from_bytes`] for the common
+    /// "I have a `Vec<u8>`" construction path.
+    pub data: vello::peniko::Blob<u8>,
+}
+
+impl ImageData {
+    /// Construct an `ImageData` from raw bytes. Wraps the `Vec<u8>`
+    /// in `Arc::new` and a fresh `peniko::Blob`. Two `from_bytes`
+    /// calls with identical content produce *different* Blob ids;
+    /// to share an atlas slot across consumers, use
+    /// [`ImageData::from_blob`] with a shared blob.
+    pub fn from_bytes(width: u32, height: u32, bytes: Vec<u8>) -> Self {
+        Self {
+            width,
+            height,
+            data: vello::peniko::Blob::new(std::sync::Arc::new(bytes)),
+        }
+    }
+
+    /// Construct an `ImageData` from an existing `peniko::Blob`.
+    /// Cloning a `Blob` is an `Arc` bump that preserves the id, so
+    /// two `ImageData`s constructed from clones of the same blob
+    /// dedup at the vello atlas level.
+    pub fn from_blob(width: u32, height: u32, data: vello::peniko::Blob<u8>) -> Self {
+        Self { width, height, data }
+    }
 }
 
 /// One stop in an N-stop gradient ramp.
@@ -281,14 +316,18 @@ pub struct SceneStroke {
 pub type FontId = u32;
 
 /// Phase 10a' font payload. Wraps a CPU-side TTF / OTF blob plus an
-/// index for font collections (TTC). The translator builds a
-/// `peniko::FontData` from this on demand; the wrapper exists so
-/// netrender's Scene API doesn't leak peniko types.
+/// index for font collections (TTC). Holds a `peniko::Blob<u8>`
+/// directly: peniko mints a unique `Blob::id()` at construction and
+/// preserves it through clone, which is what vello's font atlas
+/// keys on for cross-frame dedup. Constructing a fresh `Blob` per
+/// frame defeats that dedup; consumers should hold their `FontBlob`
+/// across frames and clone it rather than rebuild from raw bytes.
 #[derive(Debug, Clone)]
 pub struct FontBlob {
-    /// Raw font bytes (TTF / OTF / TTC). `Arc`-shared so multiple
-    /// scenes can reference the same font without copying.
-    pub data: std::sync::Arc<Vec<u8>>,
+    /// Font bytes (TTF / OTF / TTC) wrapped in a peniko `Blob`. The
+    /// blob's id is the cross-frame identity vello uses to dedup
+    /// font uploads.
+    pub data: vello::peniko::Blob<u8>,
     /// Index within the collection. `0` for single-font files.
     pub index: u32,
 }
@@ -481,42 +520,128 @@ pub enum SceneBlendMode {
     // arm in sync.)
 }
 
+/// Phase 12b' — clip shape carried by a [`SceneLayer`].
+///
+/// Selecting between rect / rounded-rect / arbitrary path lets the
+/// renderer skip layer overhead when the clip is the viewport, use
+/// vello's fast rounded-rect path for the common rounded case, or
+/// fall back to a `BezPath` for SVG-style `clipPath` (Phase 9b').
+#[derive(Debug, Clone)]
+pub enum SceneClip {
+    /// No clip: the layer covers the viewport. Useful for layers
+    /// whose effect is alpha or blend-mode only.
+    None,
+    /// Axis-aligned (optionally rounded) rect clip.
+    /// `radii` is `[top_left, top_right, bottom_right, bottom_left]`.
+    /// All-zero radii are a sharp clip.
+    Rect { rect: [f32; 4], radii: [f32; 4] },
+    /// Phase 9b' arbitrary-path clip (SVG `clipPath`-shaped).
+    /// The path's local space is mapped to scene-space via
+    /// [`SceneLayer::transform_id`].
+    Path(ScenePath),
+}
+
+/// Phase 12b' — a nested layer scope opened by [`SceneOp::PushLayer`]
+/// and closed by [`SceneOp::PopLayer`]. Every op between the matched
+/// pair is rendered into the layer and composited back to the parent
+/// with the given alpha + blend mode, optionally clipped by `clip`.
+///
+/// CSS analogues:
+///   - `opacity`: `alpha < 1.0` with `blend_mode = Normal`, `clip = None`
+///   - `mix-blend-mode`: `blend_mode != Normal`, `alpha = 1.0`, `clip = None`
+///   - `clip-path` / `overflow: hidden border-radius`: `clip = Rect/Path`
+///   - `filter`: composes with these via additional layers
+#[derive(Debug, Clone)]
+pub struct SceneLayer {
+    /// Clip shape for the layer. See [`SceneClip`].
+    pub clip: SceneClip,
+    /// Multiplied with every pixel inside the layer when composing
+    /// back to parent. `1.0` is no-op.
+    pub alpha: f32,
+    /// Blend mode used to composite the layer back into its parent.
+    /// `Normal` is straight `source-over`.
+    pub blend_mode: SceneBlendMode,
+    /// Index into `Scene::transforms` applied to the clip shape.
+    /// Inner ops carry their own `transform_id`s.
+    pub transform_id: u32,
+}
+
+impl SceneLayer {
+    /// Convenience: a layer with the given alpha, no clip, normal
+    /// blend mode, identity transform.
+    pub fn alpha(alpha: f32) -> Self {
+        Self { clip: SceneClip::None, alpha, blend_mode: SceneBlendMode::Normal, transform_id: 0 }
+    }
+
+    /// Convenience: a clip-only layer (alpha 1, blend Normal,
+    /// identity transform) with the given clip.
+    pub fn clip(clip: SceneClip) -> Self {
+        Self { clip, alpha: 1.0, blend_mode: SceneBlendMode::Normal, transform_id: 0 }
+    }
+}
+
+/// One draw operation in a [`Scene`]'s painter-order op list.
+///
+/// Each `push_*` helper on [`Scene`] appends one of these variants to
+/// `Scene::ops`. The rasterizer iterates `ops` in sequence and
+/// dispatches per variant. The variants are *carriers*, not new
+/// primitive types — each wraps the same struct the per-type Vec
+/// design used.
+///
+/// To traverse a scene by primitive type, prefer the `iter_*`
+/// helpers ([`Scene::iter_rects`], etc.) over manual matching;
+/// they're filter-iterator wrappers over `self.ops`.
+#[derive(Debug, Clone)]
+pub enum SceneOp {
+    /// A solid-color rectangle. See [`SceneRect`].
+    Rect(SceneRect),
+    /// A stroked rectangle / rounded-rect (border).
+    Stroke(SceneStroke),
+    /// An analytic gradient (linear / radial / conic, N-stop).
+    Gradient(SceneGradient),
+    /// A textured rectangle (image fill).
+    Image(SceneImage),
+    /// An arbitrary path (filled or stroked).
+    Shape(SceneShape),
+    /// A run of positioned glyphs in one font + size + color.
+    GlyphRun(SceneGlyphRun),
+    /// Phase 12b' — open a nested layer scope. All subsequent ops
+    /// up to the matching [`SceneOp::PopLayer`] paint into the
+    /// layer; the layer is then composited into the parent with
+    /// the carried alpha + blend mode + clip. Layers nest.
+    PushLayer(SceneLayer),
+    /// Phase 12b' — close the most recently opened layer scope.
+    /// Unbalanced `PopLayer`s (without a matching `PushLayer`) are
+    /// the consumer's bug; the renderer panics in debug.
+    PopLayer,
+}
+
 /// A flat list of primitives to be rendered into one frame.
 ///
 /// Phase 3 adds `transforms` (a palette of 4×4 matrices) and per-rect
 /// `transform_id` / `clip_rect`. Phase 4 sorts for correct depth order.
 /// Phase 5 adds `images` (textured rects) and `image_sources` (pixel data).
 ///
-/// Draw order: rects are at painter indices 0..N_rects; images follow at
-/// indices N_rects..N_total. Images therefore paint "in front of" all rects
-/// in depth — correct for overlays.
+/// **Painter order** (post-2026-05-04 op-list refactor): consumer
+/// push order is the painter order. Every `push_*` helper appends a
+/// `SceneOp` variant to `self.ops`; the rasterizer iterates `ops` in
+/// sequence and dispatches per-variant. This replaces the previous
+/// per-type `Vec<SceneRect>`, `Vec<SceneImage>`, … design where
+/// painter order was fixed by type (rects → strokes → gradients →
+/// images → shapes → glyph runs) regardless of push order. The old
+/// design surfaced its limit in the `demo_card_grid` Card 6 probe:
+/// a "badge" rect pushed after an image still painted under the
+/// image. Op-list painter order makes consumer intent the source
+/// of truth.
 #[derive(Debug, Clone)]
 pub struct Scene {
     /// Viewport size in device pixels.
     pub viewport_width: u32,
     pub viewport_height: u32,
-    /// Solid-color primitives in painter order (back-to-front).
-    pub rects: Vec<SceneRect>,
-    /// Textured-rect primitives in painter order (back-to-front).
-    /// These paint on top of all rects.
-    pub images: Vec<SceneImage>,
-    /// Analytic gradients (linear / radial / conic, N-stop) in
-    /// painter order (back-to-front). Phase 8D unifies the three
-    /// gradient families into one list — push order is preserved
-    /// across kinds, including within-frame interleaving.
-    pub gradients: Vec<SceneGradient>,
-    /// Phase 11' stroked-rect / rounded-rect primitives — borders,
-    /// edge outlines, line decorations. Painter order: strokes paint
-    /// after rects but before gradients/images, matching natural
-    /// CSS render order (background → border → contents).
-    pub strokes: Vec<SceneStroke>,
-    /// Phase 11b' arbitrary-path primitives — filled + stroked
-    /// shapes for SVG-style content, custom node frames, etc.
-    /// Painter order: shapes paint last, after images.
-    pub shapes: Vec<SceneShape>,
-    /// Phase 10a' glyph runs — text. Painter order: glyph runs
-    /// paint after shapes (text-on-top is the typical case).
-    pub glyph_runs: Vec<SceneGlyphRun>,
+    /// Draw operations in painter order (back-to-front, push order).
+    /// One entry per primitive; the rasterizer dispatches per
+    /// variant. See [`SceneOp`].
+    pub ops: Vec<SceneOp>,
     /// Phase 10a' font palette. Index `0` is reserved (panic on
     /// push_glyph_run with `font_id = 0`); real fonts start at
     /// index 1.
@@ -537,6 +662,55 @@ pub struct Scene {
     /// each entry is uploaded to the GPU and cached there. Subsequent
     /// frames may omit data for already-cached keys.
     pub image_sources: HashMap<ImageKey, ImageData>,
+    /// Native-compositor surfaces declared by the consumer. Order is
+    /// z-order (first declared is bottom-most), matching the same
+    /// "vec position = ordering" convention as `ops`. Read by
+    /// `Renderer::render_with_compositor`; ignored by other render
+    /// entry points.
+    ///
+    /// See
+    /// [`netrender-notes/2026-05-05_compositor_handoff_path_b_prime.md`](../../netrender-notes/2026-05-05_compositor_handoff_path_b_prime.md)
+    /// for the design.
+    pub compositor_surfaces: Vec<CompositorSurface>,
+}
+
+/// One declared native-compositor surface.
+///
+/// Bounds are world-space. Transform / clip / opacity are applied by
+/// the OS compositor at present time, *not* by netrender's master
+/// render — they're metadata reaching the consumer's `Compositor`
+/// impl via `LayerPresent`.
+///
+/// Order in `Scene::compositor_surfaces` is z-order: index 0 is
+/// bottom-most. Use [`Scene::declare_compositor_surface`] to insert
+/// or update; the helper preserves insertion order on repeat
+/// declares (updates fields in place).
+#[derive(Debug, Clone)]
+pub struct CompositorSurface {
+    pub key: SurfaceKey,
+    pub bounds: [f32; 4],
+    /// 2D affine, column-major: `[a, b, c, d, tx, ty]`.
+    /// Identity is `[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]`.
+    pub transform: [f32; 6],
+    pub clip: Option<[f32; 4]>,
+    pub opacity: f32,
+}
+
+impl CompositorSurface {
+    /// 2D affine identity for `transform`.
+    pub const IDENTITY_TRANSFORM: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+
+    /// Construct a surface with default transform (identity), no
+    /// clip, opacity 1.0.
+    pub fn new(key: SurfaceKey, bounds: [f32; 4]) -> Self {
+        Self {
+            key,
+            bounds,
+            transform: Self::IDENTITY_TRANSFORM,
+            clip: None,
+            opacity: 1.0,
+        }
+    }
 }
 
 impl Scene {
@@ -544,22 +718,20 @@ impl Scene {
         Self {
             viewport_width,
             viewport_height,
-            rects: Vec::new(),
-            images: Vec::new(),
-            gradients: Vec::new(),
-            strokes: Vec::new(),
-            shapes: Vec::new(),
-            glyph_runs: Vec::new(),
+            ops: Vec::new(),
             // Index 0 reserved as a no-font sentinel; real fonts
-            // start at index 1.
+            // start at index 1. Sentinel uses an empty Blob — its
+            // id is irrelevant because emit_glyph_run skips runs
+            // with font_id == 0.
             fonts: vec![FontBlob {
-                data: std::sync::Arc::new(Vec::new()),
+                data: vello::peniko::Blob::new(std::sync::Arc::new(Vec::new())),
                 index: 0,
             }],
             root_alpha: 1.0,
             root_blend_mode: SceneBlendMode::Normal,
             transforms: vec![Transform::IDENTITY], // index 0 = identity
             image_sources: HashMap::new(),
+            compositor_surfaces: Vec::new(),
         }
     }
 
@@ -573,13 +745,13 @@ impl Scene {
     /// Append a rect at device-pixel coordinates with no transform and
     /// no clip (backward-compatible Phase 2 API).
     pub fn push_rect(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, color: [f32; 4]) {
-        self.rects.push(SceneRect {
+        self.ops.push(SceneOp::Rect(SceneRect {
             x0, y0, x1, y1,
             color,
             transform_id: 0,
             clip_rect: NO_CLIP,
             clip_corner_radii: SHARP_CLIP,
-        });
+        }));
     }
 
     /// Append a rect with an explicit transform id.
@@ -589,13 +761,13 @@ impl Scene {
         color: [f32; 4],
         transform_id: u32,
     ) {
-        self.rects.push(SceneRect {
+        self.ops.push(SceneOp::Rect(SceneRect {
             x0, y0, x1, y1,
             color,
             transform_id,
             clip_rect: NO_CLIP,
             clip_corner_radii: SHARP_CLIP,
-        });
+        }));
     }
 
     /// Append a rect with an explicit transform and a device-space
@@ -607,13 +779,13 @@ impl Scene {
         transform_id: u32,
         clip_rect: [f32; 4],
     ) {
-        self.rects.push(SceneRect {
+        self.ops.push(SceneOp::Rect(SceneRect {
             x0, y0, x1, y1,
             color,
             transform_id,
             clip_rect,
             clip_corner_radii: SHARP_CLIP,
-        });
+        }));
     }
 
     /// Append a rect with a rounded-rect clip (Phase 9'). `clip_corner_radii`
@@ -628,13 +800,13 @@ impl Scene {
         clip_rect: [f32; 4],
         clip_corner_radii: [f32; 4],
     ) {
-        self.rects.push(SceneRect {
+        self.ops.push(SceneOp::Rect(SceneRect {
             x0, y0, x1, y1,
             color,
             transform_id,
             clip_rect,
             clip_corner_radii,
-        });
+        }));
     }
 
     /// Register pixel data for `key` without adding a draw primitive.
@@ -656,7 +828,7 @@ impl Scene {
         data: ImageData,
     ) {
         self.image_sources.entry(key).or_insert(data);
-        self.images.push(SceneImage {
+        self.ops.push(SceneOp::Image(SceneImage {
             x0, y0, x1, y1,
             uv: [0.0, 0.0, 1.0, 1.0],
             color: [1.0, 1.0, 1.0, 1.0],
@@ -664,14 +836,14 @@ impl Scene {
             transform_id: 0,
             clip_rect: NO_CLIP,
             clip_corner_radii: SHARP_CLIP,
-        });
+        }));
     }
 
     /// Phase 8D general API: push an arbitrary-kind, arbitrary-stops
     /// gradient. The 2-stop convenience methods below build a
     /// `SceneGradient` and forward to this.
     pub fn push_gradient(&mut self, gradient: SceneGradient) {
-        self.gradients.push(gradient);
+        self.ops.push(SceneOp::Gradient(gradient));
     }
 
     /// 2-stop linear gradient (Phase 8A convenience; preserved post-8D).
@@ -683,13 +855,13 @@ impl Scene {
         color0: [f32; 4],
         color1: [f32; 4],
     ) {
-        self.gradients.push(two_stop_gradient(
+        self.ops.push(SceneOp::Gradient(two_stop_gradient(
             GradientKind::Linear,
             x0, y0, x1, y1,
             [start[0], start[1], end[0], end[1]],
             color0, color1,
             0, NO_CLIP,
-        ));
+        )));
     }
 
     /// 2-stop linear gradient with full control over transform and clip.
@@ -703,13 +875,13 @@ impl Scene {
         transform_id: u32,
         clip_rect: [f32; 4],
     ) {
-        self.gradients.push(two_stop_gradient(
+        self.ops.push(SceneOp::Gradient(two_stop_gradient(
             GradientKind::Linear,
             x0, y0, x1, y1,
             [start[0], start[1], end[0], end[1]],
             color0, color1,
             transform_id, clip_rect,
-        ));
+        )));
     }
 
     /// 2-stop radial gradient (Phase 8B convenience). For circular,
@@ -723,13 +895,13 @@ impl Scene {
         color0: [f32; 4],
         color1: [f32; 4],
     ) {
-        self.gradients.push(two_stop_gradient(
+        self.ops.push(SceneOp::Gradient(two_stop_gradient(
             GradientKind::Radial,
             x0, y0, x1, y1,
             [center[0], center[1], radii[0], radii[1]],
             color0, color1,
             0, NO_CLIP,
-        ));
+        )));
     }
 
     /// 2-stop conic gradient (Phase 8C convenience). `t = 0` at
@@ -743,13 +915,13 @@ impl Scene {
         color0: [f32; 4],
         color1: [f32; 4],
     ) {
-        self.gradients.push(two_stop_gradient(
+        self.ops.push(SceneOp::Gradient(two_stop_gradient(
             GradientKind::Conic,
             x0, y0, x1, y1,
             [center[0], center[1], start_angle, 0.0],
             color0, color1,
             0, NO_CLIP,
-        ));
+        )));
     }
 
     /// 2-stop conic gradient with full control over transform and clip.
@@ -763,13 +935,13 @@ impl Scene {
         transform_id: u32,
         clip_rect: [f32; 4],
     ) {
-        self.gradients.push(two_stop_gradient(
+        self.ops.push(SceneOp::Gradient(two_stop_gradient(
             GradientKind::Conic,
             x0, y0, x1, y1,
             [center[0], center[1], start_angle, 0.0],
             color0, color1,
             transform_id, clip_rect,
-        ));
+        )));
     }
 
     /// 2-stop radial gradient with full control over transform and clip.
@@ -783,13 +955,13 @@ impl Scene {
         transform_id: u32,
         clip_rect: [f32; 4],
     ) {
-        self.gradients.push(two_stop_gradient(
+        self.ops.push(SceneOp::Gradient(two_stop_gradient(
             GradientKind::Radial,
             x0, y0, x1, y1,
             [center[0], center[1], radii[0], radii[1]],
             color0, color1,
             transform_id, clip_rect,
-        ));
+        )));
     }
 
     /// Append an image rect with full control over UV, tint, transform,
@@ -803,7 +975,7 @@ impl Scene {
         transform_id: u32,
         clip_rect: [f32; 4],
     ) {
-        self.images.push(SceneImage {
+        self.ops.push(SceneOp::Image(SceneImage {
             x0, y0, x1, y1,
             uv,
             color,
@@ -811,7 +983,7 @@ impl Scene {
             transform_id,
             clip_rect,
             clip_corner_radii: SHARP_CLIP,
-        });
+        }));
     }
 
     /// Phase 10a': register a font with the scene. Returns a
@@ -834,7 +1006,7 @@ impl Scene {
         glyphs: Vec<Glyph>,
         color: [f32; 4],
     ) {
-        self.glyph_runs.push(SceneGlyphRun {
+        self.ops.push(SceneOp::GlyphRun(SceneGlyphRun {
             font_id,
             font_size,
             glyphs,
@@ -842,7 +1014,7 @@ impl Scene {
             transform_id: 0,
             clip_rect: NO_CLIP,
             clip_corner_radii: SHARP_CLIP,
-        });
+        }));
     }
 
     /// Phase 10a': append a glyph run with full control over
@@ -857,7 +1029,7 @@ impl Scene {
         clip_rect: [f32; 4],
         clip_corner_radii: [f32; 4],
     ) {
-        self.glyph_runs.push(SceneGlyphRun {
+        self.ops.push(SceneOp::GlyphRun(SceneGlyphRun {
             font_id,
             font_size,
             glyphs,
@@ -865,27 +1037,117 @@ impl Scene {
             transform_id,
             clip_rect,
             clip_corner_radii,
-        });
+        }));
     }
 
     /// Phase 11b': append a `SceneShape` directly. For most cases
     /// the convenience helpers `push_shape_filled` /
     /// `push_shape_stroked` are easier to use.
     pub fn push_shape(&mut self, shape: SceneShape) {
-        self.shapes.push(shape);
+        self.ops.push(SceneOp::Shape(shape));
+    }
+
+    /// Phase 12b' — open a nested layer scope. All subsequent
+    /// `push_*` calls until the matching [`Scene::pop_layer`] paint
+    /// into the layer; the layer is then composited back to the
+    /// parent with the layer's alpha + blend mode + clip.
+    pub fn push_layer(&mut self, layer: SceneLayer) {
+        self.ops.push(SceneOp::PushLayer(layer));
+    }
+
+    /// Phase 12b' — close the most recently opened layer scope. A
+    /// `pop_layer` without a matching `push_layer` will panic the
+    /// renderer in debug builds; release builds skip the underflow.
+    pub fn pop_layer(&mut self) {
+        self.ops.push(SceneOp::PopLayer);
+    }
+
+    /// Convenience: open an alpha-only layer (no clip, normal
+    /// blend mode, identity transform). Pair with [`Scene::pop_layer`].
+    pub fn push_layer_alpha(&mut self, alpha: f32) {
+        self.push_layer(SceneLayer::alpha(alpha));
+    }
+
+    /// Convenience: open a clip-only layer (alpha 1.0, blend
+    /// Normal, identity transform) with the given clip. Pair with
+    /// [`Scene::pop_layer`].
+    pub fn push_layer_clip(&mut self, clip: SceneClip) {
+        self.push_layer(SceneLayer::clip(clip));
+    }
+
+    /// Drop every draw op without touching `fonts`, `transforms`, or
+    /// `image_sources`. Useful for the "rebuild scene per frame but
+    /// reuse the asset palette" pattern: a streaming consumer
+    /// doesn't have to re-register the same fonts / transforms /
+    /// image sources every frame, but does want a fresh op list.
+    ///
+    /// Equivalent to `self.ops.clear()` but signals intent at the
+    /// API level — read sites can grep for `clear_ops` to find
+    /// frame boundaries.
+    pub fn clear_ops(&mut self) {
+        self.ops.clear();
+    }
+
+    /// Iterate the rect ops of the scene in painter order. Other op
+    /// variants are filtered out.
+    pub fn iter_rects(&self) -> impl Iterator<Item = &SceneRect> + '_ {
+        self.ops.iter().filter_map(|op| match op {
+            SceneOp::Rect(r) => Some(r),
+            _ => None,
+        })
+    }
+
+    /// Iterate the stroke ops of the scene in painter order.
+    pub fn iter_strokes(&self) -> impl Iterator<Item = &SceneStroke> + '_ {
+        self.ops.iter().filter_map(|op| match op {
+            SceneOp::Stroke(s) => Some(s),
+            _ => None,
+        })
+    }
+
+    /// Iterate the gradient ops of the scene in painter order.
+    pub fn iter_gradients(&self) -> impl Iterator<Item = &SceneGradient> + '_ {
+        self.ops.iter().filter_map(|op| match op {
+            SceneOp::Gradient(g) => Some(g),
+            _ => None,
+        })
+    }
+
+    /// Iterate the image ops of the scene in painter order.
+    pub fn iter_images(&self) -> impl Iterator<Item = &SceneImage> + '_ {
+        self.ops.iter().filter_map(|op| match op {
+            SceneOp::Image(i) => Some(i),
+            _ => None,
+        })
+    }
+
+    /// Iterate the shape ops of the scene in painter order.
+    pub fn iter_shapes(&self) -> impl Iterator<Item = &SceneShape> + '_ {
+        self.ops.iter().filter_map(|op| match op {
+            SceneOp::Shape(s) => Some(s),
+            _ => None,
+        })
+    }
+
+    /// Iterate the glyph-run ops of the scene in painter order.
+    pub fn iter_glyph_runs(&self) -> impl Iterator<Item = &SceneGlyphRun> + '_ {
+        self.ops.iter().filter_map(|op| match op {
+            SceneOp::GlyphRun(g) => Some(g),
+            _ => None,
+        })
     }
 
     /// Phase 11b': append an arbitrary path filled with a single
     /// solid color. Identity transform, no clip.
     pub fn push_shape_filled(&mut self, path: ScenePath, color: [f32; 4]) {
-        self.shapes.push(SceneShape {
+        self.ops.push(SceneOp::Shape(SceneShape {
             path,
             fill_color: Some(color),
             stroke: None,
             transform_id: 0,
             clip_rect: NO_CLIP,
             clip_corner_radii: SHARP_CLIP,
-        });
+        }));
     }
 
     /// Phase 11b': append an arbitrary path stroked with a single
@@ -896,14 +1158,14 @@ impl Scene {
         color: [f32; 4],
         stroke_width: f32,
     ) {
-        self.shapes.push(SceneShape {
+        self.ops.push(SceneOp::Shape(SceneShape {
             path,
             fill_color: None,
             stroke: Some(ScenePathStroke { color, width: stroke_width }),
             transform_id: 0,
             clip_rect: NO_CLIP,
             clip_corner_radii: SHARP_CLIP,
-        });
+        }));
     }
 
     /// Phase 11': append a sharp axis-aligned stroked rect (border).
@@ -913,7 +1175,7 @@ impl Scene {
         color: [f32; 4],
         stroke_width: f32,
     ) {
-        self.strokes.push(SceneStroke {
+        self.ops.push(SceneOp::Stroke(SceneStroke {
             x0, y0, x1, y1,
             color,
             stroke_width,
@@ -921,7 +1183,7 @@ impl Scene {
             transform_id: 0,
             clip_rect: NO_CLIP,
             clip_corner_radii: SHARP_CLIP,
-        });
+        }));
     }
 
     /// Phase 11': append a stroked rounded-rect (CSS border with
@@ -935,7 +1197,7 @@ impl Scene {
         stroke_width: f32,
         stroke_corner_radii: [f32; 4],
     ) {
-        self.strokes.push(SceneStroke {
+        self.ops.push(SceneOp::Stroke(SceneStroke {
             x0, y0, x1, y1,
             color,
             stroke_width,
@@ -943,7 +1205,7 @@ impl Scene {
             transform_id: 0,
             clip_rect: NO_CLIP,
             clip_corner_radii: SHARP_CLIP,
-        });
+        }));
     }
 
     /// Phase 11': append a stroked rect/rounded-rect with full
@@ -958,7 +1220,7 @@ impl Scene {
         clip_rect: [f32; 4],
         clip_corner_radii: [f32; 4],
     ) {
-        self.strokes.push(SceneStroke {
+        self.ops.push(SceneOp::Stroke(SceneStroke {
             x0, y0, x1, y1,
             color,
             stroke_width,
@@ -966,7 +1228,7 @@ impl Scene {
             transform_id,
             clip_rect,
             clip_corner_radii,
-        });
+        }));
     }
 
     /// Append an image rect with full control + rounded-rect clip
@@ -982,7 +1244,7 @@ impl Scene {
         clip_rect: [f32; 4],
         clip_corner_radii: [f32; 4],
     ) {
-        self.images.push(SceneImage {
+        self.ops.push(SceneOp::Image(SceneImage {
             x0, y0, x1, y1,
             uv,
             color,
@@ -990,7 +1252,62 @@ impl Scene {
             transform_id,
             clip_rect,
             clip_corner_radii,
-        });
+        }));
+    }
+
+    /// Declare or update a native-compositor surface. If the key was
+    /// not present, append to `compositor_surfaces` (z-order = vec
+    /// position). If the key was present, update fields in place
+    /// without reordering.
+    ///
+    /// Surfaces and `SceneOp::PushLayer` are independent: a surface
+    /// may contain layers, a layer may span surfaces. Surfaces are
+    /// about *cross-frame OS handoff regions*; layers are about
+    /// *within-frame compositing groups*.
+    pub fn declare_compositor_surface(&mut self, surface: CompositorSurface) {
+        if let Some(existing) = self
+            .compositor_surfaces
+            .iter_mut()
+            .find(|s| s.key == surface.key)
+        {
+            *existing = surface;
+        } else {
+            self.compositor_surfaces.push(surface);
+        }
+    }
+
+    /// Drop a previously-declared compositor surface. No-op if the
+    /// key is not present.
+    pub fn undeclare_compositor_surface(&mut self, key: SurfaceKey) {
+        self.compositor_surfaces.retain(|s| s.key != key);
+    }
+
+    /// Update one surface's transform without changing bounds. The
+    /// transform is applied by the OS compositor at present time,
+    /// not by netrender's master render — calling this does not
+    /// force a content repaint.
+    ///
+    /// No-op if `key` is not declared.
+    pub fn set_surface_transform(&mut self, key: SurfaceKey, transform: [f32; 6]) {
+        if let Some(s) = self.compositor_surfaces.iter_mut().find(|s| s.key == key) {
+            s.transform = transform;
+        }
+    }
+
+    /// Update one surface's clip. OS-compositor metadata; does not
+    /// force a content repaint. No-op if `key` is not declared.
+    pub fn set_surface_clip(&mut self, key: SurfaceKey, clip: Option<[f32; 4]>) {
+        if let Some(s) = self.compositor_surfaces.iter_mut().find(|s| s.key == key) {
+            s.clip = clip;
+        }
+    }
+
+    /// Update one surface's opacity. OS-compositor metadata; does not
+    /// force a content repaint. No-op if `key` is not declared.
+    pub fn set_surface_opacity(&mut self, key: SurfaceKey, opacity: f32) {
+        if let Some(s) = self.compositor_surfaces.iter_mut().find(|s| s.key == key) {
+            s.opacity = opacity;
+        }
     }
 }
 

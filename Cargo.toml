@@ -2,6 +2,7 @@
 members = [
     "netrender_device",
     "netrender",
+    "netrender_text",
 ]
 resolver = "2"
 

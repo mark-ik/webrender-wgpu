@@ -3,7 +3,7 @@ name = "netrender"
 version = "0.0.1"
 license = "MPL-2.0"
 description = "wgpu-native renderer shell (Phase 0.5 split per netrender-notes/2026-04-30_netrender_design_plan.md)"
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 log = "0.4"
@@ -13,3 +13,4 @@ vello = { git = "https://github.com/linebender/vello", branch = "main", version 
 
 [dev-dependencies]
 png = "0.17"
+netrender_text = { path = "../netrender_text" }

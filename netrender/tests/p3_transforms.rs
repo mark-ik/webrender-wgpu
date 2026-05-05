@@ -63,7 +63,7 @@ fn read_png(path: &Path) -> (u32, u32, Vec<u8>) {
 }
 
 fn should_regen() -> bool {
-    std::env::var("NETRENDER_REGEN").map_or(false, |v| v == "1")
+    std::env::var("NETRENDER_REGEN").is_ok_and(|v| v == "1")
 }
 
 // ── Core test runner ───────────────────────────────────────────────

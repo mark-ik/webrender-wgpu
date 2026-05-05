@@ -27,6 +27,8 @@
 )]
 
 pub mod filter;
+pub mod hit_test;
+pub mod registry;
 pub mod render_graph;
 mod renderer;
 pub mod scene;
@@ -34,20 +36,32 @@ pub mod tile_cache;
 pub mod vello_rasterizer;
 pub mod vello_tile_rasterizer;
 
+pub use crate::hit_test::{HitOpKind, HitResult, hit_test, hit_test_topmost};
+pub use crate::registry::{FontRegistry, ImageRegistry};
 pub use crate::render_graph::{EncodeCallback, RenderGraph, Task, TaskId};
 pub use crate::renderer::init::{NetrenderOptions, create_netrender_instance};
 pub use crate::renderer::{ColorLoad, Renderer, RendererError};
+
+// `FontBlob.data` is `peniko::Blob<u8>`; consumers constructing one
+// directly need access to the `Blob` type. Re-export the peniko
+// surface so they don't have to add a separate vello dep just to
+// build a font handle.
+pub use vello::peniko;
 pub use crate::scene::{
-    FontBlob, FontId, Glyph, GradientKind, GradientStop, ImageData, ImageKey, NO_CLIP, PathOp,
-    SHARP_CLIP, Scene, SceneBlendMode, SceneGlyphRun, SceneGradient, SceneImage, ScenePath,
-    ScenePathStroke, SceneRect, SceneShape, SceneStroke, Transform,
+    CompositorSurface, FontBlob, FontId, Glyph, GradientKind, GradientStop, ImageData, ImageKey,
+    NO_CLIP, PathOp, SHARP_CLIP, Scene, SceneBlendMode, SceneClip, SceneGlyphRun, SceneGradient,
+    SceneImage, SceneLayer, SceneOp, ScenePath, ScenePathStroke, SceneRect, SceneShape,
+    SceneStroke, SurfaceKey, Transform,
 };
 pub use crate::tile_cache::{TileCache, TileCoord};
 
 // Re-export the device-foundation surface embedders need to construct
 // `WgpuHandles` and run render-graph tasks (blur, clip mask) whose
 // outputs feed into vello scenes via `Renderer::insert_image_vello`.
+// `Compositor`/`LayerPresent`/`PresentedFrame` are the path-(b′)
+// trait surface; consumers (servo-wgpu, etc.) implement `Compositor`
+// for native-compositor handoff.
 pub use netrender_device::{
-    BrushBlurPipeline, ClipRectanglePipeline, REQUIRED_FEATURES, WgpuDevice, WgpuHandles, boot,
-    build_brush_blur, build_clip_rectangle,
+    BrushBlurPipeline, ClipRectanglePipeline, Compositor, LayerPresent, PresentedFrame,
+    REQUIRED_FEATURES, WgpuDevice, WgpuHandles, boot, build_brush_blur, build_clip_rectangle,
 };

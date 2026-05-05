@@ -14,9 +14,15 @@
 //! - `p7prime_04_spanning_primitive_no_double_render` — a half-
 //!   alpha rect spanning multiple tiles must NOT double-blend at
 //!   tile borders (per-tile clip layer prevents that).
+//! - `p7prime_05_image_cache_persists_across_frames` — same
+//!   `ImageKey` re-handed across frames keeps the same
+//!   `peniko::Blob::id()`, so vello uploads the texture once.
+//! - `p7prime_06_image_cache_evicts_on_key_drop` — a key that
+//!   disappears from `scene.image_sources` is evicted from the
+//!   rasterizer's image cache.
 
 use netrender::{
-    Scene, TileCache, boot,
+    ImageData, Scene, TileCache, boot,
     vello_tile_rasterizer::VelloTileRasterizer,
 };
 use vello::peniko::Color;
@@ -200,4 +206,90 @@ fn p7prime_04_spanning_primitive_no_double_render() {
             &format!("spanning rect at ({}, {})", x, y),
         );
     }
+}
+
+/// Build a 2×2 RGBA8 image with one red pixel for cache tests.
+fn one_pixel_image() -> ImageData {
+    ImageData::from_bytes(
+        2,
+        2,
+        vec![
+            255, 0, 0, 255,  255, 0, 0, 255,
+            255, 0, 0, 255,  255, 0, 0, 255,
+        ],
+    )
+}
+
+const TEST_IMG_KEY: u64 = 0xa11ce;
+
+/// Render a scene carrying the same `ImageKey` across three frames
+/// (same `Scene` re-rendered, plus a fresh `Scene` re-handing the
+/// same key) and assert the cached `peniko::Blob::id()` is stable.
+/// Stable id means vello reuses its atlas slot — the upload happens
+/// once, not three times.
+#[test]
+fn p7prime_05_image_cache_persists_across_frames() {
+    let handles = boot().expect("wgpu boot");
+    let mut rasterizer = VelloTileRasterizer::new(handles.clone())
+        .expect("VelloTileRasterizer::new");
+    let mut tc = TileCache::new(TILE_SIZE);
+
+    let mut scene = Scene::new(VIEWPORT, VIEWPORT);
+    scene.image_sources.insert(TEST_IMG_KEY, one_pixel_image());
+    scene.push_image(16.0, 16.0, 48.0, 48.0, TEST_IMG_KEY, one_pixel_image());
+
+    let (_t1, v1) = make_target(&handles.device);
+    rasterizer.render(&scene, &mut tc, &v1, TRANSPARENT).expect("render 1");
+    let id1 = rasterizer
+        .cached_image_blob_id(TEST_IMG_KEY)
+        .expect("cache populated after first render");
+
+    // Frame 2: same Scene reference, no dirty tiles. Cache must
+    // hold the same Blob (id stable).
+    let (_t2, v2) = make_target(&handles.device);
+    rasterizer.render(&scene, &mut tc, &v2, TRANSPARENT).expect("render 2");
+    let id2 = rasterizer.cached_image_blob_id(TEST_IMG_KEY).unwrap();
+    assert_eq!(id1, id2, "Blob id must be stable across re-render of same Scene");
+
+    // Frame 3: brand-new Scene instance with the same ImageKey
+    // (consumer pattern: rebuild Scene each frame). Cache survives
+    // the Scene swap because it lives on the rasterizer.
+    let mut scene_b = Scene::new(VIEWPORT, VIEWPORT);
+    scene_b.image_sources.insert(TEST_IMG_KEY, one_pixel_image());
+    scene_b.push_image(20.0, 20.0, 60.0, 60.0, TEST_IMG_KEY, one_pixel_image());
+    let (_t3, v3) = make_target(&handles.device);
+    rasterizer.render(&scene_b, &mut tc, &v3, TRANSPARENT).expect("render 3");
+    let id3 = rasterizer.cached_image_blob_id(TEST_IMG_KEY).unwrap();
+    assert_eq!(
+        id1, id3,
+        "Blob id must survive Scene-instance swap when key is unchanged",
+    );
+}
+
+/// A key dropped from `scene.image_sources` (e.g., consumer rebuilt
+/// the scene without it) must be evicted from the rasterizer's
+/// cache so the Arc backing the bytes can be released.
+#[test]
+fn p7prime_06_image_cache_evicts_on_key_drop() {
+    let handles = boot().expect("wgpu boot");
+    let mut rasterizer = VelloTileRasterizer::new(handles.clone())
+        .expect("VelloTileRasterizer::new");
+    let mut tc = TileCache::new(TILE_SIZE);
+
+    let mut scene = Scene::new(VIEWPORT, VIEWPORT);
+    scene.image_sources.insert(TEST_IMG_KEY, one_pixel_image());
+    scene.push_image(16.0, 16.0, 48.0, 48.0, TEST_IMG_KEY, one_pixel_image());
+    let (_t1, v1) = make_target(&handles.device);
+    rasterizer.render(&scene, &mut tc, &v1, TRANSPARENT).expect("render 1");
+    assert!(rasterizer.cached_image_blob_id(TEST_IMG_KEY).is_some());
+
+    let scene_no_img = Scene::new(VIEWPORT, VIEWPORT);
+    let (_t2, v2) = make_target(&handles.device);
+    rasterizer
+        .render(&scene_no_img, &mut tc, &v2, TRANSPARENT)
+        .expect("render 2");
+    assert!(
+        rasterizer.cached_image_blob_id(TEST_IMG_KEY).is_none(),
+        "key dropped from scene.image_sources must evict from cache",
+    );
 }

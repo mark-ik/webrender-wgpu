@@ -39,6 +39,7 @@ pub(crate) mod init;
 
 use std::sync::{Arc, Mutex};
 
+use netrender_device::compositor::{Compositor, PresentedFrame};
 use netrender_device::WgpuDevice;
 
 use crate::scene::{ImageKey, Scene};
@@ -72,6 +73,98 @@ impl Default for ColorLoad {
     }
 }
 
+/// Pick a (pass count, per-pass step in pixels) for `brush_blur`
+/// such that the cascaded 5-tap binomial kernel approximates a
+/// Gaussian with σ = `blur_radius_px / 2` (the conventional CSS
+/// blur-radius → σ relation).
+///
+/// One binomial 5-tap pass with `step = k` pixels has σ ≈ k.
+/// N cascaded H+V passes accumulate: σ_total = k · √N.
+///
+/// We cap the per-pass step at 2 px so each pass keeps a tight tap
+/// spread (avoids the visible "5-tap quantization" you get when one
+/// pass's step is large relative to the feature size). Larger
+/// blurs absorb the budget by running more passes.
+///
+/// Pass count is capped at `MAX_PASSES` for sanity — at the cap a
+/// blur radius of ~28 px is achievable; beyond that the result is
+/// stddev-clipped (downscale-then-blur is the right move for huge
+/// blurs and is not implemented here yet).
+fn blur_kernel_plan(blur_radius_px: f32) -> (usize, f32) {
+    const MAX_STEP_PX: f32 = 2.0;
+    const MAX_PASSES: usize = 50;
+
+    let target_sigma = (blur_radius_px * 0.5).max(0.5);
+    if target_sigma <= MAX_STEP_PX {
+        // One pass suffices; pick step = σ so the kernel covers σ.
+        return (1, target_sigma);
+    }
+    let passes = ((target_sigma / MAX_STEP_PX).powi(2)).ceil().max(1.0) as usize;
+    (passes.min(MAX_PASSES), MAX_STEP_PX)
+}
+
+#[cfg(test)]
+mod blur_plan_tests {
+    use super::blur_kernel_plan;
+
+    #[track_caller]
+    fn assert_close(actual: f32, expected: f32, tol: f32, label: &str) {
+        let diff = (actual - expected).abs();
+        assert!(
+            diff <= tol,
+            "{}: actual {}, expected {} (diff = {}, tol = {})",
+            label, actual, expected, diff, tol,
+        );
+    }
+
+    #[test]
+    fn zero_radius_collapses_to_single_tight_pass() {
+        let (passes, step) = blur_kernel_plan(0.0);
+        assert_eq!(passes, 1);
+        assert_close(step, 0.5, 0.01, "step at radius 0 floors to 0.5");
+    }
+
+    #[test]
+    fn small_radius_uses_one_pass_with_step_eq_sigma() {
+        let (passes, step) = blur_kernel_plan(2.0); // σ_target = 1.0
+        assert_eq!(passes, 1);
+        assert_close(step, 1.0, 0.01, "step matches target σ when σ ≤ 2");
+    }
+
+    #[test]
+    fn radius_at_step_cap_still_one_pass() {
+        let (passes, step) = blur_kernel_plan(4.0); // σ_target = 2.0
+        assert_eq!(passes, 1);
+        assert_close(step, 2.0, 0.01, "σ at MAX_STEP_PX still single-pass");
+    }
+
+    #[test]
+    fn large_radius_cascades() {
+        // σ_target = 5, MAX_STEP_PX = 2 → passes = ceil((5/2)²) = 7
+        let (passes, step) = blur_kernel_plan(10.0);
+        assert_eq!(passes, 7);
+        assert_close(step, 2.0, 0.01, "step pinned at MAX_STEP_PX for cascaded");
+
+        // σ_total = step·√passes ≈ 2·√7 ≈ 5.29 ≥ target 5.0
+        let actual_sigma = step * (passes as f32).sqrt();
+        assert!(
+            actual_sigma >= 5.0,
+            "cascaded σ {} should reach target 5.0",
+            actual_sigma,
+        );
+    }
+
+    #[test]
+    fn pass_count_capped() {
+        let (passes, _) = blur_kernel_plan(1000.0);
+        assert!(
+            passes <= 50,
+            "MAX_PASSES = 50 should cap unbounded radii; got {}",
+            passes,
+        );
+    }
+}
+
 impl Renderer {
     /// Borrow the tile cache mutex (used by tests for invalidation
     /// inspection). Returns `None` if `tile_cache_size` was `None`.
@@ -94,12 +187,19 @@ impl Renderer {
     ///
     /// # Internals
     ///
-    /// Runs a 3-task render graph:
+    /// Runs a (1 + 2N)-task render graph:
     ///   1. `cs_clip_rectangle` writes a coverage mask matching
     ///      `bounds` + `corner_radius` into a fresh
     ///      `Rgba8Unorm` `dim × dim` texture.
-    ///   2. Horizontal `brush_blur` pass with `step = (blur_step, 0)`.
-    ///   3. Vertical `brush_blur` pass with `step = (0, blur_step)`.
+    ///   2. N pairs of separable `brush_blur` passes (H then V),
+    ///      each pass running the 5-tap binomial kernel. N and the
+    ///      per-pass step are chosen by `blur_kernel_plan` so the
+    ///      cumulative Gaussian σ matches `blur_radius_px / 2`
+    ///      (the standard CSS blur-radius → σ relation).
+    ///
+    /// `blur_radius_px` is in target-pixel units: `0.0` is no
+    /// blur (single tight pass), `8.0` matches a CSS
+    /// `box-shadow: 0 0 8px` shadow's spread, and so on.
     ///
     /// The final texture is registered with the vello rasterizer
     /// via `insert_image_vello`.
@@ -113,7 +213,7 @@ impl Renderer {
         dim: u32,
         bounds: [f32; 4],
         corner_radius: f32,
-        blur_step: f32,
+        blur_radius_px: f32,
     ) {
         use crate::filter::{blur_pass_callback, clip_rectangle_callback, make_bilinear_sampler};
         use crate::render_graph::{RenderGraph, Task, TaskId};
@@ -126,35 +226,48 @@ impl Renderer {
         let blur_pipe = self.wgpu_device.ensure_brush_blur(mask_format);
         let sampler = make_bilinear_sampler(&device);
 
-        const MASK: TaskId = 1;
-        const BLUR_H: TaskId = 2;
-        const BLUR_V: TaskId = 3;
+        let (passes, step_px) = blur_kernel_plan(blur_radius_px);
+        let step_uv = step_px / dim as f32;
 
+        let extent = wgpu::Extent3d { width: dim, height: dim, depth_or_array_layers: 1 };
+
+        const MASK: TaskId = 1;
         let mut graph = RenderGraph::new();
         graph.push(Task {
             id: MASK,
-            extent: wgpu::Extent3d { width: dim, height: dim, depth_or_array_layers: 1 },
+            extent,
             format: mask_format,
             inputs: vec![],
             encode: clip_rectangle_callback(clip_pipe, bounds, corner_radius),
         });
-        graph.push(Task {
-            id: BLUR_H,
-            extent: wgpu::Extent3d { width: dim, height: dim, depth_or_array_layers: 1 },
-            format: mask_format,
-            inputs: vec![MASK],
-            encode: blur_pass_callback(blur_pipe.clone(), Arc::clone(&sampler), blur_step, 0.0),
-        });
-        graph.push(Task {
-            id: BLUR_V,
-            extent: wgpu::Extent3d { width: dim, height: dim, depth_or_array_layers: 1 },
-            format: mask_format,
-            inputs: vec![BLUR_H],
-            encode: blur_pass_callback(blur_pipe, Arc::clone(&sampler), 0.0, blur_step),
-        });
+
+        // Chain N H+V blur pairs, each consuming the previous
+        // pass's output. The first H pass reads from MASK.
+        let mut prev: TaskId = MASK;
+        let mut next_id: TaskId = MASK + 1;
+        for _ in 0..passes {
+            let h_id = next_id;
+            graph.push(Task {
+                id: h_id,
+                extent,
+                format: mask_format,
+                inputs: vec![prev],
+                encode: blur_pass_callback(blur_pipe.clone(), Arc::clone(&sampler), step_uv, 0.0),
+            });
+            let v_id = h_id + 1;
+            graph.push(Task {
+                id: v_id,
+                extent,
+                format: mask_format,
+                inputs: vec![h_id],
+                encode: blur_pass_callback(blur_pipe.clone(), Arc::clone(&sampler), 0.0, step_uv),
+            });
+            prev = v_id;
+            next_id = v_id + 1;
+        }
 
         let mut outputs = graph.execute(&device, &queue, std::collections::HashMap::new());
-        let blurred = outputs.remove(&BLUR_V).expect("BLUR_V output");
+        let blurred = outputs.remove(&prev).expect("final blur-pass output");
         self.insert_image_vello(key, Arc::new(blurred));
     }
 
@@ -260,6 +373,111 @@ impl Renderer {
         let mut tc = tc_mutex.lock().expect("tile_cache lock");
         rast.render(scene, &mut tc, target_view, base)
             .unwrap_or_else(|e| panic!("vello render_to_texture failed: {:?}", e));
+    }
+
+    /// Number of times the path-(b′) master-texture pool has
+    /// allocated a fresh `wgpu::Texture` over this Renderer's
+    /// lifetime. Returns `None` if `enable_vello` was false.
+    ///
+    /// Test signal: stable across consecutive `render_with_compositor`
+    /// calls at the same viewport / format; increments on resize or
+    /// format change.
+    pub fn vello_master_allocations(&self) -> Option<usize> {
+        let rast_mutex = self.vello_rasterizer.as_ref()?;
+        let rast = rast_mutex.lock().expect("vello_rasterizer lock");
+        Some(rast.master_allocations())
+    }
+
+    /// Path (b′) entry point — render `scene` into an internal
+    /// master texture (pool-allocated by `(width, height,
+    /// master_format)` on the rasterizer), forward declare/destroy
+    /// surface lifecycle events to `compositor`, then hand the
+    /// master texture and per-surface `LayerPresent` payload to the
+    /// consumer via [`Compositor::present_frame`].
+    ///
+    /// Per-frame ordering:
+    /// 1. Render scene to internal master.
+    /// 2. Compute the surface diff against last frame's state.
+    /// 3. Emit `destroy_surface` for keys present last frame but
+    ///    absent now; emit `declare_surface` for new + bounds-
+    ///    changed keys (idempotent per the trait contract).
+    /// 4. Build per-surface `LayerPresent` with the four-source
+    ///    dirty OR (tile-intersection / absent-last-frame /
+    ///    bounds-changed) computed inline.
+    /// 5. Call `present_frame` so the consumer can blit dirty
+    ///    surface regions and route native textures to the OS.
+    /// 6. Commit the frame's surface state to the rasterizer for
+    ///    next-frame diff.
+    ///
+    /// `master_format` must match the format of the consumer-owned
+    /// destination textures: `copy_texture_to_texture` requires
+    /// identical formats. `wgpu::TextureFormat::Rgba8Unorm` is the
+    /// graphshell-shaped consumer default. See design doc §8(1) for
+    /// the BGRA-storage caveat on native-compositor paths.
+    ///
+    /// See
+    /// [`netrender-notes/2026-05-05_compositor_handoff_path_b_prime.md`](../../netrender-notes/2026-05-05_compositor_handoff_path_b_prime.md)
+    /// for the design.
+    ///
+    /// # Panics
+    ///
+    /// - If `enable_vello` was false at construction.
+    /// - If `tile_cache_size` was `None` at construction.
+    /// - If a vello render error occurs.
+    pub fn render_with_compositor(
+        &self,
+        scene: &Scene,
+        master_format: wgpu::TextureFormat,
+        compositor: &mut dyn Compositor,
+        base_color: vello::peniko::Color,
+    ) {
+        let rast_mutex = self.vello_rasterizer.as_ref().expect(
+            "Renderer::render_with_compositor requires NetrenderOptions::enable_vello = true",
+        );
+        let tc_mutex = self.tile_cache.as_ref().expect(
+            "Renderer::render_with_compositor requires NetrenderOptions::tile_cache_size = Some(_)",
+        );
+
+        let mut rast = rast_mutex.lock().expect("vello_rasterizer lock");
+        let mut tc = tc_mutex.lock().expect("tile_cache lock");
+
+        // 1. Render the scene into the rasterizer's pool-allocated master.
+        rast.render_to_internal_master(scene, &mut tc, master_format, base_color)
+            .unwrap_or_else(|e| panic!("vello render_to_texture failed: {:?}", e));
+
+        // 2. Diff surface lifecycle against last frame.
+        let (declares, destroys) = rast.diff_compositor_surfaces(scene);
+
+        // 3. Forward lifecycle events. Destroys first so consumer can
+        // free old destination textures before any new declares
+        // potentially reuse keys (re-declare with same key after
+        // destroy is a valid pattern, though the diff doesn't currently
+        // emit that case — declares only fire when bounds differ).
+        for key in &destroys {
+            compositor.destroy_surface(*key);
+        }
+        for (key, bounds) in &declares {
+            compositor.declare_surface(*key, *bounds);
+        }
+
+        // 4. Build LayerPresent vec.
+        let layers = rast.build_layer_presents(scene, &tc);
+
+        // 5. Hand off. Re-borrow master + handles after lifecycle calls
+        // (which used &self) so the &mut self borrow for the present
+        // payload is fresh.
+        let master_texture = rast
+            .master_texture()
+            .expect("master_pool guaranteed by render_to_internal_master above");
+        let handles = rast.handles_ref();
+        compositor.present_frame(PresentedFrame {
+            master: master_texture,
+            handles,
+            layers: &layers,
+        });
+
+        // 6. Persist surface state for next frame.
+        rast.commit_compositor_state(scene);
     }
 }
 

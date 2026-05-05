@@ -14,6 +14,9 @@
 //! Receipts:
 //!   p11c_01_card_with_drop_shadow — composite a "card" rect with a
 //!     subtle drop shadow underneath using a single helper call.
+//!   p11c_02_blur_radius_extends_halo — verify that a larger
+//!     `blur_radius_px` produces visibly more spread than a small
+//!     one, exercising the multi-pass cascade in build_box_shadow_mask.
 
 use netrender::{
     ColorLoad, NetrenderOptions, Scene, boot, create_netrender_instance,
@@ -68,7 +71,7 @@ fn p11c_01_card_with_drop_shadow() {
         DIM,
         [16.0, 16.0, 48.0, 48.0],     // shadow source bounds
         4.0,                           // corner radius
-        1.0 / DIM as f32,              // blur step
+        2.0,                           // blur radius (CSS px); was step=1/DIM ≈ σ=1
     );
 
     // Step 2: build a scene compositing the shadow under a white card.
@@ -138,5 +141,105 @@ fn p11c_01_card_with_drop_shadow() {
     assert!(
         far_halo[3] >= 240,
         "far halo (52, 52): {:?} should be opaque (over black bg)", far_halo
+    );
+}
+
+/// Render the same shadow source bounds at two different
+/// `blur_radius_px` values and verify the larger blur paints visible
+/// shadow farther from the card edge. This proves the multi-pass
+/// cascade widens the kernel as the radius grows; a fixed-tap
+/// implementation (the pre-cascade code) would not.
+#[test]
+fn p11c_02_blur_radius_extends_halo() {
+    // Use a larger viewport so the halo has room to spread well past
+    // the source bounds.
+    const D: u32 = 128;
+    const TILE: u32 = 64;
+
+    fn make_target_d(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("p11c_02 target"),
+            size: wgpu::Extent3d { width: D, height: D, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[wgpu::TextureFormat::Rgba8UnormSrgb],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("p11c_02 view"),
+            format: Some(wgpu::TextureFormat::Rgba8Unorm),
+            ..Default::default()
+        });
+        (texture, view)
+    }
+
+    fn read_pixel_d(bytes: &[u8], x: u32, y: u32) -> [u8; 4] {
+        let i = ((y * D + x) * 4) as usize;
+        [bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]
+    }
+
+    fn render_shadow_only(blur_radius_px: f32) -> Vec<u8> {
+        let handles = boot().expect("wgpu boot");
+        let renderer = create_netrender_instance(
+            handles.clone(),
+            NetrenderOptions { tile_cache_size: Some(TILE), enable_vello: true },
+        )
+        .expect("create_netrender_instance");
+
+        const KEY: u64 = 0xBEEF_BEEF;
+        let bounds = [48.0_f32, 48.0, 80.0, 80.0]; // 32×32 card centered
+        renderer.build_box_shadow_mask(KEY, D, bounds, 0.0, blur_radius_px);
+
+        let mut scene = Scene::new(D, D);
+        scene.push_image_full(
+            0.0, 0.0, D as f32, D as f32,
+            [0.0, 0.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0, 1.0], // opaque-black tint, full-coverage shadow
+            KEY,
+            0,
+            netrender::NO_CLIP,
+        );
+
+        let (target, view) = make_target_d(&handles.device);
+        renderer.render_vello(&scene, &view, ColorLoad::Clear(wgpu::Color::WHITE));
+        renderer.wgpu_device.read_rgba8_texture(&target, D, D)
+    }
+
+    // Probe 8 px outside the card edge (x=88, card edge at x=80).
+    // For a Gaussian shadow over white bg with opaque-black tint the
+    // expected RGB at distance d is roughly 255 · (1 - 0.5·erfc(d/(σ√2))).
+    //
+    // - small blur (radius 2 → σ ≈ 1): at d=8, coverage ≈ 1e-5 →
+    //   output ≈ 255 (white).
+    // - large blur (radius 16 → σ ≈ 8): at d=8 (= 1σ), coverage
+    //   ≈ 0.16 → output ≈ 214.
+    //
+    // So a working multi-pass cascade gives ≥ 25 levels of darkening
+    // at this probe; a fixed-tap implementation would not.
+    let small = render_shadow_only(2.0);
+    let small_probe = read_pixel_d(&small, 88, 64);
+    assert!(
+        small_probe[0] > 240,
+        "2px blur, 8 px outside card: {:?} should be near-white",
+        small_probe,
+    );
+
+    let large = render_shadow_only(16.0);
+    let large_probe = read_pixel_d(&large, 88, 64);
+    assert!(
+        large_probe[0] < 230,
+        "16px blur, 8 px outside card: {:?} should be visibly shaded",
+        large_probe,
+    );
+    let darkening = small_probe[0] as i16 - large_probe[0] as i16;
+    assert!(
+        darkening >= 25,
+        "large blur should be ≥ 25 levels darker than small at probe; \
+         small={:?} large={:?} (delta={})",
+        small_probe, large_probe, darkening,
     );
 }
