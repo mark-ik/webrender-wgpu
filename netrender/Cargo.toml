@@ -7,9 +7,9 @@ edition = "2021"
 
 [dependencies]
 log = "0.4"
-wgpu = "29"
+wgpu = { version = "29", default-features = false, features = ["std", "parking_lot", "dx12", "metal", "vulkan", "wgsl"] }
 netrender_device = { path = "../netrender_device" }
-vello = { git = "https://github.com/linebender/vello", branch = "main", version = "0.8.0" }
+vello = { git = "https://github.com/linebender/vello", branch = "main", version = "0.8.0", default-features = false, features = ["wgpu"] }
 
 [dev-dependencies]
 png = "0.17"

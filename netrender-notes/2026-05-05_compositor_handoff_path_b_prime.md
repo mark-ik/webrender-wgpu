@@ -11,7 +11,7 @@ Distinct from:
   §2.4 — the cost-shape table that originally documented "trivial
   handoff lost" as an accepted trade for Masonry. **This plan
   recovers most of that loss without un-doing Masonry.**
-- The doc's earlier [§13' deferral discussion](2026-05-05_deferred_phases.md)
+- The doc's earlier [§13' deferral discussion](archive/2026-05-05_deferred_phases.md)
   — superseded by this plan.
 
 Consumer: **servo-wgpu** (in workspace), reshaping its compositing
@@ -222,7 +222,7 @@ is mechanical.
 
 **Today** ([vello_tile_rasterizer.rs:166-187](../netrender/src/vello_tile_rasterizer.rs#L166-L187)):
 
-```
+```text
 Scene
  → tile_cache.invalidate → dirty TileCoord list
  → rebuild dirty per-tile vello::Scenes (clean ones reused)
@@ -232,7 +232,7 @@ Scene
 
 **Path (b′)**:
 
-```
+```text
 Scene
  → tile_cache.invalidate → dirty TileCoord list  (now retained, not collapsed to count)
  → rebuild dirty per-tile vello::Scenes (clean ones reused)

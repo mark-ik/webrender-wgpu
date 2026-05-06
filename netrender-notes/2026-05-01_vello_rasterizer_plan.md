@@ -53,10 +53,16 @@ GPU-work skipping at the WR-tile-cache level — vello re-runs the
 unioned encoding's compute every frame, can't be helped without
 forking; (b) per-tile `Arc<wgpu::Texture>` for native-compositor
 handoff (axiom 14) — Servo doesn't use this today; Firefox does on
-macOS/Windows/Android. If axiom 14 becomes load-bearing later,
-Option G (whole-frame vello + post-render tile slicing for native
-compositor) is the v1.5 fallback. Option F (fork) is permanently
-ruled out.
+macOS/Windows/Android. Option F (fork) is permanently ruled out.
+
+*Update 2026-05-06.* Loss (b) has since been recovered via path (b′)
+without forking — see
+[`2026-05-05_compositor_handoff_path_b_prime.md`](2026-05-05_compositor_handoff_path_b_prime.md)
+(sub-phases 5.1–5.4 shipped, commit `9447a852b`). The
+"Option G v1.5 fallback" framing in the original draft is
+superseded; path (b′) is strictly better (per-surface damage
+instead of flat slicing). Loss (a) remains; partially recovered at
+surface granularity (clean compositor surfaces skip their blit).
 
 The doc has been swept (2026-05-01) to align §2 / §3.3 / §3.5 / §6 /
 §11 / §12 / §13 / §14 with the spike outcomes. §10 still uses
@@ -223,20 +229,33 @@ Re-introduce the trait if a second rasterizer ever ships (e.g. a
 
 ### 2.4 Cost shape vs. the pre-spike draft
 
+> **Superseded 2026-05-06** by
+> [`2026-05-05_compositor_handoff_path_b_prime.md`](2026-05-05_compositor_handoff_path_b_prime.md).
+> The "axiom 14 lost" cell and the "v1.5 fallback" framing are no
+> longer accurate: path (b′) recovers native-compositor handoff at
+> per-declared-surface granularity (sub-phases 5.1–5.4 shipped on
+> netrender's side; commit `9447a852b`). The cross-frame GPU-work
+> skipping loss is also partially recovered — clean surfaces skip
+> their blit. The table below is preserved as the historical
+> contrast against the pre-spike draft; for the live cost shape,
+> see the path (b′) plan §1.
+
 | Property | Pre-spike (per-tile encoder) | Post-spike (Option C) |
 | --- | --- | --- |
 | Submits per frame | N (one per dirty tile) | 1 |
 | Encoder ownership | Shared via trait param | Vello-internal |
 | Per-tile texture | `Arc<wgpu::Texture>` per tile | None — composed scene |
-| Native compositor handoff (axiom 14) | Trivial (per-tile texture) | Lost; v1.5 fallback in §recommendation |
+| Native compositor handoff (axiom 14) | Trivial (per-tile texture) | ~~Lost; v1.5 fallback in §recommendation~~ **Recovered via path (b′)** |
 | Cross-frame GPU-work skipping | Possible (re-render only dirty tile textures) | No — vello recomputes the unioned encoding's GPU dispatches every frame |
 | CPU-side scene rebuild | Per dirty tile only | Per dirty tile only (clean tiles' Scenes reused) |
 
-The two real losses (native compositor handoff, cross-frame GPU
-work skipping) trade against forking `WgpuEngine`. We chose the
-losses; Servo doesn't use axiom-14 today, and vello's GPU cost on
-unchanged content is reportedly tractable on Linebender's UI
-benchmarks.
+Original framing (preserved for context): the two real losses
+(native compositor handoff, cross-frame GPU work skipping) trade
+against forking `WgpuEngine`. We chose the losses; Servo doesn't
+use axiom-14 today, and vello's GPU cost on unchanged content is
+reportedly tractable on Linebender's UI benchmarks. Update: the
+axiom-14 loss has since been recovered without forking (see banner
+above).
 
 ## 3. Vello-scene encoding for current primitives
 
@@ -1681,16 +1700,18 @@ has been folded into the feature roadmap as
 [Phase R in `2026-05-04_feature_roadmap.md`][roadmap-r] so all
 open items live in one place.
 
-The architecturally-significant deferrals (12c' backdrop filter,
-13' compositor handoff, linear-light blending) live in
-[`2026-05-05_deferred_phases.md`](2026-05-05_deferred_phases.md) —
-each is bigger than a wart fix and gets its own design discussion
-when its trigger arrives.
+The originally-deferred items (12c' backdrop filter, 13'
+compositor handoff, linear-light blending) all activated 2026-05-05;
+their canonical entries now live on the roadmap as **D1**, **D3**,
+**R9** respectively. The activation-history record is preserved in
+[`archive/2026-05-05_deferred_phases.md`](archive/2026-05-05_deferred_phases.md).
+The path (b′) design for D3 lives in
+[`2026-05-05_compositor_handoff_path_b_prime.md`](2026-05-05_compositor_handoff_path_b_prime.md).
 
 When a wart fix from Phase R lands, record it as a `§11.x —
 CLEARED` finding here and remove it from the roadmap. When a
-deferred-phase item lands, do the same and update the deferred-
-phases doc.
+deferred-phase item lands (D1 / D3 / R9), do the same and update
+the relevant follow-up plan.
 
 [roadmap-r]: 2026-05-04_feature_roadmap.md
 
@@ -1781,58 +1802,64 @@ plan's Phase X.
     `make_bilinear_sampler`) were promoted from
     `tests/common/mod.rs` to the public `netrender::filter`
     module to support this helper.
-- 🚧 **Phase 12'**: compositing correctness.
-  - **12a' scene-level alpha + blend mode** delivered (2026-05-04):
+- 🚧 **Phase 12'**: compositing correctness. Core shipped; carve-outs
+  tracked as roadmap items.
+  - **12a' scene-level alpha + blend mode** ✅ delivered (2026-05-04):
     `Scene.root_alpha` and `Scene.root_blend_mode: SceneBlendMode`
     fields apply a single outer `push_layer` wrap. Maps to vello's
     `BlendMode { mix, compose: SrcOver }` with mix variants Normal
     / Multiply / Screen / Overlay / Darken / Lighten. No outer
     layer added when at defaults. Receipt:
     `p12prime_a_scene_compositing` (4 probes).
-  - **12b' nested groups** delivered (2026-05-04) via the op-list
+  - **12b' nested groups** ✅ delivered (2026-05-04) via the op-list
     refactor (§11.11) + `SceneOp::PushLayer`/`PopLayer` (§11.14).
     `SceneLayer` carries `{ clip, alpha, blend_mode, transform_id }`;
     layers nest. Op-list painter order is consumer push order, so
     "render this stack of primitives at 50% alpha as a unit" is
     just a push/pop pair. Receipt: `p12b_nested_layers` (4 tests).
-  - **12c' backdrop filters** still deferred. Reads pixels under
-    the element; vello's render-to-texture always overwrites the
-    entire target. Multi-pass rendering (snapshot under-pixels →
-    filter → composite over) is the shape of the fix.
-    Architectural change; lift on consumer pull.
+  - **12c' backdrop filters** ⏳ deferred. Roadmap entry: **D1**.
+    Reads pixels under the element; vello's render-to-texture
+    always overwrites the entire target. Multi-pass rendering
+    (snapshot under-pixels → filter → composite over) is the shape
+    of the fix. Architectural change; lift on consumer pull.
   - **Filter chains** (drop-shadow, brightness, etc.) beyond the
     existing `Renderer::build_box_shadow_mask` (11c'). The
     render-graph + insert_image_vello pattern handles one-off
     filters today; ergonomic helpers land per consumer demand.
-  - **Linear-light blending** (§6.3, Pitfall #2): `mix-blend-mode:
-    linear-light` and linear-light gradient interpolation are
-    upstream-blocked on vello's GPU compute path. Tracked at
-    `p1prime_03`; not ours to work around.
-- ⏳ **Phase 13'**: native compositor (axiom 14). Unchanged from
-  parent. Lost the trivial-handoff property at Phase 7' (per §2.4);
-  v1.5 fallback (whole-frame vello + post-render tile slicing for
-  native-compositor handoff) remains an escape hatch if needed.
+  - **Linear-light blending** (§6.3, Pitfall #2) ⏳ upstream-blocked.
+    Roadmap entry: **R9** (with R9-canary as the trigger detector).
+    `mix-blend-mode: linear-light` and linear-light gradient
+    interpolation depend on vello's GPU compute path honoring
+    `peniko::Gradient::interpolation_cs`. Tracked at `p1prime_03`;
+    not ours to work around.
+- 🚧 **Phase 13'**: native-compositor handoff (axiom 14) via path (b′).
+  Sub-phases 5.1–5.4 shipped on netrender's side (commit
+  `9447a852b`); 5.5 (servo-wgpu adapter) pending in separate
+  workspace. Recovers most of the trivial-handoff loss flagged at
+  §2.4 without forking. Roadmap entry: **D3**. Full design:
+  [`2026-05-05_compositor_handoff_path_b_prime.md`](2026-05-05_compositor_handoff_path_b_prime.md).
+  The §2.4 v1.5 fallback (whole-frame vello + post-render tile
+  slicing) has been superseded; see §2.4 banner.
 
-**What's left in the phase mapping (post-§11.17, 2026-05-05):**
+**What's left in the phase mapping (post-§11.17, 2026-05-06):**
 
-- **Phase 12c'** (backdrop filters): architectural change, gated
-  on consumer pull. Modern frosted-glass nav bars hit this; static
-  content doesn't.
-- **Phase 13'** (native compositor handoff, axiom 14): unchanged.
-  Lift only if a consumer needs platform-tile export
-  (CALayer / IOSurface / DXGI). v1.5 fallback in §2.4 is the
-  documented escape hatch.
-- **Linear-light blending** (gradient interpolation + linear-
-  light mix-blend-mode): upstream-blocked on vello's GPU compute
-  path. Tracked, not worked around.
+- **Phase 12c'** (backdrop filters → roadmap D1): architectural
+  change, gated on consumer pull. Modern frosted-glass nav bars hit
+  this; static content doesn't.
+- **Phase 13'** (native-compositor handoff → roadmap D3): netrender
+  side complete; servo-wgpu adapter (5.5) is the remaining work,
+  out-of-repo.
+- **Linear-light blending** (→ roadmap R9): upstream-blocked on
+  vello's GPU compute path; R9-canary will fire when vello honors
+  the field.
 
-Each of these has its own short design plan in
-[`2026-05-05_deferred_phases.md`](2026-05-05_deferred_phases.md)
-covering trigger condition, work shape, and alternatives.
+Each of these has its trigger, design shape, and done condition
+recorded on [`2026-05-04_feature_roadmap.md`](2026-05-04_feature_roadmap.md);
+the activation-history record is in
+[`archive/2026-05-05_deferred_phases.md`](archive/2026-05-05_deferred_phases.md).
 
-Everything else from 0.5'–12b' has shipped with receipts. The
-roadmap of *new capability* + open refinements lives in
-[`2026-05-04_feature_roadmap.md`](2026-05-04_feature_roadmap.md).
+Everything else from 0.5'–12b' has shipped with receipts.
+13' is netrender-complete (5.1–5.4); 5.5 lives in servo-wgpu.
 
 ## 13. Risks not already covered
 
@@ -1898,6 +1925,16 @@ roadmap of *new capability* + open refinements lives in
    out. Accept the cost; profile under realistic load; revisit
    only if specific consumer profiles surface unacceptable
    regression.
+
+   *Update 2026-05-06 (path b′ partial recovery).* Cross-frame
+   GPU-work skipping is now restored at *surface* granularity
+   (consumer-declared compositor surfaces skip their blit when
+   clean), via
+   [`2026-05-05_compositor_handoff_path_b_prime.md`](2026-05-05_compositor_handoff_path_b_prime.md)
+   sub-phases 5.1–5.4 (shipped, commit `9447a852b`). Vello itself
+   still re-runs the unioned encoding every frame — that part is
+   unchanged and remains upstream-blocked. Net: tile-grid skipping
+   still missing; surface-grid skipping recovered.
 
 9. **Forking vello is permanently off the table.** Restated for
    emphasis: any future pressure to fork (axiom-14 native-

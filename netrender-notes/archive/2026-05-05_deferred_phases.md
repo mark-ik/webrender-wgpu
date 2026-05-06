@@ -8,7 +8,7 @@ record** — what each was, where it went, why.
 The items:
 
 - **12c' backdrop filter** — now active; see roadmap [`D1` in
-  `2026-05-04_feature_roadmap.md`](2026-05-04_feature_roadmap.md#L225-L233).
+  `2026-05-04_feature_roadmap.md`](2026-05-04_feature_roadmap.md).
   Implementation approach: extend `SceneLayer` with an optional
   `backdrop_filter: Option<SceneFilter>` field; slice the
   per-frame op list at each backdrop-filter index and run a
@@ -35,11 +35,10 @@ The items:
   longer passively watched. Active monitoring via a
   `linear-light-canary` cargo feature that re-runs `p1prime_03`
   against the current vello dep on every CI bump. Canary greens
-  → trigger fired → ~50-line wrap to expose `BlendSpace` /
-  `interpolation_color_space`. Canary setup folds into roadmap
-  Phase A (diagnostics-first) as a new entry; the eventual wrap
-  lives in Phase R (wart fix scope, upstream-gated).
-  See roadmap for the canary entry.
+  → trigger fired → wrap to expose `interpolation_color_space`.
+  Canary and wrap both live under roadmap **R9** (the canary as a
+  trigger-setup sub-bullet, the wrap as the parent entry). See
+  [roadmap R9](2026-05-04_feature_roadmap.md).
 
 ---
 

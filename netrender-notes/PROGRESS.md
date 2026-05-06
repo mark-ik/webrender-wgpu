@@ -35,68 +35,87 @@ These two are the source of truth for the live architecture.
   edition-2021 bump, `Scene::clear_ops` helper. Test count: 105
   passing, 1 ignored, 0 failed across the workspace.
 
-  Open items split between two documents (§11.99 was folded out
+  Open items live in the feature roadmap (§11.99 was folded out
   for findability):
-
-  - [`2026-05-04_feature_roadmap.md`](2026-05-04_feature_roadmap.md)
-    — Phase R (open refinements / wart fixes) + Phases A–F (new
-    capability, diagnostics first).
-  - [`2026-05-05_deferred_phases.md`](2026-05-05_deferred_phases.md)
-    — three architecturally-significant deferrals (12c' backdrop
-    filter, 13' compositor handoff, linear-light blending), each
-    with its own short design plan.
+  [`2026-05-04_feature_roadmap.md`](2026-05-04_feature_roadmap.md)
+  — Phase R (open refinements / wart fixes) + Phases A–G (new
+  capability, diagnostics first).
 
 ## Active follow-up plans (small scope)
 
 - [`2026-05-04_feature_roadmap.md`](2026-05-04_feature_roadmap.md)
   — Phase R (open refinements / wart fixes — was §11.99 of the
-  rasterizer plan) + Phases A–F (new capability: diagnostics
+  rasterizer plan) + Phases A–G (new capability: diagnostics
   first, then consumer-pull-imminent, then SceneOp expansions,
-  then architecturally-significant).
-- [`2026-05-05_deferred_phases.md`](2026-05-05_deferred_phases.md)
-  — the three architecturally-significant deferrals from the
-  rasterizer plan (12c' backdrop filter, 13' compositor handoff,
-  linear-light blending), each with trigger, work shape, and
-  alternatives.
+  then architecturally-significant, then companion lanes).
+- [`2026-05-05_compositor_handoff_path_b_prime.md`](2026-05-05_compositor_handoff_path_b_prime.md)
+  — axiom-14 native-compositor handoff via path (b′). Sub-phases
+  5.1–5.4 shipped on netrender side (commit `9447a852b`); 5.5
+  servo-wgpu adapter pending in separate workspace. Roadmap entry:
+  D3.
+- [`2026-05-06_webgl_over_wgpu_plan.md`](2026-05-06_webgl_over_wgpu_plan.md)
+  — WebGL-over-wgpu companion lane. G0–G6 sequence, gated on
+  Serval/Pelt consumer pull. Roadmap entry: G.
 - [`draw_context_plan.md`](draw_context_plan.md)
 - [`typed_pipeline_metadata_plan.md`](typed_pipeline_metadata_plan.md)
 - [`texture_cache_cleanup_plan.md`](texture_cache_cleanup_plan.md)
 - [`wasm-portability-checklist.md`](wasm-portability-checklist.md)
+  — note: this is for the WebRender wgpu-backend branch (separate
+  project), retained for reference. A netrender-specific portability
+  list will be authored when F2 (wasm) triggers.
 - [`servo_wgpu_integration.md`](servo_wgpu_integration.md)
   — downstream Servo integration notes; host/device-sharing shape
 
-## Historical / superseded
+## Historical / superseded — archived
 
-The plans below predate the vello pivot and the move to this fork.
-They describe approaches that are no longer the path forward — kept
-for context, not for guidance. **Do not treat as active.**
+The plans below predate the vello pivot or have collapsed into other
+docs. They describe approaches that are no longer the path forward
+or work that has been completed and rolled into the canonical plans.
+All have been moved under [`archive/`](archive/) — kept for
+historical context, not for guidance.
 
-- `2026-04-28_idiomatic_wgsl_pipeline_plan.md` — the
+**Activated and folded:**
+
+- [`archive/2026-05-05_deferred_phases.md`](archive/2026-05-05_deferred_phases.md)
+  — was the holding pen for three architecturally-significant
+  deferrals (12c' backdrop filter, 13' compositor handoff,
+  linear-light blending). All three activated 2026-05-05; canonical
+  entries now live on the roadmap as D1, D3, R9. Doc retained as
+  the activation history record.
+
+**Pre-vello-pivot (the WebRender wgpu-backend lane):**
+
+- `archive/2026-04-28_idiomatic_wgsl_pipeline_plan.md` — the
   idiomatic-wgpu-pipeline branch's approach (authored WGSL only, no GL,
   no SPIR-V intermediate). Was the active plan before the vello pivot;
   preserved on its own branch (`idiomatic-wgpu-pipeline`).
-- `2026-04-28_renderer_body_wgpu_adapter_plan.md` — `WgpuDevice`
+- `archive/2026-04-28_renderer_body_wgpu_adapter_plan.md` — `WgpuDevice`
   adapter early-stage planning. Subsumed by netrender_device's
   current shape.
-- `2026-04-29_pipeline_first_migration_plan.md` — typed-pipeline
+- `archive/2026-04-29_pipeline_first_migration_plan.md` — typed-pipeline
   migration, batch-builder discussion. Pre-cleanup.
-- `2026-04-30_phase_d_rollback_to_skeleton.md` — record of the rollback
-  that preceded the netrender split.
-- `2026-04-30_servo_wgpu_integration_assessment.md` — pre-fork servo-
-  integration assessment.
-- `2026-04-08_live_full_reftest_confirmation.md` — last GL/wrench
-  reftest confirmation before the fork.
-- `2026-04-18_spirv_shader_pipeline_plan.md` — dead direction.
-- `2026-04-18_upstream_cherry_pick_plan.md` — superseded by the fork.
-- `2026-04-21_spirv_pipeline_reset_execution.md` — superseded.
-- `2026-04-22_upstream_cherry_pick_reevaluation.md` — superseded.
-- `2026-04-24_tile_with_spacing_validation_error.md` — historical bug
-  diagnostic.
-- `2026-04-26_track3_legacy_assembly_isolation_lane.md` — superseded.
-- `2026-04-27_dual_servo_parity_plan.md` — superseded by the fork.
-- `2026-04-28_session_brief.md` — historical session note.
-- `2026-03-01_webrender_wgpu_renderer_implementation_plan.md` — the
-  original convergence history, no longer canonical.
+- `archive/2026-04-30_phase_d_rollback_to_skeleton.md` — record of the
+  rollback that preceded the netrender split.
+- `archive/2026-04-30_servo_wgpu_integration_assessment.md` — pre-fork
+  servo-integration assessment.
+- `archive/2026-04-08_live_full_reftest_confirmation.md` — last
+  GL/wrench reftest confirmation before the fork (412/412 passing).
+  Now load-bearing prior art for the WebGL-over-wgpu plan §3.1.
+- `archive/2026-04-18_spirv_shader_pipeline_plan.md` — dead direction.
+- `archive/2026-04-18_upstream_cherry_pick_plan.md` — superseded by the
+  fork.
+- `archive/2026-04-21_spirv_pipeline_reset_execution.md` — superseded.
+- `archive/2026-04-22_upstream_cherry_pick_reevaluation.md` —
+  superseded.
+- `archive/2026-04-24_tile_with_spacing_validation_error.md` —
+  historical bug diagnostic.
+- `archive/2026-04-26_track3_legacy_assembly_isolation_lane.md` —
+  superseded.
+- `archive/2026-04-27_dual_servo_parity_plan.md` — superseded by the
+  fork.
+- `archive/2026-04-28_session_brief.md` — historical session note.
+- `archive/2026-03-01_webrender_wgpu_renderer_implementation_plan.md` —
+  the original convergence history, no longer canonical.
 
 ## Local-only
 
