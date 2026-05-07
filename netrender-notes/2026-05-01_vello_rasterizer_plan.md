@@ -1753,6 +1753,121 @@ than technical: `parley::Selection::geometry` and
 shape, so wrapping them as netrender_text helpers was a
 no-speculation ~30-line job.
 
+### 11.20 Path-precise hit testing for shapes + path/rounded clips (2026-05-06) — **CLEARED**
+
+Roadmap [R2 + R3](2026-05-04_feature_roadmap.md): tighten
+`hit_test` from AABB-conservative to path-precise for arbitrary
+`SceneOp::Shape` ops and for `SceneClip::Path` / rounded-rect
+`SceneClip::Rect` clips.
+
+Both fixes are thin wraps around `kurbo::Shape::contains`:
+
+- `op_contains_point` for `SceneOp::Shape` now AABB-pre-passes,
+  inverse-transforms the world point to the shape's local space,
+  builds a `BezPath` from the `ScenePath`, and calls `contains`.
+- `clip_aabb_contains_point` for `SceneClip::Path` does the same
+  (BezPath::contains in local space). For `SceneClip::Rect` with
+  non-zero radii, it builds a `kurbo::RoundedRect` and calls its
+  `contains`. Sharp axis-aligned rects skip the path-precise check.
+- Non-invertible transforms (degenerate scale, etc.) fall back to
+  AABB-conservative — same protective default as before, just
+  scoped to the cases where the inverse can't be computed.
+
+The `transform_to_affine` and `build_bez_path` helpers from
+[`vello_rasterizer`](../netrender/src/vello_rasterizer.rs) were
+promoted from module-private to `pub(crate)` so `hit_test` can
+reuse them.
+
+Receipts: 8/8 in
+[`netrender/tests/pr2_pr3_path_precise_hits.rs`](../netrender/tests/pr2_pr3_path_precise_hits.rs)
+covering triangle centroid hits, AABB-corner-but-outside-triangle
+misses, transformed-shape path-precision, rounded-rect clip
+corner-cutout misses, sharp-rect-clip unchanged behavior, path
+clip path-precise, and a combined shape-inside-path-clipped-layer
+case. The original AABB-only tests in `hit_test::tests` still
+pass (the AABB pre-pass + path-precise refinement is a strict
+narrowing).
+
+This was another consumer-pull-gated item where the upstream API
+was already in shape — a no-speculation ship-now per the
+"consumer-pull gates need a sanity check" feedback memory.
+
+### 11.21 Inline-box walker in `netrender_text` (2026-05-06) — **CLEARED**
+
+Roadmap [R6](2026-05-04_feature_roadmap.md): expose a per-line
+walker that surfaces glyph runs and inline-box placements in
+visual order so consumers (graphshell-shaped, nematic, …) can
+paint inline images / nested widgets / embedded layouts without
+re-deriving line geometry.
+
+`netrender_text` now exposes:
+
+- `push_layout_with_inline_boxes(scene, registry, layout, origin,
+  on_inline_box)` — single integrated walker. Glyph runs flow into
+  the scene with the same logic as `push_layout` (font dedup,
+  decorations, positioning); each `PositionedLayoutItem::InlineBox`
+  fires the callback with a typed `InlineBoxPlacement` carrying
+  scene-space coordinates (origin already applied), the
+  consumer-supplied id, width, and height. Items emerge in parley's
+  visual order (top-to-bottom by line, left-to-right within a line
+  after BiDi reordering); inline boxes and glyph runs interleave
+  in their natural order.
+- `InlineBoxPlacement { x, y, width, height, id }` — scene-space
+  placement record.
+
+The plain `push_layout` / `push_layout_with_registry` entry points
+are now thin wrappers around the inline-box-aware walker with an
+empty callback — same behavior as before, no inline-box surface
+exposed, no glyph-run emission duplicated. A new `emit_glyph_run`
+internal helper holds the shared body.
+
+Receipts: 6/6 in
+[`netrender_text/tests/pr6_inline_box_walker.rs`](../netrender_text/tests/pr6_inline_box_walker.rs)
+covering metadata round-trip (id, dimensions), origin-as-translation-
+delta, glyph-run emission alongside callbacks, multi-box visual-
+order ordering, the no-inline-box thin-wrapper case, and box-x in
+layout bounds.
+
+Same consumer-pull-gate sanity-check pattern: parley's
+`PositionedLayoutItem` was already in shape; the wrap was no-
+speculation work.
+
+### 11.22 R9-canary wired (2026-05-06) — **CLEARED (trigger detector only; R9 itself remains blocked)**
+
+Roadmap [R9-canary](2026-05-04_feature_roadmap.md): wire a CI
+tripwire that signals the moment vello's GPU compute path starts
+honoring `peniko::Gradient::interpolation_cs`. The wrap itself
+(R9: `Scene::interpolation_color_space` field) stays parked until
+the canary turns green.
+
+Implementation:
+
+- `linear-light-canary` cargo feature on the netrender crate; off
+  by default so normal builds skip the canary entirely.
+- `p1prime_03_canary_linear_light_is_honored` test gated under
+  that feature, asserting the **fixed** behavior (LinearSrgb
+  gradient midpoint differs from default by ≥ 16/255 per channel).
+- Today the canary is **RED**: `mid_default = mid_linear =
+  [127, 0, 128, 255]`, max_chan_diff = 0. Vello's GPU compute
+  path still hard-codes `to_alpha_color::<Srgb>()` per
+  `vello_encoding/src/ramp_cache.rs:86,97`.
+- CI usage:
+  `cargo test --features linear-light-canary -p netrender
+   p1prime_03_canary_linear_light_is_honored`. Run on every
+  vello-dep bump; failure today is informational, not a build
+  block.
+
+The canary panics with a loud RED-state message describing
+exactly what's still missing and why R9 stays parked. When it
+turns GREEN it prints a follow-up notice telling the next reader
+to ship the R9 wrap and retire both the canary and the twin
+`p1prime_03_gradient_default_is_srgb_encoded`. The two flip
+together: when the canary greens, the twin starts failing because
+the LinearSrgb-equals-default invariant breaks.
+
+R9 itself remains [open on the roadmap](2026-05-04_feature_roadmap.md)
+— this entry only clears the trigger-detector wiring.
+
 ## 11.99 Open items — moved (2026-05-05)
 
 The catalogue of deferred refinements that originally lived here

@@ -236,7 +236,7 @@ fn emit_glyph_run(
     }
 }
 
-fn build_bez_path(path: &crate::scene::ScenePath) -> BezPath {
+pub(crate) fn build_bez_path(path: &crate::scene::ScenePath) -> BezPath {
     let mut bp = BezPath::new();
     for op in &path.ops {
         match *op {
@@ -608,7 +608,7 @@ fn split_tint(color: [f32; 4]) -> (f32, Option<Color>) {
     }
 }
 
-fn transform_to_affine(t: &Transform) -> Affine {
+pub(crate) fn transform_to_affine(t: &Transform) -> Affine {
     Affine::new([
         t.m[0] as f64,
         t.m[1] as f64,

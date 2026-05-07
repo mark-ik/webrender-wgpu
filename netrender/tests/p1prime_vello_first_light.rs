@@ -353,3 +353,130 @@ fn p1prime_03_gradient_default_is_srgb_encoded() {
         "LinearSrgb override should equal default (vello GPU path ignores interpolation_cs)",
     );
 }
+
+/// Roadmap R9-canary — gated on `--features linear-light-canary`.
+///
+/// Asserts the **fixed** behavior: a `LinearSrgb` interpolation
+/// gradient should produce a midpoint that **differs** from the
+/// default (sRGB-encoded) midpoint. Today this test is RED (vello
+/// GPU compute path ignores `interpolation_cs`). The day vello
+/// upstream wires `interpolation_cs` through, this test turns GREEN
+/// — that's the trigger for **R9** (the
+/// `Scene::interpolation_color_space` wrap on
+/// [`netrender::Scene`]) to be picked up.
+///
+/// CI usage:
+///
+/// ```text
+/// cargo test --features linear-light-canary -p netrender \
+///   p1prime_03_canary_linear_light_is_honored
+/// ```
+///
+/// Run on every vello-dep bump. Failure expected; treat as
+/// informational. When it passes, the rasterizer plan §3.3 caveat
+/// (and the matching note in §6.3) drops, and the wrap (~50 lines
+/// per the roadmap) ships.
+///
+/// Twin of [`p1prime_03_gradient_default_is_srgb_encoded`] — the
+/// twin pins the *current* (broken) behaviour, this canary asserts
+/// the *fixed* behaviour. They flip together: when the canary turns
+/// green, the twin starts failing — at which point both are dropped
+/// and replaced by the R9 wrap's own receipts.
+#[cfg(feature = "linear-light-canary")]
+#[test]
+fn p1prime_03_canary_linear_light_is_honored() {
+    let handles = boot().expect("wgpu boot");
+    let device = &handles.device;
+    let queue = &handles.queue;
+
+    let mut renderer = make_renderer(device);
+
+    fn render_gradient(
+        renderer: &mut Renderer,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        cs: Option<ColorSpaceTag>,
+    ) -> wgpu::Texture {
+        let mut scene = Scene::new();
+        let mut grad = Gradient::new_linear(
+            Point::new(0.0, (DIM as f64) / 2.0),
+            Point::new(DIM as f64, (DIM as f64) / 2.0),
+        )
+        .with_stops([
+            ColorStop::from((0.0, Color::from_rgba8(255, 0, 0, 255))),
+            ColorStop::from((1.0, Color::from_rgba8(0, 0, 255, 255))),
+        ]);
+        if let Some(cs) = cs {
+            grad = grad.with_interpolation_cs(cs);
+        }
+        scene.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            &grad,
+            None,
+            &Rect::new(0.0, 0.0, DIM as f64, DIM as f64),
+        );
+        let (target, view) = make_target(device);
+        renderer
+            .render_to_texture(device, queue, &scene, &view, &render_params())
+            .expect("vello render_to_texture (gradient)");
+        target
+    }
+
+    let wgpu_device = netrender_device::WgpuDevice::with_external(handles.clone())
+        .expect("WgpuDevice::with_external");
+
+    let target_default = render_gradient(&mut renderer, device, queue, None);
+    let bytes_default = wgpu_device.read_rgba8_texture(&target_default, DIM, DIM);
+    let mid_default = read_pixel(&bytes_default, DIM / 2, DIM / 2);
+
+    let target_linear = render_gradient(
+        &mut renderer,
+        device,
+        queue,
+        Some(ColorSpaceTag::LinearSrgb),
+    );
+    let bytes_linear = wgpu_device.read_rgba8_texture(&target_linear, DIM, DIM);
+    let mid_linear = read_pixel(&bytes_linear, DIM / 2, DIM / 2);
+
+    // Linear-light interpolation between primary red and primary
+    // blue lands the midpoint at (188, 0, 188) in sRGB-encoded
+    // 8-bit storage (sRGB(0.5) ≈ 188), as opposed to the 8-bit
+    // sRGB-encoded interp midpoint (128, 0, 128). The exact values
+    // aren't important here — only that the two midpoints differ
+    // substantially. A per-channel diff of ≥ 16 / 255 is
+    // comfortably above any rounding / dithering noise.
+    let max_chan_diff = (0..3)
+        .map(|i| (mid_default[i] as i32 - mid_linear[i] as i32).abs())
+        .max()
+        .unwrap_or(0);
+
+    eprintln!(
+        "R9-CANARY: mid_default={:?} mid_linear={:?} max_chan_diff={}",
+        mid_default, mid_linear, max_chan_diff
+    );
+
+    // assert! panics with this message when the assertion is FALSE —
+    // i.e., today, with max_chan_diff = 0 (vello still ignores
+    // interpolation_cs). The day this test passes, R9 is unblocked
+    // and the green-path follow-up below kicks in.
+    assert!(
+        max_chan_diff >= 16,
+        "R9-CANARY RED: vello GPU compute path still ignores `interpolation_cs`. \
+         mid_default={mid_default:?}, mid_linear={mid_linear:?}, \
+         max_chan_diff={max_chan_diff}. R9 (Scene::interpolation_color_space wrap) \
+         remains blocked. Re-run on the next vello bump."
+    );
+
+    // Reaching this line means the canary just turned GREEN — the
+    // R9 trigger has fired. Print a loud notice so it shows up in
+    // the test log. The wrap (~50 lines) is now pickable; both
+    // this canary and `p1prime_03_gradient_default_is_srgb_encoded`
+    // should be retired in favor of the wrap's own receipts.
+    eprintln!(
+        "R9-CANARY GREEN: vello GPU path now honors interpolation_cs. \
+         Ship the Scene::interpolation_color_space wrap (rasterizer \
+         plan §3.3 + §6.3) and retire both this canary and \
+         `p1prime_03_gradient_default_is_srgb_encoded`."
+    );
+}

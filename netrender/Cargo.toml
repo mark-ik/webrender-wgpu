@@ -19,6 +19,14 @@ serde = [
     "dep:peniko",
     "netrender_device/serde",
 ]
+# Roadmap R9-canary — opt-in test that asserts vello's GPU compute
+# path honors `peniko::Gradient::interpolation_cs`. Today the test
+# **fails** (the GPU path ignores the field per rasterizer §3.3); CI
+# runs `cargo test --features linear-light-canary` on vello-bumps
+# expecting failure. The day the canary turns **green**, R9 (the
+# `Scene::interpolation_color_space` wrap) becomes pickable. The
+# canary feature is gated so default builds stay clean.
+linear-light-canary = []
 
 [dependencies]
 log = "0.4"

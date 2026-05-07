@@ -59,32 +59,24 @@ activates the fix, and the done condition. Move into a
   (parley already pulls skrifa transitively). Receipt: extend
   `per_glyph_hit_returns_glyph_index`.
 
-- [ ] **R2. Per-segment point-in-polygon for `SceneOp::Shape`**
-  (rasterizer plan §11.12).
-  *Bites when:* a consumer hit-tests an arbitrary path (hexagonal
-  node, custom widget shape) and the AABB hit area is too sloppy.
-  *Trigger:* graphshell hex-node hit testing surfaces phantom hits at
-  AABB corners, or an equivalent consumer report.
-  *Done condition:* `hit_test` on a non-rectangular `ScenePath`
-  returns true only inside the path interior, via
-  `kurbo::Shape::contains` on a `BezPath` built from the
-  `ScenePath`. Receipt: a probe with a triangle path that asserts
-  no hit at the AABB corners.
+- [x] **R2. Per-segment point-in-polygon for `SceneOp::Shape`** —
+  **CLEARED 2026-05-06**.
+  `op_contains_point` for `SceneOp::Shape` now AABB-pre-passes then
+  calls `kurbo::Shape::contains` on a `BezPath` built from the
+  `ScenePath` after inverse-transforming the world point to local.
+  Non-invertible transforms fall back to AABB-conservative.
+  Sanity-checked against parley's `Selection`-style trigger framing
+  per the feedback memory: the wrap was a thin pass-through over
+  kurbo's existing API, no speculation. Full finding:
+  [rasterizer plan §11.20](2026-05-01_vello_rasterizer_plan.md).
 
-- [ ] **R3. Layer-clip path-precise containment**
-  (rasterizer plan §11.16).
-  *Bites when:* a layer has an arbitrary `SceneClip::Path`, and a
-  consumer needs hit-testing to honor the path's true shape (not its
-  AABB). Today rounded corners and arbitrary path interiors are
-  AABB-conservative — points near corners or outside the
-  path-but-inside-the-AABB still register hits.
-  *Trigger:* same R2 trigger applied to the layer-clip stack, or a
-  rounded-corner-card report.
-  *Done condition:* `hit_test` inside a `SceneClip::Path`-clipped
-  layer respects the path interior, not the AABB. Same
-  `kurbo::Shape::contains` machinery as R2, applied to the
-  layer-clip stack pre-pass. Receipt: rounded-rect clip probe
-  asserts no hit at the corners outside the rounded radius.
+- [x] **R3. Layer-clip path-precise containment** — **CLEARED
+  2026-05-06**.
+  Same `kurbo::Shape::contains` machinery as R2, applied to
+  `clip_aabb_contains_point`'s `SceneClip::Path` and rounded-rect
+  branches. Sharp axis-aligned rect clips skip the path-precise
+  check. Non-invertible transforms remain AABB-conservative. Full
+  finding: [rasterizer plan §11.20](2026-05-01_vello_rasterizer_plan.md).
 
 - [ ] **R4. Image cache for the simple (non-tile) rasterizer**
   (rasterizer plan §11.9-equivalent open item; the unification finding
@@ -119,20 +111,20 @@ activates the fix, and the done condition. Move into a
   render-graph tasks per "downscale level." Receipt: oracle PNG
   comparison.
 
-- [ ] **R6. Inline-box rendering helper in `netrender_text`**
-  (rasterizer plan §4.4).
-  *Bites when:* a consumer's text contains inline images / nested
-  layouts (`<img>` tags, embedded widgets). The adapter currently
-  skips `PositionedLayoutItem::InlineBox`; consumer renders boxes
-  themselves but has to re-derive line geometry to do it.
-  *Trigger:* a consumer wires inline images and the per-line walk is
-  awkward enough to push a helper upstream.
-  *Done condition:* `netrender_text` exposes a per-line walker that
-  yields glyph runs and inline-box placements in visual order; the
-  consumer paints boxes inline without re-deriving line geometry.
-  (Inline boxes themselves stay consumer-rendered — their content is
-  consumer-typed.) Receipt: helper consumed by a synthetic
-  mixed-content layout test.
+- [x] **R6. Inline-box rendering helper in `netrender_text`** —
+  **CLEARED 2026-05-06**.
+  `netrender_text::push_layout_with_inline_boxes(scene, registry,
+  layout, origin, on_inline_box)` walks parley's
+  `PositionedLayoutItem` stream once, pushes glyph runs into the
+  scene with the existing decoration / font-dedup logic, and emits
+  a typed [`InlineBoxPlacement`] (scene-space coordinates,
+  consumer-supplied id) per inline box for the consumer to paint.
+  The simple `push_layout` / `push_layout_with_registry` entry
+  points are now thin wrappers with an empty callback — no behavior
+  change. Sanity-check confirmed: parley's `PositionedLayoutItem`
+  surface was already in shape, so the wrap was no-speculation
+  ship-now work. Full finding:
+  [rasterizer plan §11.21](2026-05-01_vello_rasterizer_plan.md).
 
 - [ ] **R9. Linear-light blending wrap** (rasterizer plan §6.3,
   Pitfall #2; `p1prime_03`).
@@ -149,15 +141,19 @@ activates the fix, and the done condition. Move into a
   contract advertises dual capability. Don't pre-build the enum;
   vello's API shape will dictate it.
 
-  - **R9-canary (trigger setup).** CI canary that re-runs
-    `p1prime_03` against the current vello dep on every bump,
-    surfacing the moment vello's GPU compute path honors
-    `peniko::Gradient::interpolation_cs`. A `linear-light-canary`
-    cargo feature gates the test; CI runs
-    `cargo test --features linear-light-canary` on dep bumps. Greens
-    → fires the R9 trigger. Replaces the passive "every vello version
-    bump, re-test by hand" cadence the previous deferred-phases doc
-    documented.
+  - **R9-canary (trigger setup) — wired 2026-05-06.** Test
+    `p1prime_03_canary_linear_light_is_honored` in
+    [`netrender/tests/p1prime_vello_first_light.rs`](../netrender/tests/p1prime_vello_first_light.rs)
+    asserts the **fixed** behavior (LinearSrgb gradient midpoint
+    differs from default by ≥ 16/255 per channel). Currently RED
+    today (max_chan_diff = 0 — vello GPU path still ignores the
+    field). Gated behind the `linear-light-canary` cargo feature
+    so default builds stay clean; CI runs
+    `cargo test --features linear-light-canary` on vello-dep bumps
+    and inspects whether the canary turned green. When it does,
+    R9 (the wrap above) becomes pickable; both the canary and the
+    twin `p1prime_03_gradient_default_is_srgb_encoded` retire in
+    favor of the wrap's own receipts.
 
 ---
 

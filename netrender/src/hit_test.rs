@@ -45,9 +45,13 @@
 //!    enough for "click this," but transparent overlays and
 //!    badges-over-thumbnails want the stack.
 
+use vello::kurbo::{Affine, Point, Rect, RoundedRect, RoundedRectRadii, Shape};
+
 use crate::scene::{
     NO_CLIP, Scene, SceneClip, SceneGradient, SceneImage, SceneOp, SceneRect, SceneStroke,
+    SceneShape, SHARP_CLIP,
 };
+use crate::vello_rasterizer::{build_bez_path, transform_to_affine};
 
 /// One primitive that covered the queried point. Returned in
 /// top-most-first order from [`hit_test`].
@@ -172,11 +176,22 @@ fn precompute_clip_visibility(scene: &Scene, point: [f32; 2]) -> Vec<bool> {
     visibility
 }
 
-/// AABB-level "is `point` inside this clip" predicate used during
-/// hit-test clip-stack tracking. Conservative for non-axis-aligned
-/// shapes: a `SceneClip::Path` says "inside" for any point in the
-/// path's bounding box, even if the path itself doesn't reach the
-/// point. Tightening to true point-in-polygon is a future refinement.
+/// "Is `point` inside this clip" predicate used during hit-test
+/// clip-stack tracking.
+///
+/// Roadmap R3 — path-precise containment for `SceneClip::Path` and
+/// rounded-rect clips:
+///
+/// - `SceneClip::None`: trivially true.
+/// - `SceneClip::Rect { rect, radii }`: AABB containment for sharp
+///   rects (radii all zero); for non-zero radii, transform `point`
+///   to clip-local space and test against `kurbo::RoundedRect`.
+/// - `SceneClip::Path`: transform `point` to local and test against
+///   the `kurbo::BezPath` interior (non-zero winding rule, matching
+///   the rasterizer's `Fill::NonZero`).
+///
+/// AABB pre-pass guards the path-precise check so the common
+/// outside-the-bounding-box case stays cheap.
 fn clip_aabb_contains_point(
     clip: &SceneClip,
     transform_id: u32,
@@ -186,19 +201,51 @@ fn clip_aabb_contains_point(
     use crate::tile_cache::world_aabb;
     match clip {
         SceneClip::None => true,
-        SceneClip::Rect { rect, .. } => {
-            let world = world_aabb(*rect, transform_id, scene);
-            aabb_contains(world, point)
-        }
-        SceneClip::Path(path) => match path.local_aabb() {
-            Some(local) => {
-                let world = world_aabb(local, transform_id, scene);
-                aabb_contains(world, point)
+        SceneClip::Rect { rect, radii } => {
+            let world_box = world_aabb(*rect, transform_id, scene);
+            if !aabb_contains(world_box, point) {
+                return false;
             }
-            // Empty path → no clip area covers anything; nothing
-            // inside this scope can be hit.
-            None => false,
-        },
+            if *radii == SHARP_CLIP {
+                return true;
+            }
+            // Rounded-rect: precise test in clip-local space.
+            let Some(local) = world_point_to_local(point, transform_id, scene) else {
+                // Non-invertible transform — keep AABB-conservative.
+                return true;
+            };
+            let r = Rect::new(
+                rect[0] as f64,
+                rect[1] as f64,
+                rect[2] as f64,
+                rect[3] as f64,
+            );
+            let rrect = RoundedRect::from_rect(
+                r,
+                RoundedRectRadii::new(
+                    radii[0] as f64,
+                    radii[1] as f64,
+                    radii[2] as f64,
+                    radii[3] as f64,
+                ),
+            );
+            rrect.contains(local)
+        }
+        SceneClip::Path(path) => {
+            let Some(local_aabb) = path.local_aabb() else {
+                // Empty path — nothing inside can be hit.
+                return false;
+            };
+            let world_box = world_aabb(local_aabb, transform_id, scene);
+            if !aabb_contains(world_box, point) {
+                return false;
+            }
+            let Some(local) = world_point_to_local(point, transform_id, scene) else {
+                return true;
+            };
+            let bez = build_bez_path(path);
+            bez.contains(local)
+        }
     }
 }
 
@@ -270,17 +317,22 @@ fn hittable_kind(op: &SceneOp) -> Option<HitOpKind> {
 }
 
 fn op_contains_point(op: &SceneOp, p: [f32; 2], scene: &Scene) -> bool {
-    use crate::tile_cache::{world_aabb_glyph_run, world_aabb_shape};
+    use crate::tile_cache::world_aabb_glyph_run;
+
+    // Roadmap R2 — `SceneOp::Shape` gets a path-precise
+    // point-in-polygon check after the AABB pre-pass. Other ops
+    // remain AABB-only (rect/image/gradient/stroke/glyph-run aren't
+    // path-shaped at this layer).
+    if let SceneOp::Shape(s) = op {
+        return shape_contains_point(s, p, scene);
+    }
 
     let (world_box, clip_rect) = match op {
         SceneOp::Rect(r) => primitive_box_rect(r, scene),
         SceneOp::Stroke(s) => primitive_box_stroke(s, scene),
         SceneOp::Gradient(g) => primitive_box_gradient(g, scene),
         SceneOp::Image(i) => primitive_box_image(i, scene),
-        SceneOp::Shape(s) => match world_aabb_shape(s, scene) {
-            Some(aabb) => (aabb, s.clip_rect),
-            None => return false,
-        },
+        SceneOp::Shape(_) => unreachable!("handled above"),
         SceneOp::GlyphRun(r) => match world_aabb_glyph_run(r, scene) {
             Some(aabb) => (aabb, r.clip_rect),
             None => return false,
@@ -291,6 +343,63 @@ fn op_contains_point(op: &SceneOp, p: [f32; 2], scene: &Scene) -> bool {
     };
 
     aabb_contains(world_box, p) && clip_allows(clip_rect, p)
+}
+
+/// Roadmap R2 — path-precise hit test for [`SceneOp::Shape`].
+/// AABB pre-pass keeps the cheap outside-the-bounding-box case
+/// fast; the BezPath::contains call only runs when the world AABB
+/// covers the point.
+///
+/// Strokes-only (no fill) shapes are still treated as inside-the-
+/// path for hit purposes: clicking the path interior counts as a hit
+/// even if the painted region is just the outline. UI use cases
+/// (clicking on a stroked node) typically want this. If a future
+/// consumer needs "stroke-only" hit semantics, a fill_color-aware
+/// branch can be added.
+fn shape_contains_point(s: &SceneShape, p: [f32; 2], scene: &Scene) -> bool {
+    use crate::tile_cache::world_aabb_shape;
+
+    let Some(world_box) = world_aabb_shape(s, scene) else {
+        return false;
+    };
+    if !aabb_contains(world_box, p) {
+        return false;
+    }
+    if !clip_allows(s.clip_rect, p) {
+        return false;
+    }
+    let Some(local) = world_point_to_local(p, s.transform_id, scene) else {
+        // Non-invertible transform — keep AABB-conservative.
+        return true;
+    };
+    let bez = build_bez_path(&s.path);
+    bez.contains(local)
+}
+
+/// Apply the inverse of `transforms[transform_id]` to `world_point`,
+/// returning the local-space point. `None` if the transform is
+/// non-invertible (degenerate scale, reflection-degenerate, …) — in
+/// that case the caller should fall back to the AABB-conservative
+/// answer.
+fn world_point_to_local(
+    world_point: [f32; 2],
+    transform_id: u32,
+    scene: &Scene,
+) -> Option<Point> {
+    let pt = Point::new(world_point[0] as f64, world_point[1] as f64);
+    if transform_id == 0 {
+        return Some(pt);
+    }
+    let affine: Affine = transform_to_affine(&scene.transforms[transform_id as usize]);
+    // kurbo::Affine::inverse panics on non-invertible matrices; check
+    // determinant first. det = a*d - b*c with column-major
+    // [a, b, c, d, tx, ty].
+    let coeffs = affine.as_coeffs();
+    let det = coeffs[0] * coeffs[3] - coeffs[1] * coeffs[2];
+    if det.abs() < 1e-12 {
+        return None;
+    }
+    Some(affine.inverse() * pt)
 }
 
 fn primitive_box_rect(r: &SceneRect, scene: &Scene) -> ([f32; 4], [f32; 4]) {
