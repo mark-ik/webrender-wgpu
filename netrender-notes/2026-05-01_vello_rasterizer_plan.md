@@ -2215,6 +2215,26 @@ measured pressure shows up — it's just a structural decomposition
 API. Shipping unblocks consumers who want it without forcing them
 to wait for a profiler-surfaced receipt.
 
+### 11.34 Phase A diagnostics + B2 scrolling — roadmap reconciliation (2026-05-08) — **CLEARED**
+
+The Phase A diagnostics (A1 op-list inspector, A2 scene capture /
+replay, A3 tile-dirty visualizer, A4 frame profiler) and B2
+scrolling convenience were all shipped in lib code earlier in the
+roadmap walk but the roadmap entries weren't migrated to CLEARED
+form. This is purely a paperwork reconciliation finding plus one
+test fix.
+
+Test fix: [`pa2_scene_capture_replay.rs`](../netrender/tests/pa2_scene_capture_replay.rs)
+constructed a `SceneLayer` literal that had bit-rotted when D1
+(backdrop_filter) and C3 (compose) added fields. Added
+`compose: Default::default()` and `backdrop_filter: None` to the
+literal; 8/8 tests now green under `--features serde`.
+
+Roadmap entries A1, A2, A3, A4, B2 moved from `[ ]` to `[x]
+**CLEARED**` with receipts and lib-side line refs. No new code, no
+behavioral change — just bookkeeping that matches the on-disk
+state.
+
 ### 11.33 Library wasm32 readiness — `boot_async` (2026-05-08) — **CLEARED**
 
 Roadmap [F2](2026-05-04_feature_roadmap.md): WebAssembly target was

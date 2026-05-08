@@ -154,32 +154,51 @@ real consumer scene as a regression artifact, watch the dirty tiles
 when adding a primitive, profile the impact when adding a filter.
 Order within Phase A is by value-to-cost ratio, smallest first.
 
-- [ ] **A1. Op-list inspector** — pretty-print `Vec<SceneOp>` to a
-  string for debugging.
-  *Done condition:* `Scene::dump_ops()` returns a multi-line string
-  with per-op summary (kind, key fields, transform/clip if
-  non-default). Cheapest item; useful immediately.
+- [x] **A1. Op-list inspector** — **CLEARED**.
+  `Scene::dump_ops()` ([scene.rs:1444](../netrender/src/scene.rs))
+  returns a multi-line per-op summary; non-default transform / clip /
+  scene-level alpha / blend modifiers surface inline; nested layer
+  scopes indent. Receipt at
+  [`netrender/tests/pa1_op_list_inspector.rs`](../netrender/tests/pa1_op_list_inspector.rs)
+  (7/7).
 
-- [ ] **A2. Scene capture / replay** — `Scene::snapshot()` →
-  serializable record, `Scene::replay(&record)` rebuilds.
-  *Done condition:* capture a frame from a real consumer, ship it as
-  a `*.scene.bin` artifact, replay deterministically in a unit test.
-  Multiplies the value of every other test / regression diag in the
-  rest of this list.
+- [x] **A2. Scene capture / replay** — **CLEARED**.
+  `Scene::snapshot_postcard` / `replay_postcard` and
+  `snapshot_json` / `replay_json` ([scene.rs:2076](../netrender/src/scene.rs))
+  ship behind the `serde` feature (off by default — only consumers
+  who want capture pull serde + postcard + serde_json). Custom
+  `blob_serde` preserves `peniko::Blob` ids across round-trip
+  (peniko's built-in serde mints fresh ids); `image_sources_serde`
+  normalises HashMap iteration order; `clip_rect_serde` round-trips
+  the `±f32::INFINITY` NO_CLIP sentinel. Receipt at
+  [`netrender/tests/pa2_scene_capture_replay.rs`](../netrender/tests/pa2_scene_capture_replay.rs)
+  (8/8 with `--features serde`): postcard byte-determinism, JSON
+  string-determinism, `dump_ops` semantic round-trip, blob id
+  preservation across both formats, image_sources insertion-order
+  invariance, malformed-bytes error path.
 
-- [ ] **A3. Tile-dirty visualizer** — overlay that paints dirty tiles
-  in red on a debug pass.
-  *Done condition:* an `enable_tile_dirty_overlay: bool` flag on
-  `NetrenderOptions`; when on, dirty tiles get a translucent red wash
-  on top of the rendered output (per-tile `last_dirty_frame` field on
-  `TileCache`). Bites first when nematic's Gemini/Gopher rendering
-  starts behaving weirdly under tile invalidation pressure.
+- [x] **A3. Tile-dirty visualizer** — **CLEARED**.
+  `NetrenderOptions::enable_tile_dirty_overlay`
+  ([renderer/init.rs:35](../netrender/src/renderer/init.rs))
+  threads through to a per-tile `last_dirty_frame` on `TileCache`
+  with an age-fraction window. Receipt at
+  [`netrender/tests/pa3_tile_dirty_tracking.rs`](../netrender/tests/pa3_tile_dirty_tracking.rs)
+  (7/7): fresh-invalidate dirties every visible tile, never-dirtied
+  excluded, age fraction grows linearly, aged-out tiles drop off,
+  unchanged tiles keep their old frame number.
 
-- [ ] **A4. Frame profiler** — per-phase timings: scene build, tile
-  invalidate, vello encode, GPU submit, readback.
-  *Done condition:* `Renderer::last_frame_timings() -> FrameTimings`
-  with named spans (likely via `puffin` or a thin custom span type).
-  Optionally exposes vello's internal `Renderer` timing hooks too.
+- [x] **A4. Frame profiler** — **CLEARED**.
+  New [`netrender::profiling`](../netrender/src/profiling.rs)
+  module: `FrameTimings` with a `spans: Vec<NamedSpan>`, `Span`
+  RAII type that records start→stop into a target `FrameTimings`,
+  and `Renderer::last_frame_timings()`
+  ([renderer/mod.rs:856](../netrender/src/renderer/mod.rs)) exposes
+  the most recent frame's timings. `std::time::Instant`-based, no
+  puffin dep — embedders can drain `FrameTimings::spans` into their
+  own profiler. Receipt at
+  [`netrender/tests/pa4_frame_profiler.rs`](../netrender/tests/pa4_frame_profiler.rs)
+  (6/6) — including a GPU smoke that confirms `render_vello`
+  populates the spans and a second render replaces them.
 
 ---
 
@@ -204,13 +223,16 @@ caret in composers, scrolling in feed readers).
   ship-now-no-speculation. Full finding:
   [rasterizer plan §11.19](2026-05-01_vello_rasterizer_plan.md).
 
-- [ ] **B2. Scrolling convenience** —
-  `Scene::push_scroll_frame(clip_rect, scroll_offset)` macro that
-  opens a layer with a rect clip + a translate transform, with a
-  matching `pop_scroll_frame()`.
-  *Done condition:* the demo gains a scrolling card list under one
-  method call instead of three. No architectural commitment — just
-  ergonomics over existing primitives.
+- [x] **B2. Scrolling convenience** — **CLEARED**.
+  `Scene::push_scroll_frame(clip_rect, scroll_offset)`
+  ([scene.rs:1384](../netrender/src/scene.rs)) opens a layer with
+  a rect clip + a translate transform and returns the inner
+  `transform_id` for primitives inside the scope. Matching
+  `pop_scroll_frame()` is a thin alias for `PopLayer`. Receipt at
+  [`netrender/tests/pb2_scroll_frame.rs`](../netrender/tests/pb2_scroll_frame.rs)
+  (6/6): one-call scrolling card list demo, nested scrolls get
+  independent transforms, zero offset is pure clip, transform_id
+  threads into primitives.
 
 - [x] **B3. Verify: color emoji / COLR fonts** — **CLEARED 2026-05-06**.
   Verification probe at
