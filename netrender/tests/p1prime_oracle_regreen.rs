@@ -25,10 +25,7 @@
 use std::path::{Path, PathBuf};
 
 use netrender::{Scene, boot, vello_rasterizer::scene_to_vello};
-use vello::{
-    AaConfig, AaSupport, RenderParams, Renderer, RendererOptions,
-    peniko::Color,
-};
+use vello::{AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, peniko::Color};
 
 const DIM: u32 = 256;
 
@@ -40,8 +37,8 @@ fn oracle_dir() -> PathBuf {
 }
 
 fn read_png(path: &Path) -> (u32, u32, Vec<u8>) {
-    let file = std::fs::File::open(path)
-        .unwrap_or_else(|e| panic!("opening {}: {}", path.display(), e));
+    let file =
+        std::fs::File::open(path).unwrap_or_else(|e| panic!("opening {}: {}", path.display(), e));
     let dec = png::Decoder::new(std::io::BufReader::new(file));
     let mut reader = dec.read_info().expect("png read_info");
     let info = reader.info();
@@ -73,7 +70,11 @@ fn make_target(
 ) -> (wgpu::Texture, wgpu::TextureView) {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("p1' regreen target"),
-        size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -127,7 +128,11 @@ fn render_scene_through_vello(scene: &Scene) -> Vec<u8> {
 fn assert_matches_oracle(name: &str, actual: &[u8], tol: u8) {
     let oracle_path = oracle_dir().join(format!("{name}.png"));
     let (ow, oh, oracle) = read_png(&oracle_path);
-    assert_eq!((ow as usize) * (oh as usize) * 4, actual.len(), "{name}: size mismatch");
+    assert_eq!(
+        (ow as usize) * (oh as usize) * 4,
+        actual.len(),
+        "{name}: size mismatch"
+    );
     let mut max_diff: u8 = 0;
     let mut over_tol = 0usize;
     for (i, (a, b)) in actual.iter().zip(oracle.iter()).enumerate() {

@@ -38,7 +38,11 @@ fn make_renderer() -> Renderer {
     let handles = boot().expect("wgpu boot");
     create_netrender_instance(
         handles,
-        NetrenderOptions { tile_cache_size: Some(64), enable_vello: true, ..Default::default() },
+        NetrenderOptions {
+            tile_cache_size: Some(64),
+            enable_vello: true,
+            ..Default::default()
+        },
     )
     .expect("create_netrender_instance")
 }
@@ -93,7 +97,11 @@ fn assert_within_tol(actual: [u8; 4], expected: [u8; 4], tol: u8, where_: &str) 
     assert!(
         max <= tol,
         "{}: actual {:?}, expected {:?} (max channel diff = {}, tol = {})",
-        where_, actual, expected, max, tol
+        where_,
+        actual,
+        expected,
+        max,
+        tol
     );
 }
 
@@ -116,7 +124,11 @@ fn render_clip_mask(
     let mut graph = RenderGraph::new();
     graph.push(Task {
         id: MASK_TASK,
-        extent: wgpu::Extent3d { width: extent, height: extent, depth_or_array_layers: 1 },
+        extent: wgpu::Extent3d {
+            width: extent,
+            height: extent,
+            depth_or_array_layers: 1,
+        },
         format: MASK_FORMAT,
         inputs: vec![],
         encode: clip_rectangle_callback(pipe, bounds, radius),
@@ -152,7 +164,12 @@ fn p9a_01_mask_pixels_match_sdf() {
     assert_eq!(center[3], 255, "center should have full alpha coverage");
     // All four channels should match (we wrote vec4(coverage)).
     for &c in &center[..4] {
-        assert!(c >= 250, "center channel {} should be near-1.0, got {}", c, c);
+        assert!(
+            c >= 250,
+            "center channel {} should be near-1.0, got {}",
+            c,
+            c
+        );
     }
 
     // Far top-left pixel (1, 1) — outside the rounded corner at (4,4)
@@ -221,7 +238,10 @@ fn p9a_02_mask_composes_as_red_rect() {
     // peek can land later.
     let mut scene = Scene::new(W, H);
     scene.push_image_full(
-        0.0, 0.0, W as f32, H as f32,
+        0.0,
+        0.0,
+        W as f32,
+        H as f32,
         [0.0, 0.0, 1.0, 1.0],
         [1.0, 0.0, 0.0, 0.999],
         MASK_KEY,
@@ -241,5 +261,10 @@ fn p9a_02_mask_composes_as_red_rect() {
     assert_within_tol(pixel(&bytes, W, 63, 63), [0, 0, 0, 255], 2, "(63,63) black");
 
     // Top edge (deep inside vertically, 5 px from top): full red.
-    assert_within_tol(pixel(&bytes, W, 32, 5), [255, 0, 0, 255], 2, "(32,5) edge red");
+    assert_within_tol(
+        pixel(&bytes, W, 32, 5),
+        [255, 0, 0, 255],
+        2,
+        "(32,5) edge red",
+    );
 }

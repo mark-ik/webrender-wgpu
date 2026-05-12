@@ -48,7 +48,10 @@ fn pc1_push_stroke_defaults_to_butt_miter_solid() {
 fn pc1_push_stroke_decorated_applies_args() {
     let mut scene = Scene::new(64, 64);
     scene.push_stroke_decorated(
-        0.0, 0.0, 32.0, 32.0,
+        0.0,
+        0.0,
+        32.0,
+        32.0,
         [1.0, 0.0, 0.0, 1.0],
         2.0,
         SceneStrokeCap::Round,
@@ -94,7 +97,10 @@ fn pc1_changing_cap_invalidates_tile() {
 #[test]
 fn pc1_changing_join_invalidates_tile() {
     let dirty = dirty_count_after_change(|s| s.join = SceneStrokeJoin::Bevel);
-    assert!(dirty > 0, "join change should invalidate tiles, got {dirty}");
+    assert!(
+        dirty > 0,
+        "join change should invalidate tiles, got {dirty}"
+    );
 }
 
 #[test]
@@ -108,7 +114,10 @@ fn pc1_changing_dash_offset_invalidates_tile() {
     // Set up with a dash pattern, then change just the offset.
     let mut scene = Scene::new(64, 64);
     scene.push_stroke_decorated(
-        8.0, 8.0, 56.0, 56.0,
+        8.0,
+        8.0,
+        56.0,
+        56.0,
         [1.0, 0.0, 0.0, 1.0],
         2.0,
         SceneStrokeCap::Butt,
@@ -123,7 +132,11 @@ fn pc1_changing_dash_offset_invalidates_tile() {
         s.dash_offset = 3.0;
     }
     let dirty = cache.invalidate(&scene);
-    assert!(!dirty.is_empty(), "dash_offset change invalidates: {}", dirty.len());
+    assert!(
+        !dirty.is_empty(),
+        "dash_offset change invalidates: {}",
+        dirty.len()
+    );
 }
 
 #[test]
@@ -132,7 +145,10 @@ fn pc1_unchanged_decorations_keep_tiles_clean() {
     // row should report 0 dirty tiles on the second invalidate.
     let mut scene = Scene::new(64, 64);
     scene.push_stroke_decorated(
-        8.0, 8.0, 56.0, 56.0,
+        8.0,
+        8.0,
+        56.0,
+        56.0,
         [1.0, 0.0, 0.0, 1.0],
         2.0,
         SceneStrokeCap::Round,

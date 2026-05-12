@@ -55,7 +55,11 @@ fn try_load_system_font() -> Option<Vec<u8>> {
 fn make_target(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("p10b target"),
-        size: wgpu::Extent3d { width: DIM, height: DIM, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: DIM,
+            height: DIM,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -87,7 +91,11 @@ fn p10b_01_render_real_font_glyph() {
     let handles = boot().expect("wgpu boot");
     let renderer = create_netrender_instance(
         handles.clone(),
-        NetrenderOptions { tile_cache_size: Some(TILE_SIZE), enable_vello: true, ..Default::default() },
+        NetrenderOptions {
+            tile_cache_size: Some(TILE_SIZE),
+            enable_vello: true,
+            ..Default::default()
+        },
     )
     .expect("create_netrender_instance");
 
@@ -103,11 +111,31 @@ fn p10b_01_render_real_font_glyph() {
     // *any* of them to produce visible pixels for the smoke to
     // pass.
     let glyphs = vec![
-        Glyph { id: 36, x: 16.0,  y: 64.0 },  // commonly 'A'
-        Glyph { id: 37, x: 32.0,  y: 64.0 },  // commonly 'B'
-        Glyph { id: 38, x: 48.0,  y: 64.0 },  // commonly 'C'
-        Glyph { id: 36, x: 64.0,  y: 64.0 },
-        Glyph { id: 36, x: 80.0,  y: 64.0 },
+        Glyph {
+            id: 36,
+            x: 16.0,
+            y: 64.0,
+        }, // commonly 'A'
+        Glyph {
+            id: 37,
+            x: 32.0,
+            y: 64.0,
+        }, // commonly 'B'
+        Glyph {
+            id: 38,
+            x: 48.0,
+            y: 64.0,
+        }, // commonly 'C'
+        Glyph {
+            id: 36,
+            x: 64.0,
+            y: 64.0,
+        },
+        Glyph {
+            id: 36,
+            x: 80.0,
+            y: 64.0,
+        },
     ];
 
     scene.push_glyph_run(font_id, 32.0, glyphs, [1.0, 1.0, 1.0, 1.0]);
@@ -126,7 +154,11 @@ fn p10b_01_render_real_font_glyph() {
         }
     }
 
-    eprintln!("p10b_01: painted {} non-background pixels (of {})", painted, DIM * DIM);
+    eprintln!(
+        "p10b_01: painted {} non-background pixels (of {})",
+        painted,
+        DIM * DIM
+    );
     assert!(
         painted > 100,
         "render_vello produced only {} painted pixels — expected hundreds for 5 glyphs at size 32",

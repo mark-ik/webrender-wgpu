@@ -29,7 +29,11 @@ const TILE: u32 = 32;
 fn make_target(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("op_list test target"),
-        size: wgpu::Extent3d { width: DIM, height: DIM, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: DIM,
+            height: DIM,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -73,7 +77,11 @@ fn op_order_01_rect_after_image_paints_on_top() {
     let handles = boot().expect("wgpu boot");
     let renderer = create_netrender_instance(
         handles.clone(),
-        NetrenderOptions { tile_cache_size: Some(TILE), enable_vello: true, ..Default::default() },
+        NetrenderOptions {
+            tile_cache_size: Some(TILE),
+            enable_vello: true,
+            ..Default::default()
+        },
     )
     .expect("create_netrender_instance");
 
@@ -112,7 +120,11 @@ fn op_order_02_image_after_rect_paints_on_top() {
     let handles = boot().expect("wgpu boot");
     let renderer = create_netrender_instance(
         handles.clone(),
-        NetrenderOptions { tile_cache_size: Some(TILE), enable_vello: true, ..Default::default() },
+        NetrenderOptions {
+            tile_cache_size: Some(TILE),
+            enable_vello: true,
+            ..Default::default()
+        },
     )
     .expect("create_netrender_instance");
 
@@ -151,28 +163,56 @@ fn op_order_03_op_list_holds_six_variant_kinds() {
     scene.push_rect(0.0, 0.0, 8.0, 8.0, [1.0, 0.0, 0.0, 1.0]);
     scene.push_stroke(0.0, 0.0, 8.0, 8.0, [0.0, 1.0, 0.0, 1.0], 1.0);
     scene.push_gradient(netrender::SceneGradient {
-        x0: 0.0, y0: 0.0, x1: 8.0, y1: 8.0,
+        x0: 0.0,
+        y0: 0.0,
+        x1: 8.0,
+        y1: 8.0,
         kind: GradientKind::Linear,
         params: [0.0, 0.0, 8.0, 0.0],
         stops: vec![
-            GradientStop { offset: 0.0, color: [1.0, 0.0, 0.0, 1.0] },
-            GradientStop { offset: 1.0, color: [0.0, 0.0, 1.0, 1.0] },
+            GradientStop {
+                offset: 0.0,
+                color: [1.0, 0.0, 0.0, 1.0],
+            },
+            GradientStop {
+                offset: 1.0,
+                color: [0.0, 0.0, 1.0, 1.0],
+            },
         ],
         transform_id: 0,
         clip_rect: netrender::NO_CLIP,
         clip_corner_radii: netrender::SHARP_CLIP,
     });
     scene.set_image_source(1, ImageData::from_bytes(1, 1, vec![0, 0, 0, 255]));
-    scene.push_image(0.0, 0.0, 8.0, 8.0, 1, ImageData::from_bytes(1, 1, vec![0, 0, 0, 255]));
+    scene.push_image(
+        0.0,
+        0.0,
+        8.0,
+        8.0,
+        1,
+        ImageData::from_bytes(1, 1, vec![0, 0, 0, 255]),
+    );
     scene.push_shape(SceneShape {
         path: ScenePath::default(),
         fill_color: Some([0.5, 0.5, 0.5, 1.0]),
-        stroke: Some(ScenePathStroke { color: [0.0, 0.0, 0.0, 1.0], width: 1.0 }),
+        stroke: Some(ScenePathStroke {
+            color: [0.0, 0.0, 0.0, 1.0],
+            width: 1.0,
+        }),
         transform_id: 0,
         clip_rect: netrender::NO_CLIP,
         clip_corner_radii: netrender::SHARP_CLIP,
     });
-    scene.push_glyph_run(0, 16.0, vec![Glyph { id: 1, x: 0.0, y: 0.0 }], [1.0; 4]);
+    scene.push_glyph_run(
+        0,
+        16.0,
+        vec![Glyph {
+            id: 1,
+            x: 0.0,
+            y: 0.0,
+        }],
+        [1.0; 4],
+    );
 
     assert_eq!(scene.ops.len(), 6, "expected one op per push call");
     assert!(matches!(scene.ops[0], SceneOp::Rect(_)));

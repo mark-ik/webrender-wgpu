@@ -15,9 +15,7 @@
 //!    the opaque side of the mask — proves the DestIn pipeline
 //!    actually executes through to vello.
 
-use netrender::scene::{
-    Scene, SceneClip, SceneCompose, SceneLayer, SceneOp,
-};
+use netrender::scene::{Scene, SceneClip, SceneCompose, SceneLayer, SceneOp};
 use netrender::tile_cache::TileCache;
 
 const TILE: u32 = 32;
@@ -67,7 +65,11 @@ fn pc3_compose_change_invalidates_tile() {
         l.compose = SceneCompose::DestIn;
     }
     let dirty = cache.invalidate(&scene);
-    assert!(!dirty.is_empty(), "compose change invalidates: {}", dirty.len());
+    assert!(
+        !dirty.is_empty(),
+        "compose change invalidates: {}",
+        dirty.len()
+    );
 }
 
 // ── GPU smoke ─────────────────────────────────────────────────────────
@@ -88,7 +90,11 @@ mod gpu_smoke {
     fn make_target(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("pc3 target"),
-            size: wgpu::Extent3d { width: DIM, height: DIM, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: DIM,
+                height: DIM,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -151,7 +157,10 @@ mod gpu_smoke {
         // transparent.
         scene.push_alpha_mask_layer();
         scene.push_image_full(
-            0.0, 0.0, DIM as f32, DIM as f32,
+            0.0,
+            0.0,
+            DIM as f32,
+            DIM as f32,
             [0.0, 0.0, 1.0, 1.0],
             [1.0, 1.0, 1.0, 1.0],
             42,

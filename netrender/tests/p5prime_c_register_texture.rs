@@ -14,13 +14,8 @@
 
 use std::collections::HashMap;
 
-use netrender::{
-    ImageKey, Scene, boot, vello_rasterizer::scene_to_vello_with_overrides,
-};
-use vello::{
-    AaConfig, AaSupport, RenderParams, Renderer, RendererOptions,
-    peniko::Color,
-};
+use netrender::{ImageKey, Scene, boot, vello_rasterizer::scene_to_vello_with_overrides};
+use vello::{AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, peniko::Color};
 
 const DIM: u32 = 64;
 const SRC_DIM: u32 = 16;
@@ -121,7 +116,11 @@ fn assert_within_tol(actual: [u8; 4], expected: [u8; 4], tol: u8, where_: &str) 
     assert!(
         max <= tol,
         "{}: actual {:?}, expected {:?} (max channel diff = {}, tol = {})",
-        where_, actual, expected, max, tol
+        where_,
+        actual,
+        expected,
+        max,
+        tol
     );
 }
 
@@ -161,7 +160,10 @@ fn p5c_01_register_texture_round_trip() {
     // registered ImageData.
     let mut scene = Scene::new(DIM, DIM);
     scene.push_image_full(
-        16.0, 16.0, 48.0, 48.0,
+        16.0,
+        16.0,
+        48.0,
+        48.0,
         [0.0, 0.0, 1.0, 1.0],
         [1.0, 1.0, 1.0, 1.0],
         KEY,
@@ -198,7 +200,12 @@ fn p5c_01_register_texture_round_trip() {
     assert_within_tol(read_pixel(&bytes, 20, 20), [255, 0, 0, 255], 4, "TL red");
     assert_within_tol(read_pixel(&bytes, 44, 20), [0, 255, 0, 255], 4, "TR green");
     assert_within_tol(read_pixel(&bytes, 20, 44), [0, 0, 255, 255], 4, "BL blue");
-    assert_within_tol(read_pixel(&bytes, 44, 44), [255, 255, 0, 255], 4, "BR yellow");
+    assert_within_tol(
+        read_pixel(&bytes, 44, 44),
+        [255, 255, 0, 255],
+        4,
+        "BR yellow",
+    );
     // Outside target: clear.
     assert_within_tol(read_pixel(&bytes, 4, 4), [0, 0, 0, 0], 1, "outside");
 }

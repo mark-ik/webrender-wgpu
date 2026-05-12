@@ -49,8 +49,8 @@ fn write_png(path: &Path, width: u32, height: u32, rgba: &[u8]) {
 }
 
 fn read_png(path: &Path) -> (u32, u32, Vec<u8>) {
-    let file = std::fs::File::open(path)
-        .unwrap_or_else(|e| panic!("opening {}: {}", path.display(), e));
+    let file =
+        std::fs::File::open(path).unwrap_or_else(|e| panic!("opening {}: {}", path.display(), e));
     let dec = png::Decoder::new(std::io::BufReader::new(file));
     let mut reader = dec.read_info().expect("png read_info");
     let info = reader.info();
@@ -75,7 +75,11 @@ fn run_scene_golden(name: &str, scene: Scene) {
     let device = handles.device.clone();
     let renderer = create_netrender_instance(
         handles,
-        NetrenderOptions { tile_cache_size: Some(TILE_SIZE), enable_vello: true, ..Default::default() },
+        NetrenderOptions {
+            tile_cache_size: Some(TILE_SIZE),
+            enable_vello: true,
+            ..Default::default()
+        },
     )
     .expect("create_netrender_instance");
 
@@ -86,7 +90,11 @@ fn run_scene_golden(name: &str, scene: Scene) {
     // (which match what the old Rgba8UnormSrgb framebuffer wrote).
     let target_tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(name),
-        size: wgpu::Extent3d { width: vw, height: vh, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: vw,
+            height: vh,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -115,7 +123,11 @@ fn run_scene_golden(name: &str, scene: Scene) {
 
     let (ow, oh, oracle) = read_png(&oracle_path);
     assert_eq!((ow, oh), (vw, vh), "{name}: oracle size mismatch");
-    assert_eq!(actual.len(), oracle.len(), "{name}: readback length mismatch");
+    assert_eq!(
+        actual.len(),
+        oracle.len(),
+        "{name}: readback length mismatch"
+    );
 
     // Tolerance: ±2/255 per channel. Axis-aligned opaque cases hit
     // byte-exact; rotation/scale will use the small tolerance to
@@ -177,7 +189,10 @@ fn p3_03_clip_center() {
     // Full-screen red rect clipped to the center 128×128 region.
     let mut scene = Scene::new(DIM, DIM);
     scene.push_rect_clipped(
-        0.0, 0.0, 256.0, 256.0,
+        0.0,
+        0.0,
+        256.0,
+        256.0,
         [1.0, 0.0, 0.0, 1.0],
         0, // identity
         [64.0, 64.0, 192.0, 192.0],
@@ -211,12 +226,15 @@ fn p3_05_chain_trs() {
     // Then clip to a 160×160 window centered at (128,128).
     let mut scene = Scene::new(DIM, DIM);
     let tid = scene.push_transform(
-        Transform::scale_2d(64.0, 64.0)               // scale first (inner)
-            .then(&Transform::rotate_2d(PI / 6.0))    // then rotate 30°
+        Transform::scale_2d(64.0, 64.0) // scale first (inner)
+            .then(&Transform::rotate_2d(PI / 6.0)) // then rotate 30°
             .then(&Transform::translate_2d(128.0, 96.0)), // then translate (outer)
     );
     scene.push_rect_clipped(
-        0.0, 0.0, 1.0, 1.0,
+        0.0,
+        0.0,
+        1.0,
+        1.0,
         [1.0, 1.0, 0.0, 1.0], // yellow
         tid,
         [48.0, 48.0, 208.0, 208.0],

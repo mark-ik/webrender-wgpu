@@ -24,8 +24,8 @@ use std::sync::Arc;
 use vello::peniko::Blob;
 
 use netrender::scene::{
-    CompositorSurface, FontBlob, ImageData, Scene, SceneBlendMode, SceneClip, SceneLayer,
-    SceneOp, Transform,
+    CompositorSurface, FontBlob, ImageData, Scene, SceneBlendMode, SceneClip, SceneLayer, SceneOp,
+    Transform,
 };
 use netrender_device::SurfaceKey;
 
@@ -46,8 +46,12 @@ fn make_kitchen_sink_scene() -> Scene {
     // sorted-vec serializer.
     let img_blob_a = Blob::new(Arc::new(vec![10u8, 20, 30, 40, 50, 60, 70, 80]));
     let img_blob_b = Blob::new(Arc::new(vec![90u8, 100, 110, 120]));
-    scene.image_sources.insert(7, ImageData::from_blob(2, 1, img_blob_a));
-    scene.image_sources.insert(3, ImageData::from_blob(1, 1, img_blob_b));
+    scene
+        .image_sources
+        .insert(7, ImageData::from_blob(2, 1, img_blob_a));
+    scene
+        .image_sources
+        .insert(3, ImageData::from_blob(1, 1, img_blob_b));
 
     // Font palette: register a real (synthetic) font blob.
     let font_bytes = b"FAKEFONTDATA-NOT-A-REAL-OTF-BUT-ENOUGH-FOR-ROUNDTRIP".to_vec();
@@ -60,7 +64,10 @@ fn make_kitchen_sink_scene() -> Scene {
     // Ops (mixed kinds).
     scene.push_rect(10.0, 10.0, 100.0, 100.0, [1.0, 0.0, 0.0, 1.0]);
     scene.push_rect_clipped(
-        20.0, 20.0, 200.0, 200.0,
+        20.0,
+        20.0,
+        200.0,
+        200.0,
         [0.0, 1.0, 0.0, 0.5],
         xf,
         [0.0, 0.0, 800.0, 600.0],
@@ -110,7 +117,11 @@ fn postcard_roundtrip_is_byte_deterministic() {
         "postcard round-trip must be byte-deterministic"
     );
     // Postcard output for a real-ish scene should not be empty.
-    assert!(bytes_1.len() > 50, "postcard output suspiciously small: {} bytes", bytes_1.len());
+    assert!(
+        bytes_1.len() > 50,
+        "postcard output suspiciously small: {} bytes",
+        bytes_1.len()
+    );
 }
 
 #[test]
@@ -123,15 +134,18 @@ fn json_roundtrip_is_string_deterministic() {
 
     assert_eq!(s1, s2, "JSON round-trip must be string-deterministic");
     // JSON should be substantially larger than postcard for the same data.
-    assert!(s1.len() > 200, "JSON output suspiciously small: {} bytes", s1.len());
+    assert!(
+        s1.len() > 200,
+        "JSON output suspiciously small: {} bytes",
+        s1.len()
+    );
 }
 
 #[test]
 fn replayed_scene_dumps_identically_to_original() {
     let original = make_kitchen_sink_scene();
 
-    let pc_replay =
-        Scene::replay_postcard(&original.snapshot_postcard()).expect("postcard replay");
+    let pc_replay = Scene::replay_postcard(&original.snapshot_postcard()).expect("postcard replay");
     let js_replay = Scene::replay_json(&original.snapshot_json()).expect("json replay");
 
     let dump_orig = original.dump_ops();
@@ -157,12 +171,12 @@ fn blob_ids_survive_postcard_roundtrip() {
         .map(|(k, v)| (*k, v.data.id()))
         .collect();
 
-    let replayed =
-        Scene::replay_postcard(&original.snapshot_postcard()).expect("postcard replay");
+    let replayed = Scene::replay_postcard(&original.snapshot_postcard()).expect("postcard replay");
 
     // Font blob id preserved.
     assert_eq!(
-        original_font_id, replayed.fonts[1].data.id(),
+        original_font_id,
+        replayed.fonts[1].data.id(),
         "font blob id must survive postcard round-trip"
     );
 
@@ -188,7 +202,8 @@ fn blob_ids_survive_json_roundtrip() {
     let replayed = Scene::replay_json(&original.snapshot_json()).expect("json replay");
 
     assert_eq!(
-        original_font_id, replayed.fonts[1].data.id(),
+        original_font_id,
+        replayed.fonts[1].data.id(),
         "font blob id must survive JSON round-trip"
     );
 }
@@ -206,8 +221,12 @@ fn image_sources_insertion_order_does_not_affect_snapshot_bytes() {
     let blob_b1 = Blob::new(Arc::new(blob_b_bytes.clone()));
     let id_a = blob_a1.id();
     let id_b = blob_b1.id();
-    scene_ab.image_sources.insert(1, ImageData::from_blob(1, 1, blob_a1));
-    scene_ab.image_sources.insert(2, ImageData::from_blob(1, 1, blob_b1));
+    scene_ab
+        .image_sources
+        .insert(1, ImageData::from_blob(1, 1, blob_a1));
+    scene_ab
+        .image_sources
+        .insert(2, ImageData::from_blob(1, 1, blob_b1));
 
     let mut scene_ba = Scene::new(100, 100);
     // Reuse the same Blob ids by reconstructing via from_raw_parts —
@@ -222,8 +241,12 @@ fn image_sources_insertion_order_does_not_affect_snapshot_bytes() {
         Arc::new(blob_b_bytes.clone()) as Arc<dyn AsRef<[u8]> + Send + Sync>,
         id_b,
     );
-    scene_ba.image_sources.insert(2, ImageData::from_blob(1, 1, blob_b2));
-    scene_ba.image_sources.insert(1, ImageData::from_blob(1, 1, blob_a2));
+    scene_ba
+        .image_sources
+        .insert(2, ImageData::from_blob(1, 1, blob_b2));
+    scene_ba
+        .image_sources
+        .insert(1, ImageData::from_blob(1, 1, blob_a2));
 
     let bytes_ab = scene_ab.snapshot_postcard();
     let bytes_ba = scene_ba.snapshot_postcard();
@@ -248,9 +271,15 @@ fn empty_scene_roundtrips_through_both_formats() {
 fn malformed_bytes_yield_replay_error() {
     let bogus = b"\xff\xff\xff\xff not valid postcard";
     let pc_result = Scene::replay_postcard(bogus);
-    assert!(pc_result.is_err(), "garbage bytes should fail to deserialize");
+    assert!(
+        pc_result.is_err(),
+        "garbage bytes should fail to deserialize"
+    );
 
     let bogus_json = "{not valid json";
     let js_result = Scene::replay_json(bogus_json);
-    assert!(js_result.is_err(), "garbage json should fail to deserialize");
+    assert!(
+        js_result.is_err(),
+        "garbage json should fail to deserialize"
+    );
 }

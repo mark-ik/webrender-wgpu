@@ -97,7 +97,10 @@ fn nested_scroll_frames_get_independent_transforms() {
     let outer_xf = scene.push_scroll_frame([0.0, 0.0, 800.0, 600.0], [0.0, 100.0]);
     let inner_xf = scene.push_scroll_frame([100.0, 100.0, 400.0, 300.0], [50.0, 0.0]);
 
-    assert_ne!(outer_xf, inner_xf, "each scroll frame mints a fresh transform id");
+    assert_ne!(
+        outer_xf, inner_xf,
+        "each scroll frame mints a fresh transform id"
+    );
 
     // Outer scroll: ty = -100. Inner scroll: tx = -50.
     assert!((scene.transforms[outer_xf as usize].m[13] - -100.0).abs() < 1e-6);
@@ -107,8 +110,16 @@ fn nested_scroll_frames_get_independent_transforms() {
     scene.pop_scroll_frame();
 
     // Two PushLayer + two PopLayer in the op list.
-    let push_count = scene.ops.iter().filter(|op| matches!(op, SceneOp::PushLayer(_))).count();
-    let pop_count = scene.ops.iter().filter(|op| matches!(op, SceneOp::PopLayer)).count();
+    let push_count = scene
+        .ops
+        .iter()
+        .filter(|op| matches!(op, SceneOp::PushLayer(_)))
+        .count();
+    let pop_count = scene
+        .ops
+        .iter()
+        .filter(|op| matches!(op, SceneOp::PopLayer))
+        .count();
     assert_eq!(push_count, 2);
     assert_eq!(pop_count, 2);
 }

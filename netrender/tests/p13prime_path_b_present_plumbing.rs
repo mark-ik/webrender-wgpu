@@ -109,8 +109,7 @@ impl Compositor for RecordingCompositor {
                         sample_count: 1,
                         dimension: wgpu::TextureDimension::D2,
                         format: frame.master.format(),
-                        usage: wgpu::TextureUsages::COPY_DST
-                            | wgpu::TextureUsages::TEXTURE_BINDING,
+                        usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
                         view_formats: &[],
                     });
                 let mut enc =
@@ -124,11 +123,7 @@ impl Compositor for RecordingCompositor {
                     wgpu::TexelCopyTextureInfo {
                         texture: frame.master,
                         mip_level: 0,
-                        origin: wgpu::Origin3d {
-                            x: x0,
-                            y: y0,
-                            z: 0,
-                        },
+                        origin: wgpu::Origin3d { x: x0, y: y0, z: 0 },
                         aspect: wgpu::TextureAspect::All,
                     },
                     wgpu::TexelCopyTextureInfo {
@@ -303,7 +298,8 @@ fn p13prime_path_b_dirty_on_bounds_change() {
         "bounds-changed surface must report dirty even with no tile content change",
     );
     assert_eq!(
-        frame2[0].source_rect, [16, 16, 80, 80],
+        frame2[0].source_rect,
+        [16, 16, 80, 80],
         "source_rect_in_master reflects updated bounds",
     );
 }
@@ -318,8 +314,14 @@ fn p13prime_path_b_destroy_forwarded_on_undeclare() {
     let dim = 128u32;
     let mut scene = Scene::new(dim, dim);
     scene.push_rect(0.0, 0.0, dim as f32, dim as f32, [1.0, 0.0, 0.0, 1.0]);
-    scene.declare_compositor_surface(CompositorSurface::new(SurfaceKey(1), [0.0, 0.0, 64.0, 64.0]));
-    scene.declare_compositor_surface(CompositorSurface::new(SurfaceKey(2), [64.0, 0.0, 128.0, 64.0]));
+    scene.declare_compositor_surface(CompositorSurface::new(
+        SurfaceKey(1),
+        [0.0, 0.0, 64.0, 64.0],
+    ));
+    scene.declare_compositor_surface(CompositorSurface::new(
+        SurfaceKey(2),
+        [64.0, 0.0, 128.0, 64.0],
+    ));
 
     renderer.render_with_compositor(&scene, FORMAT, &mut compositor, base());
     let declares_after_frame1 = compositor.declares.len();
@@ -362,15 +364,28 @@ fn p13prime_path_b_zorder_preserved() {
     let mut scene = Scene::new(dim, dim);
     scene.push_rect(0.0, 0.0, dim as f32, dim as f32, [1.0, 0.0, 0.0, 1.0]);
     // All three overlap on [16..80, 16..80].
-    scene.declare_compositor_surface(CompositorSurface::new(SurfaceKey(10), [0.0, 0.0, 80.0, 80.0]));
-    scene.declare_compositor_surface(CompositorSurface::new(SurfaceKey(20), [16.0, 16.0, 96.0, 96.0]));
-    scene.declare_compositor_surface(CompositorSurface::new(SurfaceKey(30), [32.0, 32.0, 112.0, 112.0]));
+    scene.declare_compositor_surface(CompositorSurface::new(
+        SurfaceKey(10),
+        [0.0, 0.0, 80.0, 80.0],
+    ));
+    scene.declare_compositor_surface(CompositorSurface::new(
+        SurfaceKey(20),
+        [16.0, 16.0, 96.0, 96.0],
+    ));
+    scene.declare_compositor_surface(CompositorSurface::new(
+        SurfaceKey(30),
+        [32.0, 32.0, 112.0, 112.0],
+    ));
 
     renderer.render_with_compositor(&scene, FORMAT, &mut compositor, base());
 
     let frame1 = &compositor.layer_records[0];
     assert_eq!(frame1.len(), 3);
-    assert_eq!(frame1[0].key, SurfaceKey(10), "z=0 (bottom): declared first");
+    assert_eq!(
+        frame1[0].key,
+        SurfaceKey(10),
+        "z=0 (bottom): declared first"
+    );
     assert_eq!(frame1[1].key, SurfaceKey(20), "z=1: declared second");
     assert_eq!(frame1[2].key, SurfaceKey(30), "z=2 (top): declared third");
 }

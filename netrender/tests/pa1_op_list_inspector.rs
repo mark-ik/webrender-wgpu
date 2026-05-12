@@ -10,9 +10,7 @@
 //! invariants (line count, ordering, indentation, kind tags), not
 //! exact strings.
 
-use netrender::scene::{
-    NO_CLIP, Scene, SceneBlendMode, SceneClip, SceneLayer, SceneOp, Transform,
-};
+use netrender::scene::{NO_CLIP, Scene, SceneBlendMode, SceneClip, SceneLayer, SceneOp, Transform};
 
 #[test]
 fn header_line_reports_counts_and_viewport() {
@@ -23,10 +21,22 @@ fn header_line_reports_counts_and_viewport() {
     let dump = scene.dump_ops();
     let header = dump.lines().next().expect("header present");
 
-    assert!(header.contains("800x600"), "viewport in header: {:?}", header);
+    assert!(
+        header.contains("800x600"),
+        "viewport in header: {:?}",
+        header
+    );
     assert!(header.contains("ops=2"), "op count in header: {:?}", header);
-    assert!(header.contains("transforms=1"), "identity-only palette: {:?}", header);
-    assert!(header.contains("fonts=1"), "sentinel font palette: {:?}", header);
+    assert!(
+        header.contains("transforms=1"),
+        "identity-only palette: {:?}",
+        header
+    );
+    assert!(
+        header.contains("fonts=1"),
+        "sentinel font palette: {:?}",
+        header
+    );
 }
 
 #[test]
@@ -41,7 +51,10 @@ fn body_has_one_line_per_op_with_index_and_kind() {
 
     assert_eq!(body.len(), 3, "one line per op: {}", dump);
     for (i, line) in body.iter().enumerate() {
-        assert!(line.contains(&format!("{:04}", i)), "line {i} has zero-padded index: {line:?}");
+        assert!(
+            line.contains(&format!("{:04}", i)),
+            "line {i} has zero-padded index: {line:?}"
+        );
         assert!(line.contains("Rect"), "line {i} kind tag: {line:?}");
     }
 }
@@ -53,15 +66,35 @@ fn modifiers_only_appear_when_non_default() {
     scene.push_rect(0.0, 0.0, 10.0, 10.0, [1.0, 0.0, 0.0, 1.0]);
     // Custom transform + custom clip — modifiers SHOULD show.
     let xf = scene.push_transform(Transform::translate_2d(50.0, 50.0));
-    scene.push_rect_clipped(0.0, 0.0, 10.0, 10.0, [0.0, 1.0, 0.0, 1.0], xf, [5.0, 5.0, 95.0, 95.0]);
+    scene.push_rect_clipped(
+        0.0,
+        0.0,
+        10.0,
+        10.0,
+        [0.0, 1.0, 0.0, 1.0],
+        xf,
+        [5.0, 5.0, 95.0, 95.0],
+    );
 
     let dump = scene.dump_ops();
     let body: Vec<&str> = dump.lines().skip(1).collect();
 
-    assert!(!body[0].contains("transform="), "identity transform omitted: {:?}", body[0]);
+    assert!(
+        !body[0].contains("transform="),
+        "identity transform omitted: {:?}",
+        body[0]
+    );
     assert!(!body[0].contains("clip="), "no-clip omitted: {:?}", body[0]);
-    assert!(body[1].contains("transform=1"), "custom transform shown: {:?}", body[1]);
-    assert!(body[1].contains("clip="), "custom clip shown: {:?}", body[1]);
+    assert!(
+        body[1].contains("transform=1"),
+        "custom transform shown: {:?}",
+        body[1]
+    );
+    assert!(
+        body[1].contains("clip="),
+        "custom clip shown: {:?}",
+        body[1]
+    );
 }
 
 /// Inspector body lines are formatted `"  {index:04}{indent}{kind} ..."`,
@@ -101,11 +134,26 @@ fn push_layer_nests_indentation() {
     let pop_pad = indent_after_index(body[4]);
     let after_pop_pad = indent_after_index(body[5]);
 
-    assert_eq!(outer_pad, push_pad, "outer rect and PushLayer at same depth: {dump}");
-    assert!(inside_a_pad > push_pad, "inside ops indented past PushLayer: {dump}");
-    assert_eq!(inside_a_pad, inside_b_pad, "siblings inside layer share depth: {dump}");
-    assert_eq!(pop_pad, push_pad, "PopLayer line dedents back to outer depth: {dump}");
-    assert_eq!(after_pop_pad, outer_pad, "rect after pop returns to outer depth: {dump}");
+    assert_eq!(
+        outer_pad, push_pad,
+        "outer rect and PushLayer at same depth: {dump}"
+    );
+    assert!(
+        inside_a_pad > push_pad,
+        "inside ops indented past PushLayer: {dump}"
+    );
+    assert_eq!(
+        inside_a_pad, inside_b_pad,
+        "siblings inside layer share depth: {dump}"
+    );
+    assert_eq!(
+        pop_pad, push_pad,
+        "PopLayer line dedents back to outer depth: {dump}"
+    );
+    assert_eq!(
+        after_pop_pad, outer_pad,
+        "rect after pop returns to outer depth: {dump}"
+    );
 
     assert!(dump.contains("PushLayer alpha=0.5"));
     assert!(dump.contains("PopLayer"));
@@ -115,10 +163,12 @@ fn push_layer_nests_indentation() {
 fn nested_layers_increase_depth_monotonically() {
     let mut scene = Scene::new(100, 100);
     scene.ops.push(SceneOp::PushLayer(SceneLayer::alpha(0.8)));
-    scene.ops.push(SceneOp::PushLayer(SceneLayer::clip(SceneClip::Rect {
-        rect: [0.0, 0.0, 50.0, 50.0],
-        radii: [0.0; 4],
-    })));
+    scene
+        .ops
+        .push(SceneOp::PushLayer(SceneLayer::clip(SceneClip::Rect {
+            rect: [0.0, 0.0, 50.0, 50.0],
+            radii: [0.0; 4],
+        })));
     scene.push_rect(0.0, 0.0, 10.0, 10.0, [1.0, 0.0, 0.0, 1.0]);
     scene.ops.push(SceneOp::PopLayer);
     scene.ops.push(SceneOp::PopLayer);
@@ -132,10 +182,19 @@ fn nested_layers_increase_depth_monotonically() {
     let inner_pop = indent_after_index(body[3]);
     let outer_pop = indent_after_index(body[4]);
 
-    assert!(inner_push > outer_push, "inner push deeper than outer push: {dump}");
+    assert!(
+        inner_push > outer_push,
+        "inner push deeper than outer push: {dump}"
+    );
     assert!(inner_rect > inner_push, "innermost rect deepest: {dump}");
-    assert_eq!(inner_pop, inner_push, "inner pop dedents to inner push depth: {dump}");
-    assert_eq!(outer_pop, outer_push, "outer pop dedents to outer push depth: {dump}");
+    assert_eq!(
+        inner_pop, inner_push,
+        "inner pop dedents to inner push depth: {dump}"
+    );
+    assert_eq!(
+        outer_pop, outer_push,
+        "outer pop dedents to outer push depth: {dump}"
+    );
 }
 
 #[test]
@@ -143,7 +202,10 @@ fn root_alpha_and_blend_surface_when_non_default() {
     let mut at_default = Scene::new(100, 100);
     at_default.push_rect(0.0, 0.0, 10.0, 10.0, [1.0, 0.0, 0.0, 1.0]);
     let dump_default = at_default.dump_ops();
-    assert!(!dump_default.contains("root_alpha"), "defaults omitted: {dump_default}");
+    assert!(
+        !dump_default.contains("root_alpha"),
+        "defaults omitted: {dump_default}"
+    );
     assert!(!dump_default.contains("root_blend_mode"));
 
     let mut tweaked = Scene::new(100, 100);
@@ -151,8 +213,14 @@ fn root_alpha_and_blend_surface_when_non_default() {
     tweaked.root_blend_mode = SceneBlendMode::Multiply;
     tweaked.push_rect(0.0, 0.0, 10.0, 10.0, [1.0, 0.0, 0.0, 1.0]);
     let dump_tweaked = tweaked.dump_ops();
-    assert!(dump_tweaked.contains("root_alpha=0.75"), "tweaked alpha shown: {dump_tweaked}");
-    assert!(dump_tweaked.contains("Multiply"), "tweaked blend shown: {dump_tweaked}");
+    assert!(
+        dump_tweaked.contains("root_alpha=0.75"),
+        "tweaked alpha shown: {dump_tweaked}"
+    );
+    assert!(
+        dump_tweaked.contains("Multiply"),
+        "tweaked blend shown: {dump_tweaked}"
+    );
 }
 
 #[test]

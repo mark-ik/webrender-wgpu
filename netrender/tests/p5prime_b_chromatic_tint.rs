@@ -18,10 +18,7 @@
 //!   border stays transparent.
 
 use netrender::{ImageData, Scene, boot, vello_rasterizer::scene_to_vello};
-use vello::{
-    AaConfig, AaSupport, RenderParams, Renderer, RendererOptions,
-    peniko::Color,
-};
+use vello::{AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, peniko::Color};
 
 const DIM: u32 = 64;
 const IMG_KEY: u64 = 0xCC;
@@ -87,7 +84,11 @@ fn assert_within_tol(actual: [u8; 4], expected: [u8; 4], tol: u8, where_: &str) 
     assert!(
         max <= tol,
         "{}: actual {:?}, expected {:?} (max channel diff = {}, tol = {})",
-        where_, actual, expected, max, tol
+        where_,
+        actual,
+        expected,
+        max,
+        tol
     );
 }
 
@@ -109,7 +110,9 @@ fn render_scene(scene: &Scene) -> Vec<u8> {
 }
 
 fn solid_white_image(size: u32) -> ImageData {
-    let bytes: Vec<u8> = (0..size * size).flat_map(|_| [255u8, 255, 255, 255]).collect();
+    let bytes: Vec<u8> = (0..size * size)
+        .flat_map(|_| [255u8, 255, 255, 255])
+        .collect();
     ImageData::from_bytes(size, size, bytes)
 }
 
@@ -120,7 +123,10 @@ fn p5b_01_chromatic_red_tint_on_white() {
     let mut scene = Scene::new(DIM, DIM);
     scene.image_sources.insert(IMG_KEY, solid_white_image(16));
     scene.push_image_full(
-        16.0, 16.0, 48.0, 48.0,
+        16.0,
+        16.0,
+        48.0,
+        48.0,
         [0.0, 0.0, 1.0, 1.0],
         [1.0, 0.0, 0.0, 1.0],
         IMG_KEY,
@@ -152,7 +158,10 @@ fn p5b_02_chromatic_gray_with_alpha() {
     let mut scene = Scene::new(DIM, DIM);
     scene.image_sources.insert(IMG_KEY, solid_white_image(16));
     scene.push_image_full(
-        16.0, 16.0, 48.0, 48.0,
+        16.0,
+        16.0,
+        48.0,
+        48.0,
         [0.0, 0.0, 1.0, 1.0],
         [0.1, 0.1, 0.1, 0.5],
         IMG_KEY,
@@ -197,7 +206,10 @@ fn p5b_03_chromatic_preserves_image_alpha() {
     // Stretch 16×16 → 32×32 at (16,16)–(48,48). The image's
     // 8×8-opaque center maps to 16×16 at (24,24)–(40,40).
     scene.push_image_full(
-        16.0, 16.0, 48.0, 48.0,
+        16.0,
+        16.0,
+        48.0,
+        48.0,
         [0.0, 0.0, 1.0, 1.0],
         [1.0, 0.0, 0.0, 1.0],
         IMG_KEY,

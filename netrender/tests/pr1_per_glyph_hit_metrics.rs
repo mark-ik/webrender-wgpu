@@ -79,7 +79,11 @@ fn pr1_lowercase_g_descender_hits_under_real_metrics() {
     scene.push_glyph_run(
         font_id,
         32.0,
-        vec![Glyph { id: g_id, x: 50.0, y: 50.0 }],
+        vec![Glyph {
+            id: g_id,
+            x: 50.0,
+            y: 50.0,
+        }],
         [1.0, 1.0, 1.0, 1.0],
     );
 
@@ -122,7 +126,10 @@ fn pr1_lowercase_g_descender_hits_under_real_metrics() {
         descender.and_then(|h| h.glyph_index) == Some(0),
         "deep-descender point ({:.1}, {:.1}) hits 'g' under real metrics \
          (em-box bottom was {:.1}, real descender at {:.1}); got {descender:?}",
-        probe_x, probe_y, em_box_descender_y, descender_screen_y,
+        probe_x,
+        probe_y,
+        em_box_descender_y,
+        descender_screen_y,
     );
 }
 
@@ -146,7 +153,11 @@ fn pr1_above_glyph_top_misses() {
     scene.push_glyph_run(
         font_id,
         32.0,
-        vec![Glyph { id: g_id, x: 50.0, y: 50.0 }],
+        vec![Glyph {
+            id: g_id,
+            x: 50.0,
+            y: 50.0,
+        }],
         [1.0, 1.0, 1.0, 1.0],
     );
 
@@ -172,7 +183,11 @@ fn pr1_sentinel_font_falls_back_to_em_box() {
     scene.ops.push(SceneOp::GlyphRun(SceneGlyphRun {
         font_id: 0, // sentinel
         font_size: 32.0,
-        glyphs: vec![Glyph { id: 0, x: 50.0, y: 50.0 }],
+        glyphs: vec![Glyph {
+            id: 0,
+            x: 50.0,
+            y: 50.0,
+        }],
         color: [1.0, 1.0, 1.0, 1.0],
         transform_id: 0,
         clip_rect: NO_CLIP,

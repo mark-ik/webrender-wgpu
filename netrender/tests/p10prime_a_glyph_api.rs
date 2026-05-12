@@ -18,7 +18,11 @@ use netrender::{FontBlob, Glyph, Scene, TileCache, peniko::Blob};
 fn p10a_01_font_palette_starts_at_one() {
     let scene = Scene::new(64, 64);
     // Index 0 is the reserved no-font sentinel.
-    assert_eq!(scene.fonts.len(), 1, "scene starts with the no-font sentinel");
+    assert_eq!(
+        scene.fonts.len(),
+        1,
+        "scene starts with the no-font sentinel"
+    );
     assert_eq!(scene.fonts[0].index, 0);
     assert!(scene.fonts[0].data.is_empty());
 }
@@ -26,8 +30,14 @@ fn p10a_01_font_palette_starts_at_one() {
 #[test]
 fn p10a_02_push_font_returns_nonzero_id() {
     let mut scene = Scene::new(64, 64);
-    let id_a = scene.push_font(FontBlob { data: Blob::new(Arc::new(vec![1, 2, 3])), index: 0 });
-    let id_b = scene.push_font(FontBlob { data: Blob::new(Arc::new(vec![4, 5, 6])), index: 1 });
+    let id_a = scene.push_font(FontBlob {
+        data: Blob::new(Arc::new(vec![1, 2, 3])),
+        index: 0,
+    });
+    let id_b = scene.push_font(FontBlob {
+        data: Blob::new(Arc::new(vec![4, 5, 6])),
+        index: 1,
+    });
     assert_eq!(id_a, 1);
     assert_eq!(id_b, 2);
     assert_eq!(scene.fonts.len(), 3);
@@ -36,14 +46,29 @@ fn p10a_02_push_font_returns_nonzero_id() {
 #[test]
 fn p10a_03_push_glyph_run_storage() {
     let mut scene = Scene::new(64, 64);
-    let id = scene.push_font(FontBlob { data: Blob::new(Arc::new(vec![0u8; 100])), index: 0 });
+    let id = scene.push_font(FontBlob {
+        data: Blob::new(Arc::new(vec![0u8; 100])),
+        index: 0,
+    });
     scene.push_glyph_run(
         id,
         16.0,
         vec![
-            Glyph { id: 10, x: 0.0, y: 16.0 },
-            Glyph { id: 11, x: 8.0, y: 16.0 },
-            Glyph { id: 12, x: 16.0, y: 16.0 },
+            Glyph {
+                id: 10,
+                x: 0.0,
+                y: 16.0,
+            },
+            Glyph {
+                id: 11,
+                x: 8.0,
+                y: 16.0,
+            },
+            Glyph {
+                id: 12,
+                x: 16.0,
+                y: 16.0,
+            },
         ],
         [0.0, 0.0, 0.0, 1.0],
     );
@@ -63,11 +88,18 @@ fn p10a_04_tile_cache_hashes_glyph_runs() {
     // doesn't panic when hashing the run (the hash function reads
     // font_id + glyph positions, no font data needed).
     let mut scene = Scene::new(64, 64);
-    let id = scene.push_font(FontBlob { data: Blob::new(Arc::new(vec![0u8; 100])), index: 0 });
+    let id = scene.push_font(FontBlob {
+        data: Blob::new(Arc::new(vec![0u8; 100])),
+        index: 0,
+    });
     scene.push_glyph_run(
         id,
         16.0,
-        vec![Glyph { id: 1, x: 16.0, y: 16.0 }],
+        vec![Glyph {
+            id: 1,
+            x: 16.0,
+            y: 16.0,
+        }],
         [1.0, 0.0, 0.0, 1.0],
     );
 
@@ -89,7 +121,10 @@ fn p10a_05_changing_glyph_invalidates_tile() {
     let id_font = 1u32;
     let mk_scene = |x: f32| {
         let mut s = Scene::new(64, 64);
-        s.push_font(FontBlob { data: Blob::new(Arc::new(vec![0u8; 100])), index: 0 });
+        s.push_font(FontBlob {
+            data: Blob::new(Arc::new(vec![0u8; 100])),
+            index: 0,
+        });
         s.push_glyph_run(
             id_font,
             16.0,
@@ -109,7 +144,7 @@ fn p10a_05_changing_glyph_invalidates_tile() {
         "re-invalidate with unchanged scene: zero dirty tiles"
     );
 
-    let scene_b = mk_scene(20.0);  // moved 4px right
+    let scene_b = mk_scene(20.0); // moved 4px right
     let dirty_changed = tc.invalidate(&scene_b);
     assert!(
         !dirty_changed.is_empty(),

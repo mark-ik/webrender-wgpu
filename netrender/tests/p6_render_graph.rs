@@ -48,8 +48,8 @@ fn write_png(path: &Path, width: u32, height: u32, rgba: &[u8]) {
 }
 
 fn read_png(path: &Path) -> (u32, u32, Vec<u8>) {
-    let file = std::fs::File::open(path)
-        .unwrap_or_else(|e| panic!("opening {}: {}", path.display(), e));
+    let file =
+        std::fs::File::open(path).unwrap_or_else(|e| panic!("opening {}: {}", path.display(), e));
     let dec = png::Decoder::new(std::io::BufReader::new(file));
     let mut reader = dec.read_info().expect("png read_info");
     let info = reader.info();
@@ -75,7 +75,11 @@ fn upload_rgba8(
 ) -> wgpu::Texture {
     let tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("p6 source"),
-        size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -96,7 +100,11 @@ fn upload_rgba8(
             bytes_per_row: Some(width * 4),
             rows_per_image: Some(height),
         },
-        wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
     );
     tex
 }
@@ -127,14 +135,22 @@ fn p6_01_blur_uniform_source() {
     let mut graph = RenderGraph::new();
     graph.push(Task {
         id: BLUR_H,
-        extent: wgpu::Extent3d { width: DIM, height: DIM, depth_or_array_layers: 1 },
+        extent: wgpu::Extent3d {
+            width: DIM,
+            height: DIM,
+            depth_or_array_layers: 1,
+        },
         format: BLUR_FORMAT,
         inputs: vec![SRC],
         encode: blur_pass_callback(pipe.clone(), Arc::clone(&sampler), step, 0.0),
     });
     graph.push(Task {
         id: BLUR_V,
-        extent: wgpu::Extent3d { width: DIM, height: DIM, depth_or_array_layers: 1 },
+        extent: wgpu::Extent3d {
+            width: DIM,
+            height: DIM,
+            depth_or_array_layers: 1,
+        },
         format: BLUR_FORMAT,
         inputs: vec![BLUR_H],
         encode: blur_pass_callback(pipe, Arc::clone(&sampler), 0.0, step),
@@ -172,7 +188,11 @@ fn p6_02_drop_shadow() {
     let queue = handles.queue.clone();
     let renderer = create_netrender_instance(
         handles,
-        NetrenderOptions { tile_cache_size: Some(64), enable_vello: true, ..Default::default() },
+        NetrenderOptions {
+            tile_cache_size: Some(64),
+            enable_vello: true,
+            ..Default::default()
+        },
     )
     .expect("create_netrender_instance");
 
@@ -201,14 +221,22 @@ fn p6_02_drop_shadow() {
     let mut graph = RenderGraph::new();
     graph.push(Task {
         id: BLUR_H,
-        extent: wgpu::Extent3d { width: DIM, height: DIM, depth_or_array_layers: 1 },
+        extent: wgpu::Extent3d {
+            width: DIM,
+            height: DIM,
+            depth_or_array_layers: 1,
+        },
         format: BLUR_FORMAT,
         inputs: vec![SRC],
         encode: blur_pass_callback(pipe.clone(), Arc::clone(&sampler), step, 0.0),
     });
     graph.push(Task {
         id: BLUR_V,
-        extent: wgpu::Extent3d { width: DIM, height: DIM, depth_or_array_layers: 1 },
+        extent: wgpu::Extent3d {
+            width: DIM,
+            height: DIM,
+            depth_or_array_layers: 1,
+        },
         format: BLUR_FORMAT,
         inputs: vec![BLUR_H],
         encode: blur_pass_callback(pipe, Arc::clone(&sampler), 0.0, step),
@@ -227,7 +255,10 @@ fn p6_02_drop_shadow() {
     let mut scene = Scene::new(DIM, DIM);
     scene.push_rect(16.0, 16.0, 48.0, 48.0, [1.0, 1.0, 1.0, 1.0]);
     scene.push_image_full(
-        18.0, 18.0, 50.0, 50.0,
+        18.0,
+        18.0,
+        50.0,
+        50.0,
         [0.0, 0.0, 1.0, 1.0],
         [0.1, 0.1, 0.1, 0.5],
         SHADOW_KEY,
@@ -238,7 +269,11 @@ fn p6_02_drop_shadow() {
     // Vello target: Rgba8Unorm storage with sRGB view-format slot.
     let target_tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("p6_02 target"),
-        size: wgpu::Extent3d { width: DIM, height: DIM, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: DIM,
+            height: DIM,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -256,7 +291,9 @@ fn p6_02_drop_shadow() {
 
     renderer.render_vello(&scene, &target_view, ColorLoad::Clear(wgpu::Color::BLACK));
 
-    let actual = renderer.wgpu_device.read_rgba8_texture(&target_tex, DIM, DIM);
+    let actual = renderer
+        .wgpu_device
+        .read_rgba8_texture(&target_tex, DIM, DIM);
 
     let oracle_path = oracle_dir().join("p6_02_drop_shadow.png");
     if should_regen() {

@@ -21,10 +21,7 @@
 //!   disappears from `scene.image_sources` is evicted from the
 //!   rasterizer's image cache.
 
-use netrender::{
-    ImageData, Scene, TileCache, boot,
-    vello_tile_rasterizer::VelloTileRasterizer,
-};
+use netrender::{ImageData, Scene, TileCache, boot, vello_tile_rasterizer::VelloTileRasterizer};
 use vello::peniko::Color;
 
 const TRANSPARENT: Color = Color::new([0.0, 0.0, 0.0, 0.0]);
@@ -71,7 +68,11 @@ fn assert_within_tol(actual: [u8; 4], expected: [u8; 4], tol: u8, where_: &str) 
     assert!(
         max <= tol,
         "{}: actual {:?}, expected {:?} (max channel diff = {}, tol = {})",
-        where_, actual, expected, max, tol
+        where_,
+        actual,
+        expected,
+        max,
+        tol
     );
 }
 
@@ -81,19 +82,29 @@ fn assert_within_tol(actual: [u8; 4], expected: [u8; 4], tol: u8, where_: &str) 
 #[test]
 fn p7prime_01_first_frame_all_tiles_dirty() {
     let handles = boot().expect("wgpu boot");
-    let mut rasterizer = VelloTileRasterizer::new(handles.clone())
-        .expect("VelloTileRasterizer::new");
+    let mut rasterizer =
+        VelloTileRasterizer::new(handles.clone()).expect("VelloTileRasterizer::new");
     let mut tc = TileCache::new(TILE_SIZE);
 
     let mut scene = Scene::new(VIEWPORT, VIEWPORT);
-    scene.push_rect(0.0, 0.0, VIEWPORT as f32, VIEWPORT as f32, [1.0, 0.0, 0.0, 1.0]);
+    scene.push_rect(
+        0.0,
+        0.0,
+        VIEWPORT as f32,
+        VIEWPORT as f32,
+        [1.0, 0.0, 0.0, 1.0],
+    );
 
     let (target, view) = make_target(&handles.device);
     rasterizer
         .render(&scene, &mut tc, &view, TRANSPARENT)
         .expect("render");
 
-    assert_eq!(rasterizer.last_dirty_count(), 4, "first frame: all 4 tiles dirty");
+    assert_eq!(
+        rasterizer.last_dirty_count(),
+        4,
+        "first frame: all 4 tiles dirty"
+    );
     assert_eq!(rasterizer.cached_tile_count(), 4);
 
     let wgpu_device = netrender_device::WgpuDevice::with_external(handles.clone())
@@ -102,7 +113,12 @@ fn p7prime_01_first_frame_all_tiles_dirty() {
 
     // Sample one interior pixel per tile + one corner.
     for &(x, y) in &[(16, 16), (96, 16), (16, 96), (96, 96), (64, 64)] {
-        assert_within_tol(read_pixel(&bytes, x, y), [255, 0, 0, 255], 0, &format!("({}, {})", x, y));
+        assert_within_tol(
+            read_pixel(&bytes, x, y),
+            [255, 0, 0, 255],
+            0,
+            &format!("({}, {})", x, y),
+        );
     }
 }
 
@@ -111,26 +127,43 @@ fn p7prime_01_first_frame_all_tiles_dirty() {
 #[test]
 fn p7prime_02_unchanged_scene_no_dirty() {
     let handles = boot().expect("wgpu boot");
-    let mut rasterizer = VelloTileRasterizer::new(handles.clone())
-        .expect("VelloTileRasterizer::new");
+    let mut rasterizer =
+        VelloTileRasterizer::new(handles.clone()).expect("VelloTileRasterizer::new");
     let mut tc = TileCache::new(TILE_SIZE);
 
     let mut scene = Scene::new(VIEWPORT, VIEWPORT);
-    scene.push_rect(0.0, 0.0, VIEWPORT as f32, VIEWPORT as f32, [0.0, 1.0, 0.0, 1.0]);
+    scene.push_rect(
+        0.0,
+        0.0,
+        VIEWPORT as f32,
+        VIEWPORT as f32,
+        [0.0, 1.0, 0.0, 1.0],
+    );
 
     let (target_a, view_a) = make_target(&handles.device);
-    rasterizer.render(&scene, &mut tc, &view_a, TRANSPARENT).expect("render 1");
+    rasterizer
+        .render(&scene, &mut tc, &view_a, TRANSPARENT)
+        .expect("render 1");
     assert_eq!(rasterizer.last_dirty_count(), 4);
 
     let (target_b, view_b) = make_target(&handles.device);
-    rasterizer.render(&scene, &mut tc, &view_b, TRANSPARENT).expect("render 2");
-    assert_eq!(rasterizer.last_dirty_count(), 0, "second frame: no tiles dirty");
+    rasterizer
+        .render(&scene, &mut tc, &view_b, TRANSPARENT)
+        .expect("render 2");
+    assert_eq!(
+        rasterizer.last_dirty_count(),
+        0,
+        "second frame: no tiles dirty"
+    );
 
     let wgpu_device = netrender_device::WgpuDevice::with_external(handles.clone())
         .expect("WgpuDevice::with_external");
     let bytes_a = wgpu_device.read_rgba8_texture(&target_a, VIEWPORT, VIEWPORT);
     let bytes_b = wgpu_device.read_rgba8_texture(&target_b, VIEWPORT, VIEWPORT);
-    assert_eq!(bytes_a, bytes_b, "second-frame output must match first-frame output");
+    assert_eq!(
+        bytes_a, bytes_b,
+        "second-frame output must match first-frame output"
+    );
 }
 
 /// Modify only the top-left rect's color: only its tile should be
@@ -138,23 +171,25 @@ fn p7prime_02_unchanged_scene_no_dirty() {
 #[test]
 fn p7prime_03_localized_change() {
     let handles = boot().expect("wgpu boot");
-    let mut rasterizer = VelloTileRasterizer::new(handles.clone())
-        .expect("VelloTileRasterizer::new");
+    let mut rasterizer =
+        VelloTileRasterizer::new(handles.clone()).expect("VelloTileRasterizer::new");
     let mut tc = TileCache::new(TILE_SIZE);
 
     // Four small rects, one per tile, no overlap.
     fn build_scene(top_left_color: [f32; 4]) -> Scene {
         let mut s = Scene::new(VIEWPORT, VIEWPORT);
-        s.push_rect(8.0,  8.0,   56.0, 56.0,  top_left_color);   // top-left tile
-        s.push_rect(72.0, 8.0,   120.0, 56.0, [0.0, 1.0, 0.0, 1.0]);
-        s.push_rect(8.0,  72.0,  56.0, 120.0, [0.0, 0.0, 1.0, 1.0]);
-        s.push_rect(72.0, 72.0,  120.0, 120.0, [1.0, 1.0, 0.0, 1.0]);
+        s.push_rect(8.0, 8.0, 56.0, 56.0, top_left_color); // top-left tile
+        s.push_rect(72.0, 8.0, 120.0, 56.0, [0.0, 1.0, 0.0, 1.0]);
+        s.push_rect(8.0, 72.0, 56.0, 120.0, [0.0, 0.0, 1.0, 1.0]);
+        s.push_rect(72.0, 72.0, 120.0, 120.0, [1.0, 1.0, 0.0, 1.0]);
         s
     }
 
-    let scene_a = build_scene([1.0, 0.0, 0.0, 1.0]);  // red
+    let scene_a = build_scene([1.0, 0.0, 0.0, 1.0]); // red
     let (_t1, v1) = make_target(&handles.device);
-    rasterizer.render(&scene_a, &mut tc, &v1, TRANSPARENT).expect("render 1");
+    rasterizer
+        .render(&scene_a, &mut tc, &v1, TRANSPARENT)
+        .expect("render 1");
     assert_eq!(rasterizer.last_dirty_count(), 4);
 
     // Now change ONLY the top-left rect to magenta. The other three
@@ -162,7 +197,9 @@ fn p7prime_03_localized_change() {
     // marks only one tile dirty.
     let scene_b = build_scene([1.0, 0.0, 1.0, 1.0]);
     let (_t2, v2) = make_target(&handles.device);
-    rasterizer.render(&scene_b, &mut tc, &v2, TRANSPARENT).expect("render 2");
+    rasterizer
+        .render(&scene_b, &mut tc, &v2, TRANSPARENT)
+        .expect("render 2");
     assert_eq!(
         rasterizer.last_dirty_count(),
         1,
@@ -177,17 +214,25 @@ fn p7prime_03_localized_change() {
 #[test]
 fn p7prime_04_spanning_primitive_no_double_render() {
     let handles = boot().expect("wgpu boot");
-    let mut rasterizer = VelloTileRasterizer::new(handles.clone())
-        .expect("VelloTileRasterizer::new");
+    let mut rasterizer =
+        VelloTileRasterizer::new(handles.clone()).expect("VelloTileRasterizer::new");
     let mut tc = TileCache::new(TILE_SIZE);
 
     let mut scene = Scene::new(VIEWPORT, VIEWPORT);
     // Premultiplied half-alpha red is (0.5, 0, 0, 0.5). With straight-
     // alpha storage (per p1prime_02), output bytes are (255, 0, 0, 128).
-    scene.push_rect(0.0, 0.0, VIEWPORT as f32, VIEWPORT as f32, [0.5, 0.0, 0.0, 0.5]);
+    scene.push_rect(
+        0.0,
+        0.0,
+        VIEWPORT as f32,
+        VIEWPORT as f32,
+        [0.5, 0.0, 0.0, 0.5],
+    );
 
     let (target, view) = make_target(&handles.device);
-    rasterizer.render(&scene, &mut tc, &view, TRANSPARENT).expect("render");
+    rasterizer
+        .render(&scene, &mut tc, &view, TRANSPARENT)
+        .expect("render");
 
     let wgpu_device = netrender_device::WgpuDevice::with_external(handles.clone())
         .expect("WgpuDevice::with_external");
@@ -198,7 +243,15 @@ fn p7prime_04_spanning_primitive_no_double_render() {
     // overlapping tiles, the border-adjacent pixels would have
     // different alpha than the interior. Per-tile clip layers
     // prevent that.
-    for &(x, y) in &[(32, 32), (63, 32), (64, 32), (65, 32), (96, 32), (32, 64), (96, 96)] {
+    for &(x, y) in &[
+        (32, 32),
+        (63, 32),
+        (64, 32),
+        (65, 32),
+        (96, 32),
+        (32, 64),
+        (96, 96),
+    ] {
         assert_within_tol(
             read_pixel(&bytes, x, y),
             [255, 0, 0, 128],
@@ -214,8 +267,7 @@ fn one_pixel_image() -> ImageData {
         2,
         2,
         vec![
-            255, 0, 0, 255,  255, 0, 0, 255,
-            255, 0, 0, 255,  255, 0, 0, 255,
+            255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255,
         ],
     )
 }
@@ -230,8 +282,8 @@ const TEST_IMG_KEY: u64 = 0xa11ce;
 #[test]
 fn p7prime_05_image_cache_persists_across_frames() {
     let handles = boot().expect("wgpu boot");
-    let mut rasterizer = VelloTileRasterizer::new(handles.clone())
-        .expect("VelloTileRasterizer::new");
+    let mut rasterizer =
+        VelloTileRasterizer::new(handles.clone()).expect("VelloTileRasterizer::new");
     let mut tc = TileCache::new(TILE_SIZE);
 
     let mut scene = Scene::new(VIEWPORT, VIEWPORT);
@@ -239,7 +291,9 @@ fn p7prime_05_image_cache_persists_across_frames() {
     scene.push_image(16.0, 16.0, 48.0, 48.0, TEST_IMG_KEY, one_pixel_image());
 
     let (_t1, v1) = make_target(&handles.device);
-    rasterizer.render(&scene, &mut tc, &v1, TRANSPARENT).expect("render 1");
+    rasterizer
+        .render(&scene, &mut tc, &v1, TRANSPARENT)
+        .expect("render 1");
     let id1 = rasterizer
         .cached_image_blob_id(TEST_IMG_KEY)
         .expect("cache populated after first render");
@@ -247,18 +301,27 @@ fn p7prime_05_image_cache_persists_across_frames() {
     // Frame 2: same Scene reference, no dirty tiles. Cache must
     // hold the same Blob (id stable).
     let (_t2, v2) = make_target(&handles.device);
-    rasterizer.render(&scene, &mut tc, &v2, TRANSPARENT).expect("render 2");
+    rasterizer
+        .render(&scene, &mut tc, &v2, TRANSPARENT)
+        .expect("render 2");
     let id2 = rasterizer.cached_image_blob_id(TEST_IMG_KEY).unwrap();
-    assert_eq!(id1, id2, "Blob id must be stable across re-render of same Scene");
+    assert_eq!(
+        id1, id2,
+        "Blob id must be stable across re-render of same Scene"
+    );
 
     // Frame 3: brand-new Scene instance with the same ImageKey
     // (consumer pattern: rebuild Scene each frame). Cache survives
     // the Scene swap because it lives on the rasterizer.
     let mut scene_b = Scene::new(VIEWPORT, VIEWPORT);
-    scene_b.image_sources.insert(TEST_IMG_KEY, one_pixel_image());
+    scene_b
+        .image_sources
+        .insert(TEST_IMG_KEY, one_pixel_image());
     scene_b.push_image(20.0, 20.0, 60.0, 60.0, TEST_IMG_KEY, one_pixel_image());
     let (_t3, v3) = make_target(&handles.device);
-    rasterizer.render(&scene_b, &mut tc, &v3, TRANSPARENT).expect("render 3");
+    rasterizer
+        .render(&scene_b, &mut tc, &v3, TRANSPARENT)
+        .expect("render 3");
     let id3 = rasterizer.cached_image_blob_id(TEST_IMG_KEY).unwrap();
     assert_eq!(
         id1, id3,
@@ -272,15 +335,17 @@ fn p7prime_05_image_cache_persists_across_frames() {
 #[test]
 fn p7prime_06_image_cache_evicts_on_key_drop() {
     let handles = boot().expect("wgpu boot");
-    let mut rasterizer = VelloTileRasterizer::new(handles.clone())
-        .expect("VelloTileRasterizer::new");
+    let mut rasterizer =
+        VelloTileRasterizer::new(handles.clone()).expect("VelloTileRasterizer::new");
     let mut tc = TileCache::new(TILE_SIZE);
 
     let mut scene = Scene::new(VIEWPORT, VIEWPORT);
     scene.image_sources.insert(TEST_IMG_KEY, one_pixel_image());
     scene.push_image(16.0, 16.0, 48.0, 48.0, TEST_IMG_KEY, one_pixel_image());
     let (_t1, v1) = make_target(&handles.device);
-    rasterizer.render(&scene, &mut tc, &v1, TRANSPARENT).expect("render 1");
+    rasterizer
+        .render(&scene, &mut tc, &v1, TRANSPARENT)
+        .expect("render 1");
     assert!(rasterizer.cached_image_blob_id(TEST_IMG_KEY).is_some());
 
     let scene_no_img = Scene::new(VIEWPORT, VIEWPORT);

@@ -21,10 +21,7 @@
 //!   (sRGB-encoded midpoint of red→blue).
 
 use netrender::{Scene, boot, vello_rasterizer::scene_to_vello};
-use vello::{
-    AaConfig, AaSupport, RenderParams, Renderer, RendererOptions,
-    peniko::Color,
-};
+use vello::{AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, peniko::Color};
 
 const DIM: u32 = 64;
 
@@ -89,7 +86,11 @@ fn assert_within_tol(actual: [u8; 4], expected: [u8; 4], tol: u8, where_: &str) 
     assert!(
         max <= tol,
         "{}: actual {:?}, expected {:?} (max channel diff = {}, tol = {})",
-        where_, actual, expected, max, tol
+        where_,
+        actual,
+        expected,
+        max,
+        tol
     );
 }
 
@@ -116,11 +117,14 @@ fn render_scene(scene: &Scene) -> Vec<u8> {
 fn p8prime_01_linear_red_to_blue() {
     let mut scene = Scene::new(DIM, DIM);
     scene.push_linear_gradient(
-        0.0, 0.0, DIM as f32, DIM as f32,
+        0.0,
+        0.0,
+        DIM as f32,
+        DIM as f32,
         [0.0, (DIM as f32) / 2.0],
         [DIM as f32, (DIM as f32) / 2.0],
-        [1.0, 0.0, 0.0, 1.0],   // premultiplied red
-        [0.0, 0.0, 1.0, 1.0],   // premultiplied blue
+        [1.0, 0.0, 0.0, 1.0], // premultiplied red
+        [0.0, 0.0, 1.0, 1.0], // premultiplied blue
     );
 
     let bytes = render_scene(&scene);
@@ -152,11 +156,14 @@ fn p8prime_02_radial_circular_red_to_transparent() {
     let mut scene = Scene::new(DIM, DIM);
     let r = (DIM as f32) / 2.0;
     scene.push_radial_gradient(
-        0.0, 0.0, DIM as f32, DIM as f32,
+        0.0,
+        0.0,
+        DIM as f32,
+        DIM as f32,
         [r, r],
         [r, r],
-        [1.0, 0.0, 0.0, 1.0],  // premultiplied red, opaque, at center
-        [0.0, 0.0, 0.0, 0.0],  // transparent at boundary
+        [1.0, 0.0, 0.0, 1.0], // premultiplied red, opaque, at center
+        [0.0, 0.0, 0.0, 0.0], // transparent at boundary
     );
 
     let bytes = render_scene(&scene);
@@ -198,11 +205,14 @@ fn p8prime_04_radial_elliptical() {
     let rx = (DIM as f32) / 2.0;
     let ry = (DIM as f32) / 4.0;
     scene.push_radial_gradient(
-        0.0, 0.0, DIM as f32, DIM as f32,
+        0.0,
+        0.0,
+        DIM as f32,
+        DIM as f32,
         [cx, cy],
         [rx, ry],
-        [1.0, 0.0, 0.0, 1.0],  // red opaque at center
-        [0.0, 0.0, 0.0, 0.0],  // transparent at boundary
+        [1.0, 0.0, 0.0, 1.0], // red opaque at center
+        [0.0, 0.0, 0.0, 0.0], // transparent at boundary
     );
 
     let bytes = render_scene(&scene);
@@ -248,7 +258,8 @@ fn p8prime_04_radial_elliptical() {
     assert!(
         outside[3] < 8,
         "outside ellipse at ({}, 16): {:?} not transparent",
-        DIM - 1, outside
+        DIM - 1,
+        outside
     );
 }
 
@@ -261,11 +272,14 @@ fn p8prime_04_radial_elliptical() {
 fn p8prime_03_conic_red_to_blue_seam_zero() {
     let mut scene = Scene::new(DIM, DIM);
     scene.push_conic_gradient(
-        0.0, 0.0, DIM as f32, DIM as f32,
+        0.0,
+        0.0,
+        DIM as f32,
+        DIM as f32,
         [(DIM as f32) / 2.0, (DIM as f32) / 2.0],
         0.0,
-        [1.0, 0.0, 0.0, 1.0],   // red at t=0
-        [0.0, 0.0, 1.0, 1.0],   // blue at t=1
+        [1.0, 0.0, 0.0, 1.0], // red at t=0
+        [0.0, 0.0, 1.0, 1.0], // blue at t=1
     );
 
     let bytes = render_scene(&scene);

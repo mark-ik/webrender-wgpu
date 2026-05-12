@@ -10,9 +10,7 @@
 //! Both share the `kurbo::Shape::contains` machinery; tests are
 //! grouped here for cohesion.
 
-use netrender::scene::{
-    Scene, SceneClip, ScenePath, SHARP_CLIP, Transform,
-};
+use netrender::scene::{Scene, SceneClip, ScenePath, SHARP_CLIP, Transform};
 use netrender::{hit_test, hit_test_topmost};
 
 // ── R2: Shape op path-precise ────────────────────────────────────────
@@ -176,8 +174,14 @@ fn r3_sharp_rect_clip_unchanged_by_r3_refactor() {
     scene.push_rect(0.0, 0.0, 200.0, 200.0, [1.0, 0.0, 0.0, 1.0]);
     scene.ops.push(netrender::scene::SceneOp::PopLayer);
 
-    assert!(hit_test_topmost(&scene, [50.0, 50.0]).is_some(), "center hits");
-    assert!(hit_test_topmost(&scene, [5.0, 5.0]).is_none(), "outside clip rect misses");
+    assert!(
+        hit_test_topmost(&scene, [50.0, 50.0]).is_some(),
+        "center hits"
+    );
+    assert!(
+        hit_test_topmost(&scene, [5.0, 5.0]).is_none(),
+        "outside clip rect misses"
+    );
 }
 
 #[test]
@@ -194,5 +198,8 @@ fn r2_r3_combined_shape_inside_path_clipped_layer() {
     let centroid_hits = hit_test(&scene, [50.0, 33.0]);
     assert!(!centroid_hits.is_empty(), "centroid hits");
     let corner_hits = hit_test(&scene, [95.0, 95.0]);
-    assert!(corner_hits.is_empty(), "AABB corner misses both shape and clip");
+    assert!(
+        corner_hits.is_empty(),
+        "AABB corner misses both shape and clip"
+    );
 }

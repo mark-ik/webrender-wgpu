@@ -43,7 +43,10 @@ mod gpu_smoke {
         use netrender::{ColorLoad, Scene};
         let mut scene = Scene::new(DIM, DIM);
         scene.push_image_full(
-            0.0, 0.0, DIM as f32, DIM as f32,
+            0.0,
+            0.0,
+            DIM as f32,
+            DIM as f32,
             [0.0, 0.0, 1.0, 1.0],
             [1.0, 1.0, 1.0, 1.0],
             1,
@@ -53,7 +56,11 @@ mod gpu_smoke {
 
         let target_texture = handles.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("pr5 target"),
-            size: wgpu::Extent3d { width: DIM, height: DIM, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: DIM,
+                height: DIM,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -68,7 +75,9 @@ mod gpu_smoke {
             ..Default::default()
         });
         renderer.render_vello(&scene, &target_view, ColorLoad::Clear(wgpu::Color::BLACK));
-        let bytes = renderer.wgpu_device.read_rgba8_texture(&target_texture, DIM, DIM);
+        let bytes = renderer
+            .wgpu_device
+            .read_rgba8_texture(&target_texture, DIM, DIM);
 
         let row = DIM / 2;
         let row_start = (row * DIM * 4) as usize;

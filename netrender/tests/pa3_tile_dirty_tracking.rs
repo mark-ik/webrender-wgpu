@@ -43,7 +43,10 @@ fn fresh_invalidate_dirties_every_visible_tile() {
     let recent = cache.recent_dirty_tiles(8);
     assert_eq!(recent.len(), 16, "all 16 tiles dirtied this frame");
     for (_, age) in &recent {
-        assert!(*age < f32::EPSILON, "age 0 expected for just-dirtied tiles, got {age}");
+        assert!(
+            *age < f32::EPSILON,
+            "age 0 expected for just-dirtied tiles, got {age}"
+        );
     }
 }
 
@@ -56,7 +59,10 @@ fn unchanged_tile_keeps_old_last_dirty_frame() {
     let _ = cache.invalidate(&scene);
     // Frame 2: same scene, no tiles change → all clean.
     let dirty = cache.invalidate(&scene);
-    assert!(dirty.is_empty(), "unchanged scene should report no dirty tiles");
+    assert!(
+        dirty.is_empty(),
+        "unchanged scene should report no dirty tiles"
+    );
 
     // last_dirty_frame for every tile is still 1; current_frame is 2.
     // age = 1, so age_frac = 1/window.
@@ -97,7 +103,11 @@ fn dirty_tile_has_age_zero_in_recent_list() {
         .map(|(_, age)| *age)
         .collect();
     assert_eq!(recent_at_1_1.len(), 1, "tile (1,1) found exactly once");
-    assert!(recent_at_1_1[0] < f32::EPSILON, "tile (1,1) is freshly dirty: {:?}", recent_at_1_1[0]);
+    assert!(
+        recent_at_1_1[0] < f32::EPSILON,
+        "tile (1,1) is freshly dirty: {:?}",
+        recent_at_1_1[0]
+    );
 }
 
 #[test]
@@ -114,14 +124,20 @@ fn aged_out_tiles_excluded_from_recent_list() {
     // Now current_frame = 4 and last_dirty_frame = 1 for all tiles
     // (age = 3). A window of 3 should *exclude* them (3 >= 3).
     let recent = cache.recent_dirty_tiles(3);
-    assert!(recent.is_empty(), "tiles dirtied 3 frames ago must be excluded by a 3-frame window");
+    assert!(
+        recent.is_empty(),
+        "tiles dirtied 3 frames ago must be excluded by a 3-frame window"
+    );
 
     // A window of 4 should include them at age_frac = 3/4.
     let recent = cache.recent_dirty_tiles(4);
     assert_eq!(recent.len(), 16);
     for (_, age) in &recent {
         let expected = 3.0 / 4.0;
-        assert!((age - expected).abs() < 1e-6, "expected {expected}, got {age}");
+        assert!(
+            (age - expected).abs() < 1e-6,
+            "expected {expected}, got {age}"
+        );
     }
 }
 

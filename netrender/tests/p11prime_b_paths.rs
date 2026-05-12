@@ -12,10 +12,7 @@
 //!     produce smooth curves (sample points along the curve)
 
 use netrender::{Scene, ScenePath, ScenePathStroke, SceneShape, boot, vello_rasterizer::scene_to_vello};
-use vello::{
-    AaConfig, AaSupport, RenderParams, Renderer, RendererOptions,
-    peniko::Color,
-};
+use vello::{AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, peniko::Color};
 
 const DIM: u32 = 64;
 
@@ -35,7 +32,11 @@ fn make_renderer(device: &wgpu::Device) -> Renderer {
 fn make_target(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("p11b target"),
-        size: wgpu::Extent3d { width: DIM, height: DIM, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: DIM,
+            height: DIM,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -68,10 +69,14 @@ fn render_scene(scene: &Scene) -> Vec<u8> {
     let (target, view) = make_target(device);
     renderer
         .render_to_texture(
-            device, queue, &vscene, &view,
+            device,
+            queue,
+            &vscene,
+            &view,
             &RenderParams {
                 base_color: Color::from_rgba8(0, 0, 0, 0),
-                width: DIM, height: DIM,
+                width: DIM,
+                height: DIM,
                 antialiasing_method: AaConfig::Area,
             },
         )
@@ -101,21 +106,24 @@ fn p11b_01_filled_triangle() {
     let inside = read_pixel(&bytes, 32, 37);
     assert!(
         inside[0] >= 240 && inside[3] >= 240,
-        "triangle centroid (32, 37): {:?} not opaque red", inside
+        "triangle centroid (32, 37): {:?} not opaque red",
+        inside
     );
 
     // Outside the triangle — top-left corner of canvas.
     let outside = read_pixel(&bytes, 4, 4);
     assert!(
         outside[3] < 8,
-        "outside (4, 4): {:?} should be empty", outside
+        "outside (4, 4): {:?} should be empty",
+        outside
     );
 
     // Just outside the bottom edge of the triangle.
     let below = read_pixel(&bytes, 32, 56);
     assert!(
         below[3] < 8,
-        "below triangle (32, 56): {:?} should be empty", below
+        "below triangle (32, 56): {:?} should be empty",
+        below
     );
 }
 
@@ -137,7 +145,8 @@ fn p11b_02_stroked_arrow() {
     let apex = read_pixel(&bytes, 32, 16);
     assert!(
         apex[2] >= 200 && apex[3] >= 200,
-        "apex (32, 16): {:?} not near opaque blue", apex
+        "apex (32, 16): {:?} not near opaque blue",
+        apex
     );
 
     // Mid-segment between the apex and the right endpoint.
@@ -145,14 +154,16 @@ fn p11b_02_stroked_arrow() {
     let mid_right = read_pixel(&bytes, 44, 24);
     assert!(
         mid_right[2] >= 200 && mid_right[3] >= 200,
-        "mid-right (44, 24): {:?} not near opaque blue", mid_right
+        "mid-right (44, 24): {:?} not near opaque blue",
+        mid_right
     );
 
     // Outside the stroke band — well below the arrow.
     let below = read_pixel(&bytes, 32, 48);
     assert!(
         below[3] < 8,
-        "below polyline (32, 48): {:?} should be empty", below
+        "below polyline (32, 48): {:?} should be empty",
+        below
     );
 }
 
@@ -188,7 +199,8 @@ fn p11b_03_filled_and_stroked() {
     let center = read_pixel(&bytes, 32, 32);
     assert!(
         center[1] >= 240 && center[3] >= 240,
-        "diamond center (32, 32): {:?} not opaque green", center
+        "diamond center (32, 32): {:?} not opaque green",
+        center
     );
 
     // On the right vertex (48, 32) — stroke goes through here, so
@@ -206,7 +218,8 @@ fn p11b_03_filled_and_stroked() {
     let outside = read_pixel(&bytes, 56, 8);
     assert!(
         outside[3] < 8,
-        "outside (56, 8): {:?} should be empty", outside
+        "outside (56, 8): {:?} should be empty",
+        outside
     );
 }
 
@@ -233,7 +246,8 @@ fn p11b_04_curved_path() {
     let start = read_pixel(&bytes, 8, 32);
     assert!(
         start[0] >= 200 && start[2] >= 200 && start[3] >= 200,
-        "start (8, 32): {:?} not near opaque magenta", start
+        "start (8, 32): {:?} not near opaque magenta",
+        start
     );
 
     // The cubic dips down toward (control point at y=48 pulls)
@@ -250,15 +264,21 @@ fn p11b_04_curved_path() {
                 break;
             }
         }
-        if hit { break; }
+        if hit {
+            break;
+        }
     }
-    assert!(hit, "no magenta paint found in the dip region (x=18..28, y=33..40)");
+    assert!(
+        hit,
+        "no magenta paint found in the dip region (x=18..28, y=33..40)"
+    );
 
     // Outside the curve — well above and below the y=32 line
     // far from any control influence.
     let outside = read_pixel(&bytes, 4, 4);
     assert!(
         outside[3] < 8,
-        "outside (4, 4): {:?} should be empty", outside
+        "outside (4, 4): {:?} should be empty",
+        outside
     );
 }

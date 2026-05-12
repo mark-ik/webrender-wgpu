@@ -24,8 +24,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use netrender::{
-    ColorLoad, ImageKey, NO_CLIP, NetrenderOptions, Renderer, RenderGraph, Scene,
-    Task, TaskId, boot, create_netrender_instance,
+    ColorLoad, ImageKey, NO_CLIP, NetrenderOptions, Renderer, RenderGraph, Scene, Task, TaskId,
+    boot, create_netrender_instance,
 };
 
 mod common;
@@ -39,11 +39,14 @@ fn make_renderer() -> Renderer {
     let handles = boot().expect("wgpu boot");
     create_netrender_instance(
         handles,
-        NetrenderOptions { tile_cache_size: Some(64), enable_vello: true, ..Default::default() },
+        NetrenderOptions {
+            tile_cache_size: Some(64),
+            enable_vello: true,
+            ..Default::default()
+        },
     )
     .expect("create_netrender_instance")
 }
-
 
 fn pixel(bytes: &[u8], width: u32, x: u32, y: u32) -> [u8; 4] {
     let i = ((y * width + x) * 4) as usize;
@@ -61,7 +64,9 @@ fn render_box_shadow_mask(
     let device = renderer.wgpu_device.core.device.clone();
     let queue = renderer.wgpu_device.core.queue.clone();
 
-    let clip_pipe = renderer.wgpu_device.ensure_clip_rectangle(MASK_FORMAT, true);
+    let clip_pipe = renderer
+        .wgpu_device
+        .ensure_clip_rectangle(MASK_FORMAT, true);
     let blur_pipe = renderer.wgpu_device.ensure_brush_blur(MASK_FORMAT);
     let sampler = make_bilinear_sampler(&device);
     let step = 1.0 / extent as f32;
@@ -73,21 +78,33 @@ fn render_box_shadow_mask(
     let mut graph = RenderGraph::new();
     graph.push(Task {
         id: MASK,
-        extent: wgpu::Extent3d { width: extent, height: extent, depth_or_array_layers: 1 },
+        extent: wgpu::Extent3d {
+            width: extent,
+            height: extent,
+            depth_or_array_layers: 1,
+        },
         format: MASK_FORMAT,
         inputs: vec![],
         encode: clip_rectangle_callback(clip_pipe, bounds, radius),
     });
     graph.push(Task {
         id: BLUR_H,
-        extent: wgpu::Extent3d { width: extent, height: extent, depth_or_array_layers: 1 },
+        extent: wgpu::Extent3d {
+            width: extent,
+            height: extent,
+            depth_or_array_layers: 1,
+        },
         format: MASK_FORMAT,
         inputs: vec![MASK],
         encode: blur_pass_callback(blur_pipe.clone(), Arc::clone(&sampler), step, 0.0),
     });
     graph.push(Task {
         id: BLUR_V,
-        extent: wgpu::Extent3d { width: extent, height: extent, depth_or_array_layers: 1 },
+        extent: wgpu::Extent3d {
+            width: extent,
+            height: extent,
+            depth_or_array_layers: 1,
+        },
         format: MASK_FORMAT,
         inputs: vec![BLUR_H],
         encode: blur_pass_callback(blur_pipe, Arc::clone(&sampler), 0.0, step),
@@ -95,7 +112,9 @@ fn render_box_shadow_mask(
 
     let mut outputs = graph.execute(&device, &queue, HashMap::new());
     let final_mask = outputs.remove(&BLUR_V).expect("BLUR_V output");
-    let bytes = renderer.wgpu_device.read_rgba8_texture(&final_mask, extent, extent);
+    let bytes = renderer
+        .wgpu_device
+        .read_rgba8_texture(&final_mask, extent, extent);
     (Arc::new(final_mask), bytes)
 }
 
@@ -198,7 +217,10 @@ fn p9b_02_drop_shadow_composite() {
     //   - Where mask is 0 (far outside): result is black.
     let mut scene = Scene::new(W, H);
     scene.push_image_full(
-        0.0, 0.0, W as f32, H as f32,
+        0.0,
+        0.0,
+        W as f32,
+        H as f32,
         [0.0, 0.0, 1.0, 1.0],
         [0.3, 0.3, 0.3, 0.999],
         SHADOW_KEY,

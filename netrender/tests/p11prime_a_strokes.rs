@@ -21,7 +21,11 @@ const TRANSPARENT: Color = Color::new([0.0, 0.0, 0.0, 0.0]);
 fn make_target(device: &wgpu::Device, dim: u32) -> (wgpu::Texture, wgpu::TextureView) {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("p11a target"),
-        size: wgpu::Extent3d { width: dim, height: dim, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: dim,
+            height: dim,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -53,8 +57,8 @@ fn render_scene(scene: &Scene) -> Vec<u8> {
     rast.render(scene, &mut tc, &view, TRANSPARENT)
         .expect("render");
 
-    let wgpu_device = netrender_device::WgpuDevice::with_external(handles.clone())
-        .expect("wgpu device");
+    let wgpu_device =
+        netrender_device::WgpuDevice::with_external(handles.clone()).expect("wgpu device");
     wgpu_device.read_rgba8_texture(&tex, scene.viewport_width, scene.viewport_height)
 }
 
@@ -68,8 +72,11 @@ fn render_scene(scene: &Scene) -> Vec<u8> {
 fn p11a_01_sharp_rect_border() {
     let mut scene = Scene::new(DIM, DIM);
     scene.push_stroke(
-        16.0, 16.0, 48.0, 48.0,
-        [1.0, 0.0, 0.0, 1.0],   // opaque red
+        16.0,
+        16.0,
+        48.0,
+        48.0,
+        [1.0, 0.0, 0.0, 1.0], // opaque red
         2.0,
     );
     let bytes = render_scene(&scene);
@@ -78,21 +85,24 @@ fn p11a_01_sharp_rect_border() {
     let edge = read_pixel(&bytes, DIM, 16, 32);
     assert!(
         edge[0] >= 240 && edge[3] >= 240,
-        "left edge (16, 32): {:?} not near opaque red", edge
+        "left edge (16, 32): {:?} not near opaque red",
+        edge
     );
 
     // Center of the box (interior, no fill, no stroke) — clear.
     let center = read_pixel(&bytes, DIM, 32, 32);
     assert!(
         center[3] < 8,
-        "interior (32, 32): {:?} should be empty (border doesn't fill)", center
+        "interior (32, 32): {:?} should be empty (border doesn't fill)",
+        center
     );
 
     // Outside everything — clear.
     let outside = read_pixel(&bytes, DIM, 4, 4);
     assert!(
         outside[3] < 8,
-        "outside (4, 4): {:?} should be empty", outside
+        "outside (4, 4): {:?} should be empty",
+        outside
     );
 }
 
@@ -105,10 +115,13 @@ fn p11a_01_sharp_rect_border() {
 fn p11a_02_rounded_rect_border() {
     let mut scene = Scene::new(DIM, DIM);
     scene.push_stroke_rounded(
-        12.0, 12.0, 52.0, 52.0,
-        [0.0, 1.0, 0.0, 1.0],   // opaque green
+        12.0,
+        12.0,
+        52.0,
+        52.0,
+        [0.0, 1.0, 0.0, 1.0], // opaque green
         4.0,
-        [8.0, 8.0, 8.0, 8.0],   // radius 8 on every corner
+        [8.0, 8.0, 8.0, 8.0], // radius 8 on every corner
     );
     let bytes = render_scene(&scene);
 
@@ -116,7 +129,8 @@ fn p11a_02_rounded_rect_border() {
     let edge = read_pixel(&bytes, DIM, 12, 32);
     assert!(
         edge[1] >= 200 && edge[3] >= 200,
-        "rounded mid-edge (12, 32): {:?} not near opaque green", edge
+        "rounded mid-edge (12, 32): {:?} not near opaque green",
+        edge
     );
 
     // Far corner pixel — outside the rounded arc.
@@ -131,7 +145,8 @@ fn p11a_02_rounded_rect_border() {
     let center = read_pixel(&bytes, DIM, 32, 32);
     assert!(
         center[3] < 8,
-        "rounded interior (32, 32): {:?} should be empty", center
+        "rounded interior (32, 32): {:?} should be empty",
+        center
     );
 }
 
@@ -143,8 +158,11 @@ fn p11a_03_border_under_transform() {
     let mut scene = Scene::new(DIM, DIM);
     let xform = scene.push_transform(Transform::translate_2d(10.0, 10.0));
     scene.push_stroke_full(
-        0.0, 0.0, 32.0, 32.0,
-        [0.0, 0.0, 1.0, 1.0],   // opaque blue
+        0.0,
+        0.0,
+        32.0,
+        32.0,
+        [0.0, 0.0, 1.0, 1.0], // opaque blue
         2.0,
         netrender::SHARP_CLIP,
         xform,
@@ -158,14 +176,16 @@ fn p11a_03_border_under_transform() {
     let translated_edge = read_pixel(&bytes, DIM, 10, 20);
     assert!(
         translated_edge[2] >= 240 && translated_edge[3] >= 240,
-        "translated edge (10, 20): {:?} not near opaque blue", translated_edge
+        "translated edge (10, 20): {:?} not near opaque blue",
+        translated_edge
     );
 
     // The original (untranslated) path location should be empty.
     let untranslated = read_pixel(&bytes, DIM, 0, 16);
     assert!(
         untranslated[3] < 8,
-        "untranslated location (0, 16): {:?} should be empty", untranslated
+        "untranslated location (0, 16): {:?} should be empty",
+        untranslated
     );
 }
 
@@ -182,8 +202,11 @@ fn p11a_04_inflated_aabb_for_tile_cache() {
     // right tile and 2 pixels into the left.
     let mut scene = Scene::new(DIM, DIM);
     scene.push_stroke(
-        32.0, 16.0, 32.0001, 48.0,  // a vertical segment at x = 32
-        [1.0, 1.0, 0.0, 1.0],       // yellow
+        32.0,
+        16.0,
+        32.0001,
+        48.0,                 // a vertical segment at x = 32
+        [1.0, 1.0, 0.0, 1.0], // yellow
         4.0,
     );
     let bytes = render_scene(&scene);

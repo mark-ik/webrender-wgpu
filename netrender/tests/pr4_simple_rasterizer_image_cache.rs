@@ -67,7 +67,9 @@ fn pr4_blob_id_preserved_across_calls() {
     // peniko.
     let mut scene = Scene::new(64, 64);
     let blob = Blob::new(Arc::new(vec![5u8; 16]));
-    scene.image_sources.insert(1, NetImageData::from_blob(2, 2, blob.clone()));
+    scene
+        .image_sources
+        .insert(1, NetImageData::from_blob(2, 2, blob.clone()));
 
     let mut r = VelloRasterizer::new();
     let _ = r.scene_to_vello(&scene);
@@ -123,8 +125,14 @@ fn pr4_register_unregister_texture_round_trips() {
     };
 
     r.register_texture(99, peniko_image.clone());
-    assert!(r.unregister_texture(99).is_some(), "registered key returns the entry");
-    assert!(r.unregister_texture(99).is_none(), "unregistering twice is None");
+    assert!(
+        r.unregister_texture(99).is_some(),
+        "registered key returns the entry"
+    );
+    assert!(
+        r.unregister_texture(99).is_none(),
+        "unregistering twice is None"
+    );
     assert!(
         r.unregister_texture(12345).is_none(),
         "unregistering an unknown key is None"

@@ -28,9 +28,7 @@
 //!                                  — changing root_alpha invalidates
 //!                                    cached tile-Scenes
 
-use netrender::{
-    ColorLoad, NetrenderOptions, Scene, SceneBlendMode, boot, create_netrender_instance,
-};
+use netrender::{ColorLoad, NetrenderOptions, Scene, SceneBlendMode, boot, create_netrender_instance};
 
 const DIM: u32 = 64;
 const TILE_SIZE: u32 = 32;
@@ -38,7 +36,11 @@ const TILE_SIZE: u32 = 32;
 fn make_target(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("p12a target"),
-        size: wgpu::Extent3d { width: DIM, height: DIM, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: DIM,
+            height: DIM,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -65,7 +67,11 @@ fn render_with_clear(scene: &Scene, clear: wgpu::Color) -> Vec<u8> {
     let handles = boot().expect("wgpu boot");
     let renderer = create_netrender_instance(
         handles.clone(),
-        NetrenderOptions { tile_cache_size: Some(TILE_SIZE), enable_vello: true, ..Default::default() },
+        NetrenderOptions {
+            tile_cache_size: Some(TILE_SIZE),
+            enable_vello: true,
+            ..Default::default()
+        },
     )
     .expect("renderer");
     let (target, view) = make_target(&handles.device);
@@ -96,7 +102,9 @@ fn p12a_01_root_alpha_fade() {
         assert!(
             max_diff <= 2,
             "root_alpha=0.5 ({}, {}): {:?} not near (255, 0, 0, 128)",
-            x, y, p
+            x,
+            y,
+            p
         );
     }
 }
@@ -138,7 +146,12 @@ fn p12a_03_root_blend_multiply() {
 
     let bytes = render_with_clear(
         &scene,
-        wgpu::Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 },  // red base
+        wgpu::Color {
+            r: 1.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+        }, // red base
     );
 
     // Multiply red × 50% gray. Result: dark red. Storage:
@@ -149,7 +162,9 @@ fn p12a_03_root_blend_multiply() {
         assert!(
             p[0] >= 100 && p[0] <= 160 && p[1] < 30 && p[2] < 30 && p[3] >= 240,
             "multiply blend ({}, {}): {:?} expected near (128, 0, 0, 255)",
-            x, y, p
+            x,
+            y,
+            p
         );
     }
 }

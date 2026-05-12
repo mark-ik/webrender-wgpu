@@ -58,7 +58,11 @@ fn render_mask(
     let mut graph = RenderGraph::new();
     graph.push(Task {
         id: MASK,
-        extent: wgpu::Extent3d { width: extent, height: extent, depth_or_array_layers: 1 },
+        extent: wgpu::Extent3d {
+            width: extent,
+            height: extent,
+            depth_or_array_layers: 1,
+        },
         format: MASK_FORMAT,
         inputs: vec![],
         encode: clip_rectangle_callback(pipe, bounds, radius),
@@ -66,7 +70,9 @@ fn render_mask(
 
     let mut outputs = graph.execute(&device, &queue, HashMap::new());
     let tex = outputs.remove(&MASK).expect("mask output");
-    let bytes = renderer.wgpu_device.read_rgba8_texture(&tex, extent, extent);
+    let bytes = renderer
+        .wgpu_device
+        .read_rgba8_texture(&tex, extent, extent);
     let _ = Arc::new(tex);
     bytes
 }

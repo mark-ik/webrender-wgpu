@@ -19,9 +19,7 @@ use std::sync::Arc;
 use std::thread;
 
 use netrender::peniko::Blob;
-use netrender::scene::{
-    FontBlob, Glyph, ImageData, Scene, SceneFragment, SceneOp, Transform,
-};
+use netrender::scene::{FontBlob, Glyph, ImageData, Scene, SceneFragment, SceneOp, Transform};
 
 #[test]
 fn pe2_empty_fragment_appends_cleanly() {
@@ -35,11 +33,7 @@ fn pe2_empty_fragment_appends_cleanly() {
     // Empty fragment shouldn't change the op count or the rendered
     // structure. Ops count stays the same; transforms / fonts may
     // have been "extended by zero" which is also a no-op.
-    assert_eq!(
-        scene.ops.len(),
-        1,
-        "empty fragment doesn't add ops"
-    );
+    assert_eq!(scene.ops.len(), 1, "empty fragment doesn't add ops");
     // Header counts may differ (palette could grow if we appended
     // identity twice — but skip(1) prevents that). Verify.
     assert!(
@@ -71,7 +65,10 @@ fn pe2_single_fragment_remaps_transform_ids() {
     let mut frag = SceneFragment::new();
     let frag_xf = frag.push_transform(Transform::translate_2d(20.0, 0.0)); // frag id 1
     frag.ops.push(SceneOp::Rect(netrender::scene::SceneRect {
-        x0: 0.0, y0: 0.0, x1: 10.0, y1: 10.0,
+        x0: 0.0,
+        y0: 0.0,
+        x1: 10.0,
+        y1: 10.0,
         color: [0.0, 1.0, 0.0, 1.0],
         transform_id: frag_xf,
         clip_rect: netrender::NO_CLIP,
@@ -121,16 +118,21 @@ fn pe2_sentinel_font_stays_at_zero() {
     });
     assert_eq!(real_font, 1, "first real font in fragment is id 1");
 
-    frag.ops.push(SceneOp::GlyphRun(netrender::scene::SceneGlyphRun {
-        font_id: real_font,
-        font_size: 16.0,
-        glyphs: vec![Glyph { id: 1, x: 0.0, y: 0.0 }],
-        color: [1.0; 4],
-        transform_id: 0,
-        clip_rect: netrender::NO_CLIP,
-        clip_corner_radii: netrender::SHARP_CLIP,
-        font_axis_values: Vec::new(),
-    }));
+    frag.ops
+        .push(SceneOp::GlyphRun(netrender::scene::SceneGlyphRun {
+            font_id: real_font,
+            font_size: 16.0,
+            glyphs: vec![Glyph {
+                id: 1,
+                x: 0.0,
+                y: 0.0,
+            }],
+            color: [1.0; 4],
+            transform_id: 0,
+            clip_rect: netrender::NO_CLIP,
+            clip_corner_radii: netrender::SHARP_CLIP,
+            font_axis_values: Vec::new(),
+        }));
 
     let scene_old_fonts = scene.fonts.len();
     scene.append_fragment(frag);
@@ -151,7 +153,10 @@ fn pe2_two_fragments_keep_their_transforms_separate() {
     let mut frag_a = SceneFragment::new();
     let xf_a = frag_a.push_transform(Transform::translate_2d(10.0, 0.0));
     frag_a.ops.push(SceneOp::Rect(netrender::scene::SceneRect {
-        x0: 0.0, y0: 0.0, x1: 10.0, y1: 10.0,
+        x0: 0.0,
+        y0: 0.0,
+        x1: 10.0,
+        y1: 10.0,
         color: [1.0, 0.0, 0.0, 1.0],
         transform_id: xf_a,
         clip_rect: netrender::NO_CLIP,
@@ -161,7 +166,10 @@ fn pe2_two_fragments_keep_their_transforms_separate() {
     let mut frag_b = SceneFragment::new();
     let xf_b = frag_b.push_transform(Transform::translate_2d(20.0, 0.0));
     frag_b.ops.push(SceneOp::Rect(netrender::scene::SceneRect {
-        x0: 0.0, y0: 0.0, x1: 10.0, y1: 10.0,
+        x0: 0.0,
+        y0: 0.0,
+        x1: 10.0,
+        y1: 10.0,
         color: [0.0, 1.0, 0.0, 1.0],
         transform_id: xf_b,
         clip_rect: netrender::NO_CLIP,
@@ -204,7 +212,9 @@ fn pe2_image_keys_overwrite_on_collision() {
 #[test]
 fn pe2_image_keys_disjoint_dont_collide() {
     let mut scene = Scene::new(100, 100);
-    scene.image_sources.insert(1, ImageData::from_bytes(2, 2, vec![10u8; 16]));
+    scene
+        .image_sources
+        .insert(1, ImageData::from_bytes(2, 2, vec![10u8; 16]));
 
     let mut frag = SceneFragment::new();
     frag.set_image_source(2, ImageData::from_bytes(2, 2, vec![20u8; 16]));
@@ -246,8 +256,10 @@ fn pe2_parallel_fragments_join_deterministically() {
         })
         .collect();
 
-    let fragments: Vec<SceneFragment> =
-        handles.into_iter().map(|h| h.join().expect("thread panic")).collect();
+    let fragments: Vec<SceneFragment> = handles
+        .into_iter()
+        .map(|h| h.join().expect("thread panic"))
+        .collect();
 
     let mut scene = Scene::new(100, 100);
     for frag in fragments {

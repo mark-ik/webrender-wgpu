@@ -18,9 +18,7 @@
 //!     `blur_radius_px` produces visibly more spread than a small
 //!     one, exercising the multi-pass cascade in build_box_shadow_mask.
 
-use netrender::{
-    ColorLoad, NetrenderOptions, Scene, boot, create_netrender_instance,
-};
+use netrender::{ColorLoad, NetrenderOptions, Scene, boot, create_netrender_instance};
 
 const DIM: u32 = 64;
 const TILE_SIZE: u32 = 64;
@@ -28,7 +26,11 @@ const TILE_SIZE: u32 = 64;
 fn make_target(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("p11c target"),
-        size: wgpu::Extent3d { width: DIM, height: DIM, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: DIM,
+            height: DIM,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -60,7 +62,11 @@ fn p11c_01_card_with_drop_shadow() {
     let handles = boot().expect("wgpu boot");
     let renderer = create_netrender_instance(
         handles.clone(),
-        NetrenderOptions { tile_cache_size: Some(TILE_SIZE), enable_vello: true, ..Default::default() },
+        NetrenderOptions {
+            tile_cache_size: Some(TILE_SIZE),
+            enable_vello: true,
+            ..Default::default()
+        },
     )
     .expect("create_netrender_instance");
 
@@ -69,30 +75,31 @@ fn p11c_01_card_with_drop_shadow() {
     renderer.build_box_shadow_mask(
         SHADOW_KEY,
         DIM,
-        [16.0, 16.0, 48.0, 48.0],     // shadow source bounds
-        4.0,                           // corner radius
-        2.0,                           // blur radius (CSS px); was step=1/DIM ≈ σ=1
+        [16.0, 16.0, 48.0, 48.0], // shadow source bounds
+        4.0,                      // corner radius
+        2.0,                      // blur radius (CSS px); was step=1/DIM ≈ σ=1
     );
 
     // Step 2: build a scene compositing the shadow under a white card.
     let mut scene = Scene::new(DIM, DIM);
     scene.push_image_full(
-        18.0, 18.0, 50.0, 50.0,        // shadow placement (offset +2,+2)
-        [0.0, 0.0, 1.0, 1.0],          // full UV
-        [0.1, 0.1, 0.1, 0.5],          // dark gray, 50% alpha
+        18.0,
+        18.0,
+        50.0,
+        50.0,                 // shadow placement (offset +2,+2)
+        [0.0, 0.0, 1.0, 1.0], // full UV
+        [0.1, 0.1, 0.1, 0.5], // dark gray, 50% alpha
         SHADOW_KEY,
         0,
         netrender::NO_CLIP,
     );
-    scene.push_rect(16.0, 16.0, 48.0, 48.0, [1.0, 1.0, 1.0, 1.0]);  // white card
+    scene.push_rect(16.0, 16.0, 48.0, 48.0, [1.0, 1.0, 1.0, 1.0]); // white card
 
     // Step 3: render.
     let (target, view) = make_target(&handles.device);
     renderer.render_vello(&scene, &view, ColorLoad::Clear(wgpu::Color::BLACK));
 
-    let bytes = renderer
-        .wgpu_device
-        .read_rgba8_texture(&target, DIM, DIM);
+    let bytes = renderer.wgpu_device.read_rgba8_texture(&target, DIM, DIM);
 
     // Wait — image renders ON TOP of rect (painter order is rects →
     // images), so the shadow image actually paints OVER the white
@@ -118,7 +125,8 @@ fn p11c_01_card_with_drop_shadow() {
     let bg = read_pixel(&bytes, 4, 4);
     assert!(
         bg[3] >= 240 && bg[0] < 16 && bg[1] < 16 && bg[2] < 16,
-        "far background (4, 4): {:?} should be opaque black", bg
+        "far background (4, 4): {:?} should be opaque black",
+        bg
     );
 
     // Bottom-right halo — pixel (49, 49) is just outside the card
@@ -128,11 +136,13 @@ fn p11c_01_card_with_drop_shadow() {
     let halo = read_pixel(&bytes, 49, 49);
     assert!(
         halo[3] >= 240,
-        "halo (49, 49): {:?} should be opaque (over black bg)", halo
+        "halo (49, 49): {:?} should be opaque (over black bg)",
+        halo
     );
     assert!(
         halo[0] < 80 && halo[1] < 80 && halo[2] < 80,
-        "halo (49, 49): {:?} should be dark gray (shadow over black)", halo
+        "halo (49, 49): {:?} should be dark gray (shadow over black)",
+        halo
     );
 
     // Far halo — pixel (52, 52). The blur extends a few pixels
@@ -140,7 +150,8 @@ fn p11c_01_card_with_drop_shadow() {
     let far_halo = read_pixel(&bytes, 52, 52);
     assert!(
         far_halo[3] >= 240,
-        "far halo (52, 52): {:?} should be opaque (over black bg)", far_halo
+        "far halo (52, 52): {:?} should be opaque (over black bg)",
+        far_halo
     );
 }
 
@@ -159,7 +170,11 @@ fn p11c_02_blur_radius_extends_halo() {
     fn make_target_d(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("p11c_02 target"),
-            size: wgpu::Extent3d { width: D, height: D, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: D,
+                height: D,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -186,7 +201,11 @@ fn p11c_02_blur_radius_extends_halo() {
         let handles = boot().expect("wgpu boot");
         let renderer = create_netrender_instance(
             handles.clone(),
-            NetrenderOptions { tile_cache_size: Some(TILE), enable_vello: true, ..Default::default() },
+            NetrenderOptions {
+                tile_cache_size: Some(TILE),
+                enable_vello: true,
+                ..Default::default()
+            },
         )
         .expect("create_netrender_instance");
 
@@ -196,7 +215,10 @@ fn p11c_02_blur_radius_extends_halo() {
 
         let mut scene = Scene::new(D, D);
         scene.push_image_full(
-            0.0, 0.0, D as f32, D as f32,
+            0.0,
+            0.0,
+            D as f32,
+            D as f32,
             [0.0, 0.0, 1.0, 1.0],
             [0.0, 0.0, 0.0, 1.0], // opaque-black tint, full-coverage shadow
             KEY,
@@ -240,6 +262,8 @@ fn p11c_02_blur_radius_extends_halo() {
         darkening >= 25,
         "large blur should be ≥ 25 levels darker than small at probe; \
          small={:?} large={:?} (delta={})",
-        small_probe, large_probe, darkening,
+        small_probe,
+        large_probe,
+        darkening,
     );
 }

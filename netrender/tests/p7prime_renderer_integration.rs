@@ -30,8 +30,8 @@ fn oracle_dir() -> PathBuf {
 }
 
 fn read_png(path: &Path) -> (u32, u32, Vec<u8>) {
-    let file = std::fs::File::open(path)
-        .unwrap_or_else(|e| panic!("opening {}: {}", path.display(), e));
+    let file =
+        std::fs::File::open(path).unwrap_or_else(|e| panic!("opening {}: {}", path.display(), e));
     let dec = png::Decoder::new(std::io::BufReader::new(file));
     let mut reader = dec.read_info().expect("png read_info");
     let info = reader.info();
@@ -72,7 +72,11 @@ fn assert_matches_oracle(name: &str, actual: &[u8]) {
     let oracle_path = oracle_dir().join(format!("{name}.png"));
     let (ow, oh, oracle) = read_png(&oracle_path);
     assert_eq!((ow, oh), (DIM, DIM), "{name}: oracle size mismatch");
-    assert_eq!(actual.len(), oracle.len(), "{name}: readback length mismatch");
+    assert_eq!(
+        actual.len(),
+        oracle.len(),
+        "{name}: readback length mismatch"
+    );
     let mut diff_count = 0usize;
     let mut max_diff = 0u8;
     for (i, (a, b)) in actual.iter().zip(oracle.iter()).enumerate() {
@@ -83,7 +87,10 @@ fn assert_matches_oracle(name: &str, actual: &[u8]) {
                 let pi = i / 4;
                 let (x, y) = (pi as u32 % ow, pi as u32 / ow);
                 let chan = ['R', 'G', 'B', 'A'][i % 4];
-                eprintln!("  {} ({}, {}): {} actual {} oracle {}", name, x, y, chan, *a, *b);
+                eprintln!(
+                    "  {} ({}, {}): {} actual {} oracle {}",
+                    name, x, y, chan, *a, *b
+                );
             }
         }
         max_diff = max_diff.max(d);
@@ -110,9 +117,7 @@ fn render_through_renderer(scene: &Scene) -> Vec<u8> {
     let (target, view) = make_target(&device);
     renderer.render_vello(scene, &view, ColorLoad::default());
 
-    renderer
-        .wgpu_device
-        .read_rgba8_texture(&target, DIM, DIM)
+    renderer.wgpu_device.read_rgba8_texture(&target, DIM, DIM)
 }
 
 /// Full-canvas opaque red rect, byte-exact match against the

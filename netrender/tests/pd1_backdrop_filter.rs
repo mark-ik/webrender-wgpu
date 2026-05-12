@@ -12,9 +12,7 @@
 //!    filter. The receipt the roadmap calls for: "frosted-glass nav
 //!    bar over a busy background."
 
-use netrender::scene::{
-    Scene, SceneClip, SceneFilter, SceneLayer, SceneOp,
-};
+use netrender::scene::{Scene, SceneClip, SceneFilter, SceneLayer, SceneOp};
 use netrender::tile_cache::TileCache;
 
 const TILE: u32 = 32;
@@ -22,7 +20,10 @@ const TILE: u32 = 32;
 #[test]
 fn pd1_backdrop_filter_default_is_none() {
     let layer = SceneLayer::clip(SceneClip::None);
-    assert!(layer.backdrop_filter.is_none(), "no backdrop filter by default");
+    assert!(
+        layer.backdrop_filter.is_none(),
+        "no backdrop filter by default"
+    );
     let layer = SceneLayer::alpha(0.5);
     assert!(layer.backdrop_filter.is_none());
 }
@@ -78,9 +79,7 @@ fn pd1_changing_blur_radius_invalidates_tile_hash() {
 // ── GPU smoke ─────────────────────────────────────────────────────────
 
 mod gpu_smoke {
-    use netrender::scene::{
-        Scene, SceneClip, SceneFilter, SceneLayer, SceneOp,
-    };
+    use netrender::scene::{Scene, SceneClip, SceneFilter, SceneLayer, SceneOp};
     use netrender::{boot, create_netrender_instance, ColorLoad, NetrenderOptions};
 
     const DIM: u32 = 256;
@@ -89,7 +88,11 @@ mod gpu_smoke {
     fn make_target(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("pd1 target"),
-            size: wgpu::Extent3d { width: DIM, height: DIM, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: DIM,
+                height: DIM,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -168,8 +171,14 @@ mod gpu_smoke {
         // Reference: busy stripes, no backdrop filter.
         let reference_scene = busy_scene();
         let (ref_target, ref_view) = make_target(&handles.device);
-        renderer.render_vello(&reference_scene, &ref_view, ColorLoad::Clear(wgpu::Color::BLACK));
-        let ref_bytes = renderer.wgpu_device.read_rgba8_texture(&ref_target, DIM, DIM);
+        renderer.render_vello(
+            &reference_scene,
+            &ref_view,
+            ColorLoad::Clear(wgpu::Color::BLACK),
+        );
+        let ref_bytes = renderer
+            .wgpu_device
+            .read_rgba8_texture(&ref_target, DIM, DIM);
 
         // Filtered: same stripes, with a layer carrying backdrop
         // Blur(12) covering a horizontal band. The band should
@@ -188,7 +197,9 @@ mod gpu_smoke {
 
         let (filt_target, filt_view) = make_target(&handles.device);
         renderer.render_vello(&filtered, &filt_view, ColorLoad::Clear(wgpu::Color::BLACK));
-        let filt_bytes = renderer.wgpu_device.read_rgba8_texture(&filt_target, DIM, DIM);
+        let filt_bytes = renderer
+            .wgpu_device
+            .read_rgba8_texture(&filt_target, DIM, DIM);
 
         let band_y = 128_u32;
         let ref_var = local_variance(&ref_bytes, band_y, 32, DIM - 32);

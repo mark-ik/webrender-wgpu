@@ -32,9 +32,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use netrender::{
-    ColorLoad, ImageData, NetrenderOptions, Scene, boot, create_netrender_instance,
-};
+use netrender::{ColorLoad, ImageData, NetrenderOptions, Scene, boot, create_netrender_instance};
 use netrender_text::parley::{
     Alignment, AlignmentOptions, FontContext, FontFamily, Layout, LayoutContext, StyleProperty,
     fontique,
@@ -162,21 +160,20 @@ impl TextShaper {
         size: f32,
         color: [f32; 4],
     ) {
-        let mut builder = self.layout_cx.ranged_builder(&mut self.font_cx, text, 1.0, true);
+        let mut builder = self
+            .layout_cx
+            .ranged_builder(&mut self.font_cx, text, 1.0, true);
         builder.push_default(StyleProperty::FontSize(size));
         builder.push_default(StyleProperty::Brush(color));
-        builder.push_default(StyleProperty::FontFamily(FontFamily::named(&self.family_name)));
+        builder.push_default(StyleProperty::FontFamily(FontFamily::named(
+            &self.family_name,
+        )));
         let mut layout: Layout<[f32; 4]> = builder.build(text);
         // Single-line labels: pass the card width as max so any
         // wrapping (none here, but defensive) lands cleanly inside.
         layout.break_all_lines(Some(CARD_W));
         layout.align(Some(CARD_W), Alignment::Start, AlignmentOptions::default());
-        netrender_text::push_layout_with_registry(
-            scene,
-            &mut self.font_registry,
-            &layout,
-            [x, y],
-        );
+        netrender_text::push_layout_with_registry(scene, &mut self.font_registry, &layout, [x, y]);
     }
 }
 
@@ -212,14 +209,24 @@ fn build_cards(
     {
         let r = card_rect(0, 0);
         scene.push_rect_clipped_rounded(
-            r[0], r[1], r[2], r[3],
+            r[0],
+            r[1],
+            r[2],
+            r[3],
             opaque(0.22, 0.30, 0.45),
             0,
             r,
             [RADIUS; 4],
         );
         if let Some(s) = shaper.as_mut() {
-            s.push_label(scene, "Rounded", r[0] + 14.0, r[3] - 32.0, LABEL_SIZE, LABEL_COLOR);
+            s.push_label(
+                scene,
+                "Rounded",
+                r[0] + 14.0,
+                r[3] - 32.0,
+                LABEL_SIZE,
+                LABEL_COLOR,
+            );
         }
     }
 
@@ -227,7 +234,10 @@ fn build_cards(
     {
         let r = card_rect(1, 0);
         scene.push_rect_clipped_rounded(
-            r[0], r[1], r[2], r[3],
+            r[0],
+            r[1],
+            r[2],
+            r[3],
             opaque(0.18, 0.36, 0.30),
             0,
             r,
@@ -236,13 +246,23 @@ fn build_cards(
         // Stroke is 2px wide; netrender expands its extent inward
         // to keep within the card rect (per stroke filter inflate).
         scene.push_stroke_rounded(
-            r[0], r[1], r[2], r[3],
+            r[0],
+            r[1],
+            r[2],
+            r[3],
             opaque(0.55, 0.85, 0.75),
             2.0,
             [RADIUS; 4],
         );
         if let Some(s) = shaper.as_mut() {
-            s.push_label(scene, "Border", r[0] + 14.0, r[3] - 32.0, LABEL_SIZE, LABEL_COLOR);
+            s.push_label(
+                scene,
+                "Border",
+                r[0] + 14.0,
+                r[3] - 32.0,
+                LABEL_SIZE,
+                LABEL_COLOR,
+            );
         }
     }
 
@@ -250,7 +270,10 @@ fn build_cards(
     {
         let r = card_rect(2, 0);
         scene.push_linear_gradient_full(
-            r[0], r[1], r[2], r[3],
+            r[0],
+            r[1],
+            r[2],
+            r[3],
             [r[0], r[1]],
             [r[2], r[3]],
             opaque(0.45, 0.20, 0.55),
@@ -259,13 +282,23 @@ fn build_cards(
             r,
         );
         scene.push_stroke_rounded(
-            r[0], r[1], r[2], r[3],
+            r[0],
+            r[1],
+            r[2],
+            r[3],
             opaque(0.95, 0.85, 0.95),
             2.0,
             [RADIUS; 4],
         );
         if let Some(s) = shaper.as_mut() {
-            s.push_label(scene, "Gradient", r[0] + 14.0, r[3] - 32.0, LABEL_SIZE, LABEL_COLOR);
+            s.push_label(
+                scene,
+                "Gradient",
+                r[0] + 14.0,
+                r[3] - 32.0,
+                LABEL_SIZE,
+                LABEL_COLOR,
+            );
         }
     }
 
@@ -278,14 +311,20 @@ fn build_cards(
         // example, so this also doubles as the painter-order context
         // for card 6).
         scene.push_rect_clipped_rounded(
-            r[0], r[1], r[2], r[3],
+            r[0],
+            r[1],
+            r[2],
+            r[3],
             opaque(0.05, 0.05, 0.06),
             0,
             r,
             [RADIUS; 4],
         );
         scene.push_image_full_rounded(
-            r[0], r[1], r[2], r[3],
+            r[0],
+            r[1],
+            r[2],
+            r[3],
             [0.0, 0.0, 1.0, 1.0],
             opaque(0.85, 0.85, 0.85), // mild tint
             image_key,
@@ -294,7 +333,14 @@ fn build_cards(
             [RADIUS; 4],
         );
         if let Some(s) = shaper.as_mut() {
-            s.push_label(scene, "Image", r[0] + 14.0, r[3] - 32.0, LABEL_SIZE, LABEL_COLOR);
+            s.push_label(
+                scene,
+                "Image",
+                r[0] + 14.0,
+                r[3] - 32.0,
+                LABEL_SIZE,
+                LABEL_COLOR,
+            );
         }
     }
 
@@ -311,7 +357,10 @@ fn build_cards(
         let s_rect = shadow.target_rect;
         let dim_f = shadow.mask_dim as f32;
         scene.push_image_full(
-            s_rect[0], s_rect[1], s_rect[2], s_rect[3],
+            s_rect[0],
+            s_rect[1],
+            s_rect[2],
+            s_rect[3],
             [
                 s_rect[0] / dim_f,
                 s_rect[1] / dim_f,
@@ -326,7 +375,10 @@ fn build_cards(
 
         // 2. Card body — radial gradient + border on top of shadow.
         scene.push_radial_gradient_full(
-            r[0], r[1], r[2], r[3],
+            r[0],
+            r[1],
+            r[2],
+            r[3],
             [(r[0] + r[2]) * 0.5, (r[1] + r[3]) * 0.5],
             [CARD_W * 0.6, CARD_H * 0.6],
             opaque(0.95, 0.65, 0.30),
@@ -335,13 +387,23 @@ fn build_cards(
             r,
         );
         scene.push_stroke_rounded(
-            r[0], r[1], r[2], r[3],
+            r[0],
+            r[1],
+            r[2],
+            r[3],
             opaque(1.0, 0.85, 0.55),
             2.0,
             [RADIUS; 4],
         );
         if let Some(s) = shaper.as_mut() {
-            s.push_label(scene, "Radial + shadow", r[0] + 14.0, r[3] - 32.0, LABEL_SIZE, LABEL_COLOR);
+            s.push_label(
+                scene,
+                "Radial + shadow",
+                r[0] + 14.0,
+                r[3] - 32.0,
+                LABEL_SIZE,
+                LABEL_COLOR,
+            );
         }
     }
 
@@ -357,14 +419,20 @@ fn build_cards(
     {
         let r = card_rect(2, 1);
         scene.push_rect_clipped_rounded(
-            r[0], r[1], r[2], r[3],
+            r[0],
+            r[1],
+            r[2],
+            r[3],
             opaque(0.05, 0.05, 0.06),
             0,
             r,
             [RADIUS; 4],
         );
         scene.push_image_full_rounded(
-            r[0], r[1], r[2], r[3],
+            r[0],
+            r[1],
+            r[2],
+            r[3],
             [0.0, 0.0, 1.0, 1.0],
             opaque(0.85, 0.85, 0.85),
             image_key,
@@ -376,14 +444,24 @@ fn build_cards(
         // pushed after the image — paints over it.
         let badge = [r[2] - 80.0, r[3] - 48.0, r[2] - 16.0, r[3] - 16.0];
         scene.push_rect_clipped_rounded(
-            badge[0], badge[1], badge[2], badge[3],
+            badge[0],
+            badge[1],
+            badge[2],
+            badge[3],
             rgba(0.95, 0.20, 0.55, 1.0),
             0,
             r, // clip to card so the badge can't escape rounded corners
             [6.0, 6.0, 6.0, 6.0],
         );
         if let Some(s) = shaper.as_mut() {
-            s.push_label(scene, "Z-order probe", r[0] + 14.0, r[3] - 32.0, LABEL_SIZE, LABEL_COLOR);
+            s.push_label(
+                scene,
+                "Z-order probe",
+                r[0] + 14.0,
+                r[3] - 32.0,
+                LABEL_SIZE,
+                LABEL_COLOR,
+            );
         }
     }
 }
@@ -415,7 +493,10 @@ fn main() {
     let handles = boot().expect("wgpu boot");
     let renderer = create_netrender_instance(
         handles.clone(),
-        NetrenderOptions { tile_cache_size: Some(TILE), enable_vello: true },
+        NetrenderOptions {
+            tile_cache_size: Some(TILE),
+            enable_vello: true,
+        },
     )
     .expect("create_netrender_instance");
 
@@ -428,9 +509,9 @@ fn main() {
     // SHADOW_KEY and composited as an ordinary image primitive.
     let r5 = card_rect(1, 1);
     let shadow_dim = VH; // single mask covering the whole scene
-    // 12px CSS-style soft shadow. Internally cascades through several
-    // 5-tap binomial passes — see Renderer::build_box_shadow_mask
-    // and blur_kernel_plan.
+                         // 12px CSS-style soft shadow. Internally cascades through several
+                         // 5-tap binomial passes — see Renderer::build_box_shadow_mask
+                         // and blur_kernel_plan.
     renderer.build_box_shadow_mask(
         SHADOW_KEY,
         shadow_dim,
@@ -460,7 +541,11 @@ fn main() {
     // Render to a transient target, read back, write PNG.
     let target = handles.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("demo_card_grid target"),
-        size: wgpu::Extent3d { width: VW, height: VH, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: VW,
+            height: VH,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,

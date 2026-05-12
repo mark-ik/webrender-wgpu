@@ -33,7 +33,11 @@ fn make_scene_with_run(axis_values: Vec<(SceneFontAxisTag, f32)>) -> Scene {
     scene.push_glyph_run_variable(
         font_id,
         16.0,
-        vec![Glyph { id: 1, x: 8.0, y: 24.0 }],
+        vec![Glyph {
+            id: 1,
+            x: 8.0,
+            y: 24.0,
+        }],
         [1.0, 1.0, 1.0, 1.0],
         axis_values,
     );
@@ -50,7 +54,11 @@ fn pc4_default_push_glyph_run_has_empty_axis_values() {
     scene.push_glyph_run(
         font_id,
         16.0,
-        vec![Glyph { id: 1, x: 0.0, y: 16.0 }],
+        vec![Glyph {
+            id: 1,
+            x: 0.0,
+            y: 16.0,
+        }],
         [1.0, 1.0, 1.0, 1.0],
     );
 
@@ -107,7 +115,11 @@ fn pc4_axis_tag_change_invalidates_tile() {
         r.font_axis_values[0].0 = *b"wdth";
     }
     let dirty = cache.invalidate(&scene);
-    assert!(!dirty.is_empty(), "axis tag change invalidates: {}", dirty.len());
+    assert!(
+        !dirty.is_empty(),
+        "axis tag change invalidates: {}",
+        dirty.len()
+    );
 }
 
 #[test]
@@ -121,7 +133,11 @@ fn pc4_adding_axis_value_invalidates_tile() {
         r.font_axis_values.push((*b"wght", 700.0));
     }
     let dirty = cache.invalidate(&scene);
-    assert!(!dirty.is_empty(), "adding axis values invalidates: {}", dirty.len());
+    assert!(
+        !dirty.is_empty(),
+        "adding axis values invalidates: {}",
+        dirty.len()
+    );
 }
 
 #[test]
@@ -168,7 +184,11 @@ mod gpu_smoke {
     fn make_target(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("pc4 target"),
-            size: wgpu::Extent3d { width: DIM, height: DIM, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: DIM,
+                height: DIM,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -218,7 +238,11 @@ mod gpu_smoke {
         scene.push_glyph_run_variable(
             font_id,
             96.0,
-            vec![Glyph { id: g_id, x: 32.0, y: 200.0 }],
+            vec![Glyph {
+                id: g_id,
+                x: 32.0,
+                y: 200.0,
+            }],
             [1.0, 1.0, 1.0, 1.0],
             vec![(*b"wght", w)],
         );

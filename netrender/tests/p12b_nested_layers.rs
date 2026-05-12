@@ -30,7 +30,11 @@ const TILE: u32 = 32;
 fn make_target(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("p12b target"),
-        size: wgpu::Extent3d { width: DIM, height: DIM, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: DIM,
+            height: DIM,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -57,7 +61,11 @@ fn render_to_bytes(scene: &Scene) -> Vec<u8> {
     let handles = boot().expect("wgpu boot");
     let renderer = create_netrender_instance(
         handles.clone(),
-        NetrenderOptions { tile_cache_size: Some(TILE), enable_vello: true, ..Default::default() },
+        NetrenderOptions {
+            tile_cache_size: Some(TILE),
+            enable_vello: true,
+            ..Default::default()
+        },
     )
     .expect("create_netrender_instance");
     let (target, view) = make_target(&handles.device);
@@ -87,7 +95,10 @@ fn p12b_01_alpha_layer_fades_inner_content() {
         assert!(
             diff <= tol,
             "alpha-layer {} channel: actual {}, expected ~{}, diff {}",
-            ch, center[i], target[i], diff,
+            ch,
+            center[i],
+            target[i],
+            diff,
         );
     }
 }
@@ -109,13 +120,19 @@ fn p12b_02_rect_clip_layer_culls_outer_pixels() {
 
     // Inside clip: red.
     let inside = read_pixel(&bytes, 32, 32);
-    assert!(inside[0] > 240 && inside[1] < 16 && inside[2] < 16,
-            "inside clip should be red; got {:?}", inside);
+    assert!(
+        inside[0] > 240 && inside[1] < 16 && inside[2] < 16,
+        "inside clip should be red; got {:?}",
+        inside
+    );
 
     // Outside clip: white background untouched.
     let outside = read_pixel(&bytes, 4, 4);
-    assert!(outside[0] > 240 && outside[1] > 240 && outside[2] > 240,
-            "outside clip should be white; got {:?}", outside);
+    assert!(
+        outside[0] > 240 && outside[1] > 240 && outside[2] > 240,
+        "outside clip should be white; got {:?}",
+        outside
+    );
 }
 
 /// Rounded clip layer: corner pixels of the clip rect should fall
@@ -134,14 +151,20 @@ fn p12b_03_rounded_clip_layer_clips_corners() {
 
     // Center: red (well inside the rounded shape).
     let center = read_pixel(&bytes, 32, 32);
-    assert!(center[0] > 240 && center[1] < 16,
-            "center should be red; got {:?}", center);
+    assert!(
+        center[0] > 240 && center[1] < 16,
+        "center should be red; got {:?}",
+        center
+    );
 
     // Corner of the clip rect (x=9, y=9 — 1 px in from the corner)
     // should be outside the rounded path, still white.
     let corner = read_pixel(&bytes, 9, 9);
-    assert!(corner[0] > 240 && corner[1] > 240 && corner[2] > 240,
-            "rounded-clip corner should be white; got {:?}", corner);
+    assert!(
+        corner[0] > 240 && corner[1] > 240 && corner[2] > 240,
+        "rounded-clip corner should be white; got {:?}",
+        corner
+    );
 }
 
 /// Phase 9b' — arbitrary-path clip layer. A triangular clip wraps a
@@ -166,18 +189,27 @@ fn p9b_01_path_clip_layer_culls_outside_path() {
 
     // Well inside the triangle.
     let inside = read_pixel(&bytes, 32, 40);
-    assert!(inside[0] > 240 && inside[1] < 16,
-            "inside triangle should be red; got {:?}", inside);
+    assert!(
+        inside[0] > 240 && inside[1] < 16,
+        "inside triangle should be red; got {:?}",
+        inside
+    );
 
     // Top-left corner — outside the triangle.
     let outside_tl = read_pixel(&bytes, 4, 4);
-    assert!(outside_tl[0] > 240 && outside_tl[1] > 240 && outside_tl[2] > 240,
-            "top-left outside triangle should be white; got {:?}", outside_tl);
+    assert!(
+        outside_tl[0] > 240 && outside_tl[1] > 240 && outside_tl[2] > 240,
+        "top-left outside triangle should be white; got {:?}",
+        outside_tl
+    );
 
     // Top-right corner — outside the triangle.
     let outside_tr = read_pixel(&bytes, 60, 4);
-    assert!(outside_tr[0] > 240 && outside_tr[1] > 240 && outside_tr[2] > 240,
-            "top-right outside triangle should be white; got {:?}", outside_tr);
+    assert!(
+        outside_tr[0] > 240 && outside_tr[1] > 240 && outside_tr[2] > 240,
+        "top-right outside triangle should be white; got {:?}",
+        outside_tr
+    );
 }
 
 /// Layers nest: outer layer applies alpha 0.5, inner layer clips to
@@ -209,7 +241,10 @@ fn p12b_04_nested_layers_compose() {
         assert!(
             diff <= tol,
             "nested-layer {} channel: actual {}, expected ~{}, diff {}",
-            ch, inside[i], target[i], diff,
+            ch,
+            inside[i],
+            target[i],
+            diff,
         );
     }
 
@@ -217,6 +252,9 @@ fn p12b_04_nested_layers_compose() {
     // (the inner clip prevented the red rect from painting here;
     // the outer layer's alpha just multiplies whatever was drawn).
     let outside = read_pixel(&bytes, 4, 4);
-    assert!(outside[0] > 240 && outside[1] > 240 && outside[2] > 240,
-            "outside inner clip should stay white; got {:?}", outside);
+    assert!(
+        outside[0] > 240 && outside[1] > 240 && outside[2] > 240,
+        "outside inner clip should stay white; got {:?}",
+        outside
+    );
 }

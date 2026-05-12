@@ -27,13 +27,10 @@
 use std::sync::Arc;
 
 use netrender::{
-    ImageData, Scene, TileCache, boot, peniko::Blob,
-    vello_tile_rasterizer::VelloTileRasterizer,
+    ImageData, Scene, TileCache, boot, peniko::Blob, vello_tile_rasterizer::VelloTileRasterizer,
 };
 use vello::{
-    AaConfig, AaSupport, RenderParams, Renderer, RendererOptions,
-    kurbo::Affine,
-    peniko::Color,
+    AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, kurbo::Affine, peniko::Color,
 };
 
 const DIM: u32 = 128;
@@ -44,7 +41,11 @@ const TRANSPARENT: Color = Color::new([0.0, 0.0, 0.0, 0.0]);
 fn make_target(device: &wgpu::Device, label: &'static str) -> (wgpu::Texture, wgpu::TextureView) {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
-        size: wgpu::Extent3d { width: DIM, height: DIM, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: DIM,
+            height: DIM,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -69,7 +70,10 @@ fn build_demo_scene() -> Scene {
     // and tile-cache paths without needing a font.
     scene.push_rect(8.0, 8.0, 120.0, 120.0, [0.15, 0.20, 0.30, 1.0]);
     scene.push_stroke_rounded(
-        8.0, 8.0, 120.0, 120.0,
+        8.0,
+        8.0,
+        120.0,
+        120.0,
         [0.95, 0.85, 0.55, 1.0],
         2.0,
         [12.0; 4],
@@ -94,8 +98,8 @@ fn compose_into_01_identity_matches_render() {
     rast_a
         .render(&scene, &mut tc_a, &view_a, TRANSPARENT)
         .expect("render a");
-    let wgpu_device = netrender_device::WgpuDevice::with_external(handles.clone())
-        .expect("wgpu device");
+    let wgpu_device =
+        netrender_device::WgpuDevice::with_external(handles.clone()).expect("wgpu device");
     let pixels_a = wgpu_device.read_rgba8_texture(&target_a, DIM, DIM);
 
     // Path B — compose_into a master, then render the master via
@@ -161,8 +165,8 @@ fn compose_into_01_identity_matches_render() {
 #[test]
 fn compose_into_02_transform_translates_content() {
     let handles = boot().expect("wgpu boot");
-    let wgpu_device = netrender_device::WgpuDevice::with_external(handles.clone())
-        .expect("wgpu device");
+    let wgpu_device =
+        netrender_device::WgpuDevice::with_external(handles.clone()).expect("wgpu device");
 
     // Inner scene: a 32×32 red rect at (0, 0)–(32, 32) inside a
     // viewport that's 32×32. Composed into a 128×128 master with a
@@ -249,27 +253,38 @@ fn compose_into_02_transform_translates_content() {
 fn compose_into_03_two_consumers_share_atlas() {
     let handles = boot().expect("wgpu boot");
     const KEY: u64 = 0xCAFE;
-    let bytes = Arc::new(vec![255u8, 0, 0, 255, 255, 0, 0, 255,
-                              255, 0, 0, 255, 255, 0, 0, 255]);
+    let bytes = Arc::new(vec![
+        255u8, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255,
+    ]);
     let blob = Blob::new(bytes);
 
     // Two scenes that share the underlying image bytes by cloning
     // the same Blob (clone is Arc-bump + id-copy).
     let mut scene_a = Scene::new(DIM, DIM);
-    scene_a.image_sources.insert(
+    scene_a
+        .image_sources
+        .insert(KEY, ImageData::from_blob(2, 2, blob.clone()));
+    scene_a.push_image(
+        0.0,
+        0.0,
+        64.0,
+        64.0,
         KEY,
         ImageData::from_blob(2, 2, blob.clone()),
     );
-    scene_a.push_image(0.0, 0.0, 64.0, 64.0, KEY,
-        ImageData::from_blob(2, 2, blob.clone()));
 
     let mut scene_b = Scene::new(DIM, DIM);
-    scene_b.image_sources.insert(
+    scene_b
+        .image_sources
+        .insert(KEY, ImageData::from_blob(2, 2, blob.clone()));
+    scene_b.push_image(
+        64.0,
+        64.0,
+        128.0,
+        128.0,
         KEY,
         ImageData::from_blob(2, 2, blob.clone()),
     );
-    scene_b.push_image(64.0, 64.0, 128.0, 128.0, KEY,
-        ImageData::from_blob(2, 2, blob.clone()));
 
     // Two independent rasterizers, each composing into one master.
     let mut rast_a = VelloTileRasterizer::new(handles.clone()).expect("rast a");

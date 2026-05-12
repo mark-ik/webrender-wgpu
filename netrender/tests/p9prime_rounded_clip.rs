@@ -24,10 +24,7 @@
 //!   - well inside the rect, away from the corner (full coverage)
 
 use netrender::{ImageData, Scene, boot, vello_rasterizer::scene_to_vello};
-use vello::{
-    AaConfig, AaSupport, RenderParams, Renderer, RendererOptions,
-    peniko::Color,
-};
+use vello::{AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, peniko::Color};
 
 const DIM: u32 = 64;
 
@@ -47,7 +44,11 @@ fn make_renderer(device: &wgpu::Device) -> Renderer {
 fn make_target(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("p9' rounded-clip target"),
-        size: wgpu::Extent3d { width: DIM, height: DIM, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: DIM,
+            height: DIM,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -80,10 +81,14 @@ fn render_scene(scene: &Scene) -> Vec<u8> {
     let (target, view) = make_target(device);
     renderer
         .render_to_texture(
-            device, queue, &vscene, &view,
+            device,
+            queue,
+            &vscene,
+            &view,
             &RenderParams {
                 base_color: Color::from_rgba8(0, 0, 0, 0),
-                width: DIM, height: DIM,
+                width: DIM,
+                height: DIM,
                 antialiasing_method: AaConfig::Area,
             },
         )
@@ -106,24 +111,31 @@ fn render_scene(scene: &Scene) -> Vec<u8> {
 ///                               (17, 17) is outside)
 fn assert_rounded_clip_pattern(bytes: &[u8], inside_color: [u8; 4]) {
     fn within(actual: [u8; 4], expected: [u8; 4], tol: u8) -> bool {
-        actual.iter().zip(expected.iter())
+        actual
+            .iter()
+            .zip(expected.iter())
             .all(|(a, b)| (*a as i16 - *b as i16).unsigned_abs() <= tol as u16)
     }
 
     let center = read_pixel(bytes, 32, 32);
     assert!(
         within(center, inside_color, 4),
-        "center (32,32) inside clip: got {:?}, expected ~{:?}", center, inside_color
+        "center (32,32) inside clip: got {:?}, expected ~{:?}",
+        center,
+        inside_color
     );
     let far = read_pixel(bytes, 4, 4);
     assert!(
         far[3] < 8,
-        "far (4,4) outside clip rect: got {:?}, expected near-transparent", far
+        "far (4,4) outside clip rect: got {:?}, expected near-transparent",
+        far
     );
     let edge = read_pixel(bytes, 32, 18);
     assert!(
         within(edge, inside_color, 8),
-        "inside-edge (32,18): got {:?}, expected ~{:?}", edge, inside_color
+        "inside-edge (32,18): got {:?}, expected ~{:?}",
+        edge,
+        inside_color
     );
     let corner = read_pixel(bytes, 17, 17);
     assert!(
@@ -137,11 +149,14 @@ fn assert_rounded_clip_pattern(bytes: &[u8], inside_color: [u8; 4]) {
 fn p9prime_01_rect_rounded_clip() {
     let mut scene = Scene::new(DIM, DIM);
     scene.push_rect_clipped_rounded(
-        0.0, 0.0, DIM as f32, DIM as f32,
-        [1.0, 0.0, 0.0, 1.0],         // opaque red
+        0.0,
+        0.0,
+        DIM as f32,
+        DIM as f32,
+        [1.0, 0.0, 0.0, 1.0], // opaque red
         0,
-        [16.0, 16.0, 48.0, 48.0],     // clip rect
-        [8.0, 8.0, 8.0, 8.0],         // uniform corner radius 8
+        [16.0, 16.0, 48.0, 48.0], // clip rect
+        [8.0, 8.0, 8.0, 8.0],     // uniform corner radius 8
     );
     let bytes = render_scene(&scene);
     assert_rounded_clip_pattern(&bytes, [255, 0, 0, 255]);
@@ -157,9 +172,12 @@ fn p9prime_02_image_rounded_clip() {
     let mut scene = Scene::new(DIM, DIM);
     scene.image_sources.insert(KEY, img);
     scene.push_image_full_rounded(
-        0.0, 0.0, DIM as f32, DIM as f32,
+        0.0,
+        0.0,
+        DIM as f32,
+        DIM as f32,
         [0.0, 0.0, 1.0, 1.0],
-        [1.0, 1.0, 1.0, 1.0],         // no tint
+        [1.0, 1.0, 1.0, 1.0], // no tint
         KEY,
         0,
         [16.0, 16.0, 48.0, 48.0],
@@ -176,12 +194,21 @@ fn p9prime_03_gradient_rounded_clip() {
     // simplifies the pixel assertion (no interpolation noise).
     let mut scene = Scene::new(DIM, DIM);
     let g = netrender::SceneGradient {
-        x0: 0.0, y0: 0.0, x1: DIM as f32, y1: DIM as f32,
+        x0: 0.0,
+        y0: 0.0,
+        x1: DIM as f32,
+        y1: DIM as f32,
         kind: netrender::GradientKind::Linear,
         params: [0.0, 0.0, DIM as f32, 0.0],
         stops: vec![
-            netrender::GradientStop { offset: 0.0, color: [0.0, 1.0, 0.0, 1.0] },
-            netrender::GradientStop { offset: 1.0, color: [0.0, 1.0, 0.0, 1.0] },
+            netrender::GradientStop {
+                offset: 0.0,
+                color: [0.0, 1.0, 0.0, 1.0],
+            },
+            netrender::GradientStop {
+                offset: 1.0,
+                color: [0.0, 1.0, 0.0, 1.0],
+            },
         ],
         transform_id: 0,
         clip_rect: [16.0, 16.0, 48.0, 48.0],

@@ -16,10 +16,7 @@
 //!   white image); verify alpha modulation.
 
 use netrender::{ImageData, Scene, boot, vello_rasterizer::scene_to_vello};
-use vello::{
-    AaConfig, AaSupport, RenderParams, Renderer, RendererOptions,
-    peniko::Color,
-};
+use vello::{AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, peniko::Color};
 
 const DIM: u32 = 64;
 
@@ -84,7 +81,11 @@ fn assert_within_tol(actual: [u8; 4], expected: [u8; 4], tol: u8, where_: &str) 
     assert!(
         max <= tol,
         "{}: actual {:?}, expected {:?} (max channel diff = {}, tol = {})",
-        where_, actual, expected, max, tol
+        where_,
+        actual,
+        expected,
+        max,
+        tol
     );
 }
 
@@ -115,9 +116,9 @@ fn quadrant_image() -> ImageData {
     for y in 0..SZ {
         for x in 0..SZ {
             let pixel: [u8; 4] = match (x < half, y < half) {
-                (true, true) => [255, 0, 0, 255],   // top-left red
-                (false, true) => [0, 255, 0, 255],  // top-right green
-                (true, false) => [0, 0, 255, 255],  // bottom-left blue
+                (true, true) => [255, 0, 0, 255],     // top-left red
+                (false, true) => [0, 255, 0, 255],    // top-right green
+                (true, false) => [0, 0, 255, 255],    // bottom-left blue
                 (false, false) => [255, 255, 0, 255], // bottom-right yellow
             };
             bytes.extend_from_slice(&pixel);
@@ -128,7 +129,9 @@ fn quadrant_image() -> ImageData {
 
 /// Build a uniformly-white opaque image at the given size.
 fn solid_white_image(size: u32) -> ImageData {
-    let bytes: Vec<u8> = (0..size * size).flat_map(|_| [255u8, 255, 255, 255]).collect();
+    let bytes: Vec<u8> = (0..size * size)
+        .flat_map(|_| [255u8, 255, 255, 255])
+        .collect();
     ImageData::from_bytes(size, size, bytes)
 }
 
@@ -143,7 +146,10 @@ fn p5prime_01_full_image_round_trip() {
     let mut scene = Scene::new(DIM, DIM);
     scene.image_sources.insert(IMG_KEY, quadrant_image());
     scene.push_image_full(
-        16.0, 16.0, 48.0, 48.0,
+        16.0,
+        16.0,
+        48.0,
+        48.0,
         [0.0, 0.0, 1.0, 1.0],
         [1.0, 1.0, 1.0, 1.0],
         IMG_KEY,
@@ -160,7 +166,12 @@ fn p5prime_01_full_image_round_trip() {
     assert_within_tol(read_pixel(&bytes, 20, 20), [255, 0, 0, 255], 4, "TL red");
     assert_within_tol(read_pixel(&bytes, 44, 20), [0, 255, 0, 255], 4, "TR green");
     assert_within_tol(read_pixel(&bytes, 20, 44), [0, 0, 255, 255], 4, "BL blue");
-    assert_within_tol(read_pixel(&bytes, 44, 44), [255, 255, 0, 255], 4, "BR yellow");
+    assert_within_tol(
+        read_pixel(&bytes, 44, 44),
+        [255, 255, 0, 255],
+        4,
+        "BR yellow",
+    );
     // Outside the target rect: clear.
     assert_within_tol(read_pixel(&bytes, 4, 4), [0, 0, 0, 0], 1, "outside TL");
 }
@@ -173,7 +184,10 @@ fn p5prime_02_uv_subregion() {
     let mut scene = Scene::new(DIM, DIM);
     scene.image_sources.insert(IMG_KEY, quadrant_image());
     scene.push_image_full(
-        24.0, 24.0, 40.0, 40.0,
+        24.0,
+        24.0,
+        40.0,
+        40.0,
         [0.0, 0.0, 0.5, 0.5],
         [1.0, 1.0, 1.0, 1.0],
         IMG_KEY,
@@ -194,7 +208,12 @@ fn p5prime_02_uv_subregion() {
         );
     }
     // Outside the target rect: clear.
-    assert_within_tol(read_pixel(&bytes, 8, 8), [0, 0, 0, 0], 1, "outside subregion");
+    assert_within_tol(
+        read_pixel(&bytes, 8, 8),
+        [0, 0, 0, 0],
+        1,
+        "outside subregion",
+    );
 }
 
 /// Push a 16×16 white-opaque image with achromatic tint
@@ -206,7 +225,10 @@ fn p5prime_03_alpha_tint() {
     let mut scene = Scene::new(DIM, DIM);
     scene.image_sources.insert(IMG_KEY, solid_white_image(16));
     scene.push_image_full(
-        16.0, 16.0, 48.0, 48.0,
+        16.0,
+        16.0,
+        48.0,
+        48.0,
         [0.0, 0.0, 1.0, 1.0],
         [0.5, 0.5, 0.5, 0.5],
         IMG_KEY,

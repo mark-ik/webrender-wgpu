@@ -163,7 +163,11 @@ fn p7_05_color_change_dirties_only_affected_tiles() {
     let s2 = one_rect_scene((256, 256), [10.0, 10.0, 30.0, 30.0], [0.0, 1.0, 0.0, 1.0]);
     let dirty = tc.invalidate(&s2);
 
-    assert_eq!(dirty, vec![(0, 0)], "color change must dirty only the rect's tile");
+    assert_eq!(
+        dirty,
+        vec![(0, 0)],
+        "color change must dirty only the rect's tile"
+    );
 }
 
 /// Regression for the Phase 8A oversight: gradient primitives must
@@ -178,7 +182,10 @@ fn p7_07_gradient_change_dirties_only_its_tile() {
     let mut s1 = Scene::new(256, 256);
     // Gradient confined to tile (0, 0) — world rect (0..32, 0..32).
     s1.push_linear_gradient(
-        0.0, 0.0, 32.0, 32.0,
+        0.0,
+        0.0,
+        32.0,
+        32.0,
         [0.0, 0.0],
         [32.0, 0.0],
         [1.0, 0.0, 0.0, 1.0],
@@ -199,7 +206,10 @@ fn p7_07_gradient_change_dirties_only_its_tile() {
     // post-fix, only tile (0, 0) is dirty.
     let mut s2 = Scene::new(256, 256);
     s2.push_linear_gradient(
-        0.0, 0.0, 32.0, 32.0,
+        0.0,
+        0.0,
+        32.0,
+        32.0,
         [0.0, 0.0],
         [32.0, 0.0],
         [0.0, 1.0, 0.0, 1.0], // green instead of red
@@ -225,11 +235,23 @@ fn p7_06_add_remove_primitive_localizes_dirt() {
     let _ = tc.invalidate(&s_empty);
 
     // Frame 2: add a rect in tile (2, 1) world rect (128, 64) - (192, 128).
-    let s_with_rect = one_rect_scene((256, 256), [140.0, 80.0, 180.0, 120.0], [1.0, 0.0, 0.0, 1.0]);
+    let s_with_rect = one_rect_scene(
+        (256, 256),
+        [140.0, 80.0, 180.0, 120.0],
+        [1.0, 0.0, 0.0, 1.0],
+    );
     let dirty_add = tc.invalidate(&s_with_rect);
-    assert_eq!(dirty_add, vec![(2, 1)], "adding a rect dirties only its tile");
+    assert_eq!(
+        dirty_add,
+        vec![(2, 1)],
+        "adding a rect dirties only its tile"
+    );
 
     // Frame 3: remove the rect (back to empty).
     let dirty_remove = tc.invalidate(&s_empty);
-    assert_eq!(dirty_remove, vec![(2, 1)], "removing the rect dirties only that same tile");
+    assert_eq!(
+        dirty_remove,
+        vec![(2, 1)],
+        "removing the rect dirties only that same tile"
+    );
 }
