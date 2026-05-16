@@ -172,7 +172,7 @@ impl TextShaper {
         // Single-line labels: pass the card width as max so any
         // wrapping (none here, but defensive) lands cleanly inside.
         layout.break_all_lines(Some(CARD_W));
-        layout.align(Some(CARD_W), Alignment::Start, AlignmentOptions::default());
+        layout.align(Alignment::Start, AlignmentOptions::default());
         netrender_text::push_layout_with_registry(scene, &mut self.font_registry, &layout, [x, y]);
     }
 }
@@ -496,6 +496,8 @@ fn main() {
         NetrenderOptions {
             tile_cache_size: Some(TILE),
             enable_vello: true,
+            enable_tile_dirty_overlay: false,
+            tile_dirty_overlay_window_frames: 0,
         },
     )
     .expect("create_netrender_instance");
