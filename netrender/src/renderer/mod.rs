@@ -43,7 +43,9 @@ use std::sync::{Arc, Mutex};
 use netrender_device::compositor::{Compositor, PresentedFrame};
 use netrender_device::WgpuDevice;
 
-use crate::external_texture::{ExternalTexturePipeline, ExternalTexturePlacement};
+use crate::external_texture::{
+    ExternalTextureComposite, ExternalTexturePipeline, ExternalTexturePlacement,
+};
 use crate::scene::{ImageKey, Scene};
 use crate::tile_cache::TileCache;
 
@@ -77,6 +79,37 @@ impl Default for ColorLoad {
     fn default() -> Self {
         Self::Clear(wgpu::Color::TRANSPARENT)
     }
+}
+
+fn scene_tail_fragment(scene: &Scene, scene_op_boundary: usize) -> Scene {
+    let mut fragment = scene.clone();
+    fragment.ops = scene.ops[scene_op_boundary.min(scene.ops.len())..].to_vec();
+    fragment.compositor_surfaces.clear();
+    fragment
+}
+
+fn make_external_tail_target(
+    device: &wgpu::Device,
+    viewport_width: u32,
+    viewport_height: u32,
+    format: wgpu::TextureFormat,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("netrender external texture ordered tail"),
+        size: wgpu::Extent3d {
+            width: viewport_width,
+            height: viewport_height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
 }
 
 /// Pick a (pass count, per-pass step in pixels) for `brush_blur`
@@ -200,7 +233,11 @@ mod blur_plan_tests {
         assert!(
             diff <= tol,
             "{}: actual {}, expected {} (diff = {}, tol = {})",
-            label, actual, expected, diff, tol,
+            label,
+            actual,
+            expected,
+            diff,
+            tol,
         );
     }
 
@@ -487,7 +524,9 @@ impl Renderer {
     /// No-op if `key` was never registered or `enable_vello` is
     /// false.
     pub fn unregister_image_vello(&self, key: ImageKey) {
-        let Some(rast_mutex) = self.vello_rasterizer.as_ref() else { return };
+        let Some(rast_mutex) = self.vello_rasterizer.as_ref() else {
+            return;
+        };
         let mut rast = rast_mutex.lock().expect("vello_rasterizer lock");
         rast.unregister_texture(key);
     }
@@ -534,12 +573,7 @@ impl Renderer {
     /// - If `tile_cache_size` was `None` at construction.
     /// - If a vello render error occurs (mirrors the existing
     ///   `render()` shape, which doesn't return a Result).
-    pub fn render_vello(
-        &self,
-        scene: &Scene,
-        target_view: &wgpu::TextureView,
-        clear: ColorLoad,
-    ) {
+    pub fn render_vello(&self, scene: &Scene, target_view: &wgpu::TextureView, clear: ColorLoad) {
         let rast_mutex = self
             .vello_rasterizer
             .as_ref()
@@ -550,9 +584,9 @@ impl Renderer {
             .expect("Renderer::render_vello requires NetrenderOptions::tile_cache_size = Some(_)");
 
         let base = match clear {
-            ColorLoad::Clear(c) => vello::peniko::Color::new([
-                c.r as f32, c.g as f32, c.b as f32, c.a as f32,
-            ]),
+            ColorLoad::Clear(c) => {
+                vello::peniko::Color::new([c.r as f32, c.g as f32, c.b as f32, c.a as f32])
+            }
             ColorLoad::Load => vello::peniko::Color::new([0.0, 0.0, 0.0, 0.0]),
         };
 
@@ -564,14 +598,11 @@ impl Renderer {
         // inject a SceneImage covering the layer's bounds so the
         // layer paints over the blurred backdrop. Falls through to
         // the no-backdrop fast path when no filters are present.
-        let scene_to_render: std::borrow::Cow<'_, Scene> =
-            if has_backdrop_filter(scene) {
-                std::borrow::Cow::Owned(self.preprocess_backdrop_filters(
-                    scene, &mut rast, &mut tc,
-                ))
-            } else {
-                std::borrow::Cow::Borrowed(scene)
-            };
+        let scene_to_render: std::borrow::Cow<'_, Scene> = if has_backdrop_filter(scene) {
+            std::borrow::Cow::Owned(self.preprocess_backdrop_filters(scene, &mut rast, &mut tc))
+        } else {
+            std::borrow::Cow::Borrowed(scene)
+        };
 
         rast.render(&scene_to_render, &mut tc, target_view, base)
             .unwrap_or_else(|e| panic!("vello render_to_texture failed: {:?}", e));
@@ -647,9 +678,7 @@ impl Renderer {
         rast: &mut crate::vello_tile_rasterizer::VelloTileRasterizer,
         tc: &mut std::sync::MutexGuard<'_, TileCache>,
     ) -> Scene {
-        use crate::scene::{
-            SceneClip, SceneFilter, SceneImage, SceneOp, NO_CLIP, SHARP_CLIP,
-        };
+        use crate::scene::{SceneClip, SceneFilter, SceneImage, SceneOp, NO_CLIP, SHARP_CLIP};
 
         let mut processed = scene.clone();
 
@@ -960,6 +989,35 @@ impl Renderer {
         compositor: &mut dyn Compositor,
         base_color: vello::peniko::Color,
     ) {
+        self.render_with_compositor_and_external_textures(
+            scene,
+            master_format,
+            compositor,
+            base_color,
+            &[],
+        );
+    }
+
+    /// Render a scene into the compositor master texture, then blend
+    /// same-device external textures into that master before handing the
+    /// frame to the consumer compositor.
+    ///
+    /// `ExternalTextureComposite::scene_op_boundary` preserves painter
+    /// order without routing producer textures through Vello's atlas:
+    /// ordinary scene content paints once into the master, each external
+    /// texture composites at its boundary, and the ordinary scene tail
+    /// that should remain above that texture is redrawn into a transparent
+    /// scratch target and blended back over the master. Callers that keep
+    /// the default `usize::MAX` boundary retain the topmost-overlay fast
+    /// path and pay no tail redraw.
+    pub fn render_with_compositor_and_external_textures(
+        &self,
+        scene: &Scene,
+        master_format: wgpu::TextureFormat,
+        compositor: &mut dyn Compositor,
+        base_color: vello::peniko::Color,
+        external_textures: &[ExternalTextureComposite<'_>],
+    ) {
         let rast_mutex = self.vello_rasterizer.as_ref().expect(
             "Renderer::render_with_compositor requires NetrenderOptions::enable_vello = true",
         );
@@ -973,6 +1031,69 @@ impl Renderer {
         // 1. Render the scene into the rasterizer's pool-allocated master.
         rast.render_to_internal_master(scene, &mut tc, master_format, base_color)
             .unwrap_or_else(|e| panic!("vello render_to_texture failed: {:?}", e));
+
+        if !external_textures.is_empty() {
+            let master_texture = rast
+                .master_texture()
+                .expect("master_pool guaranteed by render_to_internal_master above");
+            let master_view = master_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let mut tail_target: Option<(wgpu::Texture, wgpu::TextureView)> = None;
+            let mut previous_boundary = 0usize;
+            for external in external_textures {
+                let boundary = external.scene_op_boundary.min(scene.ops.len());
+                debug_assert!(
+                    boundary >= previous_boundary,
+                    "external textures must be supplied in nondecreasing scene-op order",
+                );
+                previous_boundary = boundary;
+
+                self.compose_external_texture(
+                    external.source_view,
+                    &master_view,
+                    master_format,
+                    scene.viewport_width,
+                    scene.viewport_height,
+                    external.placement,
+                );
+
+                if boundary >= scene.ops.len() {
+                    continue;
+                }
+
+                let tail_scene = scene_tail_fragment(scene, boundary);
+                if tail_scene.ops.is_empty() {
+                    continue;
+                }
+
+                let (_, tail_view) = tail_target.get_or_insert_with(|| {
+                    make_external_tail_target(
+                        &self.wgpu_device.core.device,
+                        scene.viewport_width,
+                        scene.viewport_height,
+                        master_format,
+                    )
+                });
+                rast.render_overlay_fragment(
+                    &tail_scene,
+                    tail_view,
+                    vello::peniko::Color::new([0.0, 0.0, 0.0, 0.0]),
+                )
+                .unwrap_or_else(|e| panic!("vello overlay tail render failed: {:?}", e));
+                self.compose_external_texture(
+                    tail_view,
+                    &master_view,
+                    master_format,
+                    scene.viewport_width,
+                    scene.viewport_height,
+                    ExternalTexturePlacement::new([
+                        0.0,
+                        0.0,
+                        scene.viewport_width as f32,
+                        scene.viewport_height as f32,
+                    ]),
+                );
+            }
+        }
 
         // 2. Diff surface lifecycle against last frame.
         let (declares, destroys) = rast.diff_compositor_surfaces(scene);

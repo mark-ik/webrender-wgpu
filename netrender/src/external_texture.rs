@@ -41,6 +41,32 @@ impl ExternalTexturePlacement {
     }
 }
 
+/// One same-device external texture draw scheduled into a frame.
+pub struct ExternalTextureComposite<'a> {
+    pub source_view: &'a wgpu::TextureView,
+    pub placement: ExternalTexturePlacement,
+    /// Number of ordinary [`crate::scene::SceneOp`]s that should paint
+    /// before this external texture. `usize::MAX` keeps the legacy
+    /// "topmost overlay" behavior for call sites that do not care
+    /// about interleaving.
+    pub scene_op_boundary: usize,
+}
+
+impl<'a> ExternalTextureComposite<'a> {
+    pub fn new(source_view: &'a wgpu::TextureView, placement: ExternalTexturePlacement) -> Self {
+        Self {
+            source_view,
+            placement,
+            scene_op_boundary: usize::MAX,
+        }
+    }
+
+    pub fn with_scene_op_boundary(mut self, scene_op_boundary: usize) -> Self {
+        self.scene_op_boundary = scene_op_boundary;
+        self
+    }
+}
+
 const EXTERNAL_TEXTURE_WGSL: &str = r#"
 struct Params {
     dest: vec4<f32>,

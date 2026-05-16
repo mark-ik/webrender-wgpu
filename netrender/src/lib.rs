@@ -40,7 +40,7 @@ pub mod vello_rasterizer;
 pub mod vello_tile_rasterizer;
 
 pub use crate::hit_test::{HitOpKind, HitResult, hit_test, hit_test_topmost};
-pub use crate::external_texture::ExternalTexturePlacement;
+pub use crate::external_texture::{ExternalTextureComposite, ExternalTexturePlacement};
 pub use crate::registry::{FontRegistry, ImageRegistry};
 pub use crate::render_graph::{EncodeCallback, RenderGraph, Task, TaskId};
 pub use crate::renderer::init::{NetrenderOptions, create_netrender_instance};
@@ -70,6 +70,5 @@ pub use crate::tile_cache::{TileCache, TileCoord};
 pub use netrender_device::boot;
 pub use netrender_device::{
     BrushBlurPipeline, ClipRectanglePipeline, Compositor, LayerPresent, PresentedFrame,
-    REQUIRED_FEATURES, WgpuDevice, WgpuHandles, boot_async, build_brush_blur,
-    build_clip_rectangle,
+    REQUIRED_FEATURES, WgpuDevice, WgpuHandles, boot_async, build_brush_blur, build_clip_rectangle,
 };

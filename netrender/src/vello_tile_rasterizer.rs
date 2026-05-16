@@ -438,6 +438,40 @@ impl VelloTileRasterizer {
         result
     }
 
+    /// Render an already-ordered overlay fragment without mutating the
+    /// tile cache or per-tile scene cache that tracks the full frame.
+    ///
+    /// `Renderer::render_with_compositor_and_external_textures` uses
+    /// this after direct-sampling an interleaved external texture: the
+    /// ordinary scene tail that should remain above that texture is
+    /// rendered into a transparent scratch target, then composited over
+    /// the master. The full-scene render remains the only caller that
+    /// updates tile invalidation state.
+    pub fn render_overlay_fragment(
+        &mut self,
+        scene: &Scene,
+        target_view: &wgpu::TextureView,
+        base_color: Color,
+    ) -> Result<(), vello::Error> {
+        let mut merged_images = self.image_data.clone();
+        for (key, image) in &self.image_overrides {
+            merged_images.insert(*key, image.clone());
+        }
+        let overlay_scene = scene_to_vello_with_overrides(scene, &merged_images);
+        self.vello_renderer.render_to_texture(
+            &self.handles.device,
+            &self.handles.queue,
+            &overlay_scene,
+            target_view,
+            &RenderParams {
+                base_color,
+                width: scene.viewport_width,
+                height: scene.viewport_height,
+                antialiasing_method: AaConfig::Area,
+            },
+        )
+    }
+
     /// Path (b′) entry point — render `scene` into an internal
     /// master texture pool-allocated by `(width, height, format)`,
     /// returning a reference to it. The caller (typically
@@ -528,6 +562,7 @@ impl VelloTileRasterizer {
                 dimension: wgpu::TextureDimension::D2,
                 format,
                 usage: wgpu::TextureUsages::STORAGE_BINDING
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT
                     | wgpu::TextureUsages::TEXTURE_BINDING
                     | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],

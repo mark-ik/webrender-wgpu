@@ -10,7 +10,8 @@
 //! textures into vello's image atlas at frame start.
 
 use netrender::{
-    ColorLoad, ExternalTexturePlacement, NetrenderOptions, Scene, boot, create_netrender_instance,
+    ColorLoad, Compositor, ExternalTextureComposite, ExternalTexturePlacement, NetrenderOptions,
+    PresentedFrame, Scene, boot, create_netrender_instance,
 };
 
 const DIM: u32 = 64;
@@ -105,6 +106,21 @@ fn make_canvas_texture(
 fn read_pixel(bytes: &[u8], x: u32, y: u32) -> [u8; 4] {
     let i = ((y * DIM + x) * 4) as usize;
     [bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]
+}
+
+#[derive(Default)]
+struct CaptureMaster {
+    master: Option<wgpu::Texture>,
+}
+
+impl Compositor for CaptureMaster {
+    fn declare_surface(&mut self, _key: netrender::SurfaceKey, _world_bounds: [f32; 4]) {}
+
+    fn destroy_surface(&mut self, _key: netrender::SurfaceKey) {}
+
+    fn present_frame(&mut self, frame: PresentedFrame<'_>) {
+        self.master = Some(frame.master.clone());
+    }
 }
 
 #[track_caller]
@@ -226,5 +242,62 @@ fn pg4_webgl_canvas_texture_opacity_blends_over_vello_scene() {
         [128, 128, 0, 255],
         2,
         "50% green over red",
+    );
+}
+
+#[test]
+fn pg4_webgl_canvas_texture_preserves_scene_order() {
+    let handles = boot().expect("wgpu boot");
+    let device = handles.device.clone();
+    let queue = handles.queue.clone();
+    let renderer = create_netrender_instance(
+        handles,
+        NetrenderOptions {
+            tile_cache_size: Some(TILE_SIZE),
+            enable_vello: true,
+            ..Default::default()
+        },
+    )
+    .expect("create_netrender_instance");
+
+    let (_canvas_texture, canvas_view) = make_canvas_texture(&device, &queue);
+    let mut scene = Scene::new(DIM, DIM);
+    scene.push_rect(0.0, 0.0, DIM as f32, DIM as f32, [1.0, 0.0, 0.0, 1.0]);
+    scene.push_rect(24.0, 24.0, 40.0, 40.0, [0.0, 0.0, 1.0, 1.0]);
+
+    let composites = [ExternalTextureComposite::new(
+        &canvas_view,
+        ExternalTexturePlacement::new([16.0, 16.0, 48.0, 48.0]),
+    )
+    .with_scene_op_boundary(1)];
+    let mut compositor = CaptureMaster::default();
+
+    renderer.render_with_compositor_and_external_textures(
+        &scene,
+        wgpu::TextureFormat::Rgba8Unorm,
+        &mut compositor,
+        vello::peniko::Color::new([0.0, 0.0, 0.0, 0.0]),
+        &composites,
+    );
+
+    let master = compositor.master.expect("captured compositor master");
+    let bytes = renderer.wgpu_device.read_rgba8_texture(&master, DIM, DIM);
+    assert_within_tol(
+        read_pixel(&bytes, 4, 4),
+        [255, 0, 0, 255],
+        1,
+        "background red",
+    );
+    assert_within_tol(
+        read_pixel(&bytes, 20, 20),
+        [0, 255, 0, 255],
+        1,
+        "canvas remains visible between scene ops",
+    );
+    assert_within_tol(
+        read_pixel(&bytes, 32, 32),
+        [0, 0, 255, 255],
+        1,
+        "later scene rect remains above interleaved canvas",
     );
 }
