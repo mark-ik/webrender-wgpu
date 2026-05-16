@@ -48,6 +48,24 @@ without `glow`, GLES, EGL, WGL, ANGLE, or ServoShell dependencies.
 
 ### G1. WebGL 1 baseline state machine
 
+**FIRST POST-W4 RUNG CLEARED 2026-05-12.**
+`servo-webgl-wgpu` now has WebGL-shaped element-array state for the
+first indexed geometry path: `ElementArrayBuffer`, `buffer_data_u16`,
+`IndexType::UnsignedShort`, and `draw_elements`. The receipt covers a
+green indexed triangle plus an out-of-range index rejection path that
+reports `InvalidOperation`. This clears the "indexed geometry" rung of
+the G1 done condition.
+
+**G1 FIRST BASELINE CLOSED 2026-05-12.**
+The remaining first-baseline gaps now have receipts too:
+`viewport` plus explicit scissor-test clipping, RGBA8 2D texture
+upload/bind state, texture-backed framebuffer rendering/readback, and
+RGBA8 renderbuffer attachment/clear/readback. Together with the prior
+triangle, indexed geometry, resize, context-loss, and error receipts,
+this clears the G1 done condition as written here: the adapter can now
+exercise geometry / texture / framebuffer scenes through its first
+WebGL-shaped wgpu state machine.
+
 *Shape:* implement the minimum WebGL 1 context object over wgpu:
 buffers, vertex attributes, textures, framebuffers, renderbuffers,
 viewport/scissor, clear, drawArrays, drawElements, readPixels, context
@@ -59,6 +77,58 @@ geometry / texture / framebuffer scenes into an RGBA8 wgpu texture,
 then readback matches expected pixels.
 
 ### G2. GLSL ES validation and WGSL translation
+
+**NEXT VALIDATOR WIDENING CLEARED 2026-05-12.**
+The canonical fragment parser now accepts stacked leading precision
+declarations when there is exactly one valid float precision contract
+plus additional standard `int` precision declarations, and it rejects
+duplicate float precision declarations. This keeps the runtime
+translator seam narrow while moving it closer to ordinary ESSL shader
+headers.
+
+**FIRST SAMPLER LANE CLEARED 2026-05-12.**
+The canonical translator/runtime now accepts the first texture sampling
+pair: position + UV vertex attributes, a `varying vec2`, and a fragment
+`uniform sampler2D` lowered through naga into WGSL-backed texture plus
+sampler bindings. Runtime receipts cover successful textured draw
+readback and the missing-bound-texture `InvalidOperation` path. This
+closes the current sampler rung, not the larger G2 translator/validator
+program below: the archived-translator port, broader built-ins, richer
+sampler variants, compile/link diagnostics, and CTS gates still belong
+to G2.a-G2.d.
+
+**SAMPLER UNIT STATE CLEARED 2026-05-12.**
+Sampler uniforms are no longer hardwired to texture unit 0. The adapter
+now tracks a bounded WebGL-shaped active texture unit set, binds 2D
+textures per unit, lets `uniform1i` select the sampled unit, rejects
+out-of-range active texture and sampler-unit values, and validates that
+the selected unit has a bound/uploaded texture at draw time. Receipts
+cover unit-1 sampling over a distinct unit-0 texture, invalid unit
+state, and the original unit-0 sampler path.
+
+**FRAMEBUFFER COMPLETENESS RUNG CLEARED 2026-05-12.**
+Framebuffer objects now expose a WebGL-shaped completeness query and
+surface `InvalidFramebufferOperation` for `clear`, `drawArrays`, and
+`readPixels` against an incomplete bound framebuffer. The first status
+model distinguishes the default complete framebuffer, missing color
+attachments, and invalid attachments; texture-backed and
+renderbuffer-backed color attachments remain complete and continue to
+render/read back. Receipts cover attach and detach transitions across
+texture/renderbuffer color targets plus rejection of incomplete-
+framebuffer clear/read/draw paths.
+
+**FIRST VALIDATOR / LINKING RUNG CLEARED 2026-05-12.**
+The adapter now exposes WebGL-shaped shader/program lifecycle state
+instead of only the convenience `create_program_from_essl` helper:
+explicit vertex/fragment shader objects, source upload, compile status,
+shader info logs, attach/link flow, program link status, and program
+info logs. The old helper remains as a wrapper over that lifecycle so
+existing smoke paths stay terse. Receipts cover an explicit compile /
+link / draw success path, a fragment compile failure that produces a
+shader log without manufacturing a GL error, and a varying-interface
+link failure that produces a program log and blocks `useProgram`.
+This is the first concrete G2.c validator/linking slice; it does not
+replace the larger translator-port or CTS work still called out below.
 
 *Shape:* treat GLSL ES as the web-facing language contract and WGSL as
 the device language. The adapter must validate WebGL shader rules
@@ -410,6 +480,15 @@ producer `TextureView` into the already-rendered target. Receipt:
 texture without `COPY_SRC`, verifies color mapping, and verifies
 opacity blending over a vello-rendered scene.
 
+**ORDERED INTERLEAVE FOLLOW-UP CLEARED 2026-05-12.**
+`Renderer::render_with_compositor_and_external_textures` now preserves
+painter order for external textures that land between ordinary scene
+ops. The full ordinary scene renders once into the compositor master,
+the external texture composites at its recorded scene-op boundary, and
+the ordinary tail that should remain above it is rerendered into a
+transparent scratch texture and blended back over the master. Receipt:
+`pg4_webgl_canvas_texture_preserves_scene_order`.
+
 *Shape:* prefer the direct same-device external texture pass over
 vello's `register_texture` path. `Renderer::insert_image_vello` remains
 the compatibility fallback for arbitrary `SceneImage` placement, but
@@ -421,11 +500,13 @@ the ordinary vello scene, then sample a producer `TextureView` directly
 into the target. The source texture only needs `TEXTURE_BINDING` (plus
 whatever the producer needs, e.g. `RENDER_ATTACHMENT` / `COPY_DST`); it
 does **not** need `COPY_SRC`. This is ideal for topmost canvas/video
-overlays and is the right first G4 receipt. Fully interleaved painter
-order is the next step: split the scene around external-texture ops or
-move this pass into the scene compositor so ordinary text/rect content
-can appear above and below the canvas without falling back to the atlas
-copy.
+overlays and remains the cheapest G4 receipt. The ordered compositor
+path is the next rung above it: call sites record the ordinary scene-op
+boundary for each external draw, and NetRender restores painter order
+without falling back to the atlas-copy path. The remaining refinement is
+cost/shape, not correctness of the first interleaving receipt: repeated
+mid-scene externals redraw tails, so a future scene-compositor or true
+split-scene implementation can trim redundant work.
 
 *Done condition:* a netrender test creates a producer texture without
 `COPY_SRC`, renders ordinary vello content, composites the producer via
@@ -497,6 +578,24 @@ the resulting texture still composes through W2's netrender smoke.
 
 ### W4. Pelt/Serval integration smoke
 
+**NON-PRESENTING PAINT-PATH RECEIPT CLEARED 2026-05-12.**
+`components/paint/tests/webgl_canvas_texture_e2e.rs` now drives a
+synthetic `servo-webgl-wgpu` triangle texture through the painter's
+external-texture registry, Serval display-list emission,
+`Paint::render`, NetRender's ordered compositor handoff, and final
+readback. The receipt includes ordinary 2D content both below and above
+the canvas so the painter-order contract is exercised end to end.
+
+**PELT NON-PRESENTING HOST SMOKE CLEARED 2026-05-12.**
+`cargo run -p pelt -- --webgl-wgpu-smoke` now boots the Pelt desktop
+host's NetRender path, produces a real `servo-webgl-wgpu` triangle
+texture, composites it between ordinary scene ops through
+`render_with_compositor_and_external_textures`, captures the presented
+master texture, and asserts the expected green canvas pixel plus the
+blue above-canvas overlay pixel. This satisfies the "non-presenting Pelt
+smoke" branch of the done condition below; a headed OS-window smoke is
+optional follow-on coverage, not the W4 blocker.
+
 *Shape:* wire the adapter into the existing wgpu context path:
 `RenderingContextCore::wgpu()` supplies the shared device/queue,
 the adapter produces a canvas texture, the paint/composition layer
@@ -512,6 +611,13 @@ triangle visibly composited with surrounding 2D content.
 
 ### W5. Gates before widening
 
+**FIRST NAMED W5 GATE CLEARED 2026-05-12.**
+`webgl_first_gate_triangle_error_resize_receipt` now bundles the first
+state-machine gate in one named receipt: invalid draw error generation,
+canonical triangle render/readback, and resize/generation advance. The
+existing NetRender PG4 and Pelt smoke commands remain the cross-crate
+composition and host checks.
+
 Do not start WebGL 2, broad extensions, or the full CTS matrix until
 the W1-W4 lane is green. Once it is green, the next lane is the G1/G2
 correctness ladder: more API validation, translator precision work,
@@ -521,14 +627,25 @@ small CTS buckets.
 The first lane's regression commands should be narrow and named:
 
 ```text
+cargo test -p servo-webgl-wgpu webgl_first_gate_triangle_error_resize_receipt
+cargo test -p servo-webgl-wgpu webgl_context_viewport_and_scissor_clip_draws
+cargo test -p servo-webgl-wgpu webgl_context_draws_texture_sampler_fragment
+cargo test -p servo-webgl-wgpu webgl_context_sampler_uniform_selects_texture_unit
+cargo test -p servo-webgl-wgpu webgl_context_rejects_invalid_texture_unit_state
+cargo test -p servo-webgl-wgpu webgl_context_draws_into_texture_framebuffer
+cargo test -p servo-webgl-wgpu webgl_context_clears_renderbuffer_framebuffer
+cargo test -p servo-webgl-wgpu webgl_context_reports_framebuffer_completeness_status
+cargo test -p servo-webgl-wgpu webgl_context_rejects_incomplete_framebuffer_operations
+cargo test -p servo-webgl-wgpu webgl_context_explicit_compile_link_pipeline_renders
+cargo test -p servo-webgl-wgpu webgl_context_compile_failure_reports_shader_info_log
+cargo test -p servo-webgl-wgpu webgl_context_link_failure_reports_program_info_log
 cargo test -p servo-webgl-wgpu webgl_canvas_to_netrender_texture
 cargo test -p netrender pg4_webgl_canvas_texture
 cargo run -p pelt -- --webgl-wgpu-smoke
 ```
 
-Treat command names as placeholders until the crates/tests land; the
-important part is that the lane has one adapter test, one netrender
-composition test, and one Serval/Pelt integration smoke.
+These are now real lane commands: one adapter test, one NetRender
+composition test, and one Pelt-owned integration smoke.
 
 ## 5. Cross-references
 
